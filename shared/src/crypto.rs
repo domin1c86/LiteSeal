@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Clone)]
 pub enum CryptoError {
     #[error("Failed to initialize libsodium")]
     InitError,
@@ -21,15 +21,19 @@ pub struct KeyPair {
     pub ed25519_sk: [u8; 64],
 }
 
-static INIT: std::sync::Once = std::sync::Once::new();
+static INIT: std::sync::OnceLock<Result<(), CryptoError>> = std::sync::OnceLock::new();
 
 fn init_sodium() -> Result<(), CryptoError> {
-    INIT.call_once(|| {
+    INIT.get_or_init(|| {
         unsafe {
-            libsodium_sys::sodium_init();
+            let ret = libsodium_sys::sodium_init();
+            if ret < 0 {
+                return Err(CryptoError::InitError);
+            }
         }
-    });
-    Ok(())
+        Ok(())
+    })
+    .clone()
 }
 
 pub fn generate_keypair() -> Result<KeyPair, CryptoError> {
@@ -109,6 +113,11 @@ pub fn decrypt(
 
     let nonce = &ciphertext[..24];
     let encrypted = &ciphertext[24..];
+
+    if encrypted.len() < libsodium_sys::crypto_box_MACBYTES as usize {
+        return Err(CryptoError::DecryptionError);
+    }
+
     let mut plaintext = vec![0u8; encrypted.len() - libsodium_sys::crypto_box_MACBYTES as usize];
 
     unsafe {
