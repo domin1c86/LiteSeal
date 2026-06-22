@@ -19,3 +19,14 @@ src-tauri/target/
 
 # Compose
 .compose/
+
+# AI
+CLAUDE.md
+AGENTS.md
+
+# Other Folders
+docs/
+
+# Other Files
+plan-book.md
+design-architecture.html
