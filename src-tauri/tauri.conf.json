@@ -1,0 +1,40 @@
+{
+  "build": {
+    "beforeDevCommand": "",
+    "beforeBuildCommand": "",
+    "devPath": "../ui/dist",
+    "distDir": "../ui/dist"
+  },
+  "package": {
+    "productName": "LiteSeal",
+    "version": "0.1.0"
+  },
+  "tauri": {
+    "allowlist": {
+      "all": false,
+      "shell": {
+        "all": false,
+        "open": true
+      }
+    },
+    "bundle": {
+      "active": true,
+      "identifier": "com.liteseal.app",
+      "icon": [
+        "icons/icon.ico"
+      ]
+    },
+    "security": {
+      "csp": null
+    },
+    "windows": [
+      {
+        "fullscreen": false,
+        "resizable": true,
+        "title": "LiteSeal",
+        "width": 1024,
+        "height": 768
+      }
+    ]
+  }
+}
