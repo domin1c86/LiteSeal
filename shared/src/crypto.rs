@@ -36,7 +36,7 @@ pub fn encrypt(_plaintext: &[u8], _recipient_pk: &[u8; 32], _sender_sk: &[u8; 32
     Err(CryptoError::EncryptFailed("not yet implemented".into()))
 }
 
-pub fn decrypt(_private_key: &[u8; 32], _msg: &EncryptedMessage) -> Result<Vec<u8>, CryptoError> {
+pub fn decrypt(_ciphertext: &EncryptedMessage, _sender_pk: &[u8; 32], _recipient_sk: &[u8; 32]) -> Result<Vec<u8>, CryptoError> {
     Err(CryptoError::DecryptFailed("not yet implemented".into()))
 }
 
