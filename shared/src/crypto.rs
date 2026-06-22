@@ -32,18 +32,18 @@ pub fn generate_keypair() -> Result<KeyPair, CryptoError> {
     Err(CryptoError::KeyGenFailed("not yet implemented".into()))
 }
 
-pub fn encrypt(_public_key: &[u8], _plaintext: &[u8]) -> Result<EncryptedMessage, CryptoError> {
+pub fn encrypt(_plaintext: &[u8], _recipient_pk: &[u8; 32], _sender_sk: &[u8; 32]) -> Result<EncryptedMessage, CryptoError> {
     Err(CryptoError::EncryptFailed("not yet implemented".into()))
 }
 
-pub fn decrypt(_private_key: &[u8], _msg: &EncryptedMessage) -> Result<Vec<u8>, CryptoError> {
+pub fn decrypt(_private_key: &[u8; 32], _msg: &EncryptedMessage) -> Result<Vec<u8>, CryptoError> {
     Err(CryptoError::DecryptFailed("not yet implemented".into()))
 }
 
-pub fn sign(_private_key: &[u8], _data: &[u8]) -> Result<Vec<u8>, CryptoError> {
+pub fn sign(_private_key: &[u8; 32], _data: &[u8]) -> Result<Vec<u8>, CryptoError> {
     Err(CryptoError::SignFailed("not yet implemented".into()))
 }
 
-pub fn verify(_public_key: &[u8], _data: &[u8], _signature: &[u8]) -> Result<bool, CryptoError> {
+pub fn verify(_public_key: &[u8; 32], _data: &[u8], _signature: &[u8]) -> Result<bool, CryptoError> {
     Err(CryptoError::VerifyFailed)
 }

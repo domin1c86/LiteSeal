@@ -11,7 +11,7 @@ pub struct User {
 pub struct Device {
     pub id: String,
     pub user_id: String,
-    pub public_key: Vec<u8>,
+    pub public_key: [u8; 32],
     pub created_at: i64,
 }
 
