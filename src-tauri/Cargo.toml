@@ -1,8 +1,21 @@
 [package]
-name = "liteseal-client"
+name = "liteseal-app"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "liteseal_app"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "1", features = [] }
+
 [dependencies]
+tauri = { version = "1", features = ["shell-open"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+liteseal-shared = { path = "../shared" }
+rusqlite = { version = "0.31", features = ["bundled"] }
