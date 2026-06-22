@@ -17,8 +17,8 @@ pub enum CryptoError {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeyPair {
-    pub public_key: Vec<u8>,
-    pub private_key: Vec<u8>,
+    pub public_key: [u8; 32],
+    pub secret_key: [u8; 32],
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
