@@ -195,6 +195,24 @@ pub fn verify(
     }
 }
 
+pub fn verify_with_public_key(
+    message: &[u8],
+    signature: &[u8],
+    ed25519_pk: &[u8; 32],
+) -> Result<bool, CryptoError> {
+    init_sodium()?;
+
+    unsafe {
+        let result = libsodium_sys::crypto_sign_verify_detached(
+            signature.as_ptr(),
+            message.as_ptr(),
+            message.len() as u64,
+            ed25519_pk.as_ptr(),
+        );
+        Ok(result == 0)
+    }
+}
+
 fn generate_nonce() -> Result<[u8; 24], CryptoError> {
     let mut nonce = [0u8; 24];
     unsafe {

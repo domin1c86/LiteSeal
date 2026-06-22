@@ -36,6 +36,21 @@ fn test_sign_verify() {
     let signature = liteseal_shared::crypto::sign(message, &keypair.secret_key).unwrap();
     let valid =
         liteseal_shared::crypto::verify(message, &signature, &keypair.secret_key).unwrap();
+    assert!(valid);
+}
+
+#[test]
+fn test_sign_verify_with_public_key() {
+    let keypair = liteseal_shared::crypto::generate_keypair().unwrap();
+    let message = b"Test message";
+
+    let signature = liteseal_shared::crypto::sign(message, &keypair.secret_key).unwrap();
+    let valid = liteseal_shared::crypto::verify_with_public_key(
+        message,
+        &signature,
+        &keypair.ed25519_pk,
+    )
+    .unwrap();
 
     assert!(valid);
 }
