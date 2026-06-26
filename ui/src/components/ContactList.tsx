@@ -5,6 +5,7 @@ interface ContactListProps {
   activeConversation: string | null;
   onSelect: (contactId: string) => void;
   onAddClick: () => void;
+  onStorageClick: () => void;
 }
 
 export default function ContactList({
@@ -12,14 +13,20 @@ export default function ContactList({
   activeConversation,
   onSelect,
   onAddClick,
+  onStorageClick,
 }: ContactListProps) {
   return (
     <div style={styles.container}>
       <div style={styles.header}>
         <h3 style={styles.heading}>Contacts</h3>
-        <button style={styles.addBtn} onClick={onAddClick}>
-          +
-        </button>
+        <div style={styles.headerBtns}>
+          <button style={styles.iconBtn} onClick={onStorageClick} title="Storage">
+            ⚙
+          </button>
+          <button style={styles.addBtn} onClick={onAddClick}>
+            +
+          </button>
+        </div>
       </div>
       {contacts.length === 0 && (
         <p style={styles.empty}>No contacts yet</p>
@@ -70,6 +77,25 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: "13px",
     textTransform: "uppercase",
     letterSpacing: "1px",
+  },
+  headerBtns: {
+    display: "flex",
+    gap: "8px",
+  },
+  iconBtn: {
+    width: "24px",
+    height: "24px",
+    borderRadius: "50%",
+    border: "none",
+    backgroundColor: "#0f3460",
+    color: "#a0a0b0",
+    fontSize: "13px",
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    lineHeight: 1,
+    padding: 0,
   },
   addBtn: {
     width: "24px",

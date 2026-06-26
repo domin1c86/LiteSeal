@@ -7,6 +7,7 @@ import type {
   Message,
   Contact,
   UserSearchResult,
+  StorageStats,
 } from "../types";
 
 export function useTauri() {
@@ -148,6 +149,18 @@ export function useTauri() {
     );
   }
 
+  async function getStorageStats(): Promise<StorageStats> {
+    return invoke<StorageStats>("get_storage_stats");
+  }
+
+  async function clearExpiredMessages(): Promise<number> {
+    return invoke<number>("clear_expired_messages");
+  }
+
+  async function clearDownloadedAttachments(): Promise<number> {
+    return invoke<number>("clear_downloaded_attachments");
+  }
+
   return {
     register,
     connectRelay,
@@ -164,5 +177,8 @@ export function useTauri() {
     signMessage,
     verifyMessage,
     generateKeypair,
+    getStorageStats,
+    clearExpiredMessages,
+    clearDownloadedAttachments,
   };
 }

@@ -35,6 +35,9 @@ fn main() {
             commands::contacts::get_contacts,
             commands::contacts::remove_contact,
             commands::contacts::search_users,
+            commands::storage::get_storage_stats,
+            commands::storage::clear_expired_messages,
+            commands::storage::clear_downloaded_attachments,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

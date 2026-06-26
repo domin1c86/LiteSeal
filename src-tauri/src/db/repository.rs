@@ -457,17 +457,42 @@ impl MessageRepository {
             .query_row("SELECT COUNT(*) FROM conversations", [], |r| r.get(0))?;
         let message_count: i64 = self.conn
             .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))?;
+        let ciphertext_bytes: i64 = self.conn
+            .query_row("SELECT COALESCE(SUM(LENGTH(ciphertext)), 0) FROM messages", [], |r| r.get(0))?;
         let contact_count: i64 = self.conn
             .query_row("SELECT COUNT(*) FROM contacts", [], |r| r.get(0))?;
         let device_count: i64 = self.conn
             .query_row("SELECT COUNT(*) FROM devices", [], |r| r.get(0))?;
+        let attachment_count: i64 = self.conn
+            .query_row("SELECT COUNT(*) FROM attachments", [], |r| r.get(0))?;
+        let attachment_bytes: i64 = self.conn
+            .query_row("SELECT COALESCE(SUM(size), 0) FROM attachments", [], |r| r.get(0))?;
 
         Ok(StorageStats {
             conversation_count,
             message_count,
+            ciphertext_bytes,
             contact_count,
             device_count,
+            attachment_count,
+            attachment_bytes,
         })
+    }
+
+    pub fn clear_expired_messages(&self, now: i64) -> Result<usize, DbError> {
+        let deleted = self.conn.execute(
+            "DELETE FROM messages WHERE expire_at IS NOT NULL AND expire_at < ?1",
+            params![now],
+        )?;
+        Ok(deleted)
+    }
+
+    pub fn clear_unpinned_attachments(&self) -> Result<usize, DbError> {
+        let deleted = self.conn.execute(
+            "DELETE FROM attachments WHERE pinned = 0",
+            [],
+        )?;
+        Ok(deleted)
     }
 }
 
@@ -475,6 +500,9 @@ impl MessageRepository {
 pub struct StorageStats {
     pub conversation_count: i64,
     pub message_count: i64,
+    pub ciphertext_bytes: i64,
     pub contact_count: i64,
     pub device_count: i64,
+    pub attachment_count: i64,
+    pub attachment_bytes: i64,
 }

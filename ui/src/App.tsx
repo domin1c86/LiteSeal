@@ -3,6 +3,7 @@ import Login from "./components/Login";
 import Chat from "./components/Chat";
 import ContactList from "./components/ContactList";
 import AddContact from "./components/AddContact";
+import StorageManager from "./components/StorageManager";
 import { useTauri } from "./hooks/useTauri";
 import type { RegisterResult, Contact } from "./types";
 
@@ -20,6 +21,7 @@ export default function App() {
     null
   );
   const [showAddContact, setShowAddContact] = useState(false);
+  const [showStorage, setShowStorage] = useState(false);
   const { getContacts } = useTauri();
 
   function handleLogin(result: RegisterResult & { serverUrl: string; secretKey: number[] }) {
@@ -56,6 +58,7 @@ export default function App() {
         activeConversation={activeConversation}
         onSelect={setActiveConversation}
         onAddClick={() => setShowAddContact(true)}
+        onStorageClick={() => setShowStorage(true)}
       />
       <Chat
         conversationId={activeConversation}
@@ -71,6 +74,9 @@ export default function App() {
           onClose={() => setShowAddContact(false)}
           onAdded={handleContactAdded}
         />
+      )}
+      {showStorage && (
+        <StorageManager onClose={() => setShowStorage(false)} />
       )}
     </div>
   );

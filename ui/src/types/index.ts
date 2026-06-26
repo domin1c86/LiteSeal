@@ -71,3 +71,12 @@ export interface AppState {
   messages: Record<string, Message[]>;
   contacts: Contact[];
 }
+
+export interface StorageStats {
+  message_count: number;
+  ciphertext_bytes: number;
+  attachment_count: number;
+  attachment_bytes: number;
+  conversation_count: number;
+  total_bytes: number;
+}
