@@ -1,8 +1,10 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Login from "./components/Login";
 import Chat from "./components/Chat";
 import ContactList from "./components/ContactList";
-import type { RegisterResult, User, Conversation } from "./types";
+import AddContact from "./components/AddContact";
+import { useTauri } from "./hooks/useTauri";
+import type { RegisterResult, Contact } from "./types";
 
 interface Session {
   user_id: string;
@@ -12,11 +14,12 @@ interface Session {
 
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
-  const [contacts] = useState<User[]>([]);
-  const [conversations] = useState<Conversation[]>([]);
+  const [contacts, setContacts] = useState<Contact[]>([]);
   const [activeConversation, setActiveConversation] = useState<string | null>(
     null
   );
+  const [showAddContact, setShowAddContact] = useState(false);
+  const { getContacts } = useTauri();
 
   function handleLogin(result: RegisterResult & { serverUrl: string }) {
     setSession({
@@ -24,6 +27,20 @@ export default function App() {
       token: result.token,
       serverUrl: result.serverUrl,
     });
+  }
+
+  useEffect(() => {
+    if (!session) return;
+    getContacts()
+      .then(setContacts)
+      .catch((err) => console.error("Failed to load contacts:", err));
+  }, [session]);
+
+  function handleContactAdded() {
+    getContacts()
+      .then(setContacts)
+      .catch(console.error);
+    setShowAddContact(false);
   }
 
   if (!session) {
@@ -34,9 +51,9 @@ export default function App() {
     <div style={styles.layout}>
       <ContactList
         contacts={contacts}
-        conversations={conversations}
         activeConversation={activeConversation}
         onSelect={setActiveConversation}
+        onAddClick={() => setShowAddContact(true)}
       />
       <Chat
         conversationId={activeConversation}
@@ -44,6 +61,13 @@ export default function App() {
         token={session.token}
         serverUrl={session.serverUrl}
       />
+      {showAddContact && (
+        <AddContact
+          serverUrl={session.serverUrl}
+          onClose={() => setShowAddContact(false)}
+          onAdded={handleContactAdded}
+        />
+      )}
     </div>
   );
 }

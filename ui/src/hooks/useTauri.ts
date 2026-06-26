@@ -5,6 +5,8 @@ import type {
   SendMessageResult,
   IncomingMessage,
   Message,
+  Contact,
+  UserSearchResult,
 } from "../types";
 
 export function useTauri() {
@@ -65,6 +67,29 @@ export function useTauri() {
     });
   }
 
+  async function addContact(
+    userId: string,
+    username: string,
+    publicKey: number[]
+  ): Promise<Contact> {
+    return invoke<Contact>("add_contact", { userId, username, publicKey });
+  }
+
+  async function getContacts(): Promise<Contact[]> {
+    return invoke<Contact[]>("get_contacts");
+  }
+
+  async function removeContact(userId: string): Promise<void> {
+    return invoke("remove_contact", { userId });
+  }
+
+  async function searchUsers(
+    query: string,
+    serverUrl: string
+  ): Promise<UserSearchResult[]> {
+    return invoke<UserSearchResult[]>("search_users", { query, serverUrl });
+  }
+
   return {
     register,
     connectRelay,
@@ -72,5 +97,9 @@ export function useTauri() {
     sendMessage,
     pollMessages,
     getLocalMessages,
+    addContact,
+    getContacts,
+    removeContact,
+    searchUsers,
   };
 }

@@ -48,6 +48,19 @@ export interface IncomingMessage {
   timestamp: number;
 }
 
+export interface Contact {
+  user_id: string;
+  username: string;
+  public_key: number[];
+  added_at: number;
+}
+
+export interface UserSearchResult {
+  user_id: string;
+  username: string;
+  public_key: number[];
+}
+
 export interface AppState {
   user: User | null;
   token: string | null;
@@ -56,5 +69,5 @@ export interface AppState {
   conversations: Conversation[];
   activeConversation: string | null;
   messages: Record<string, Message[]>;
-  contacts: User[];
+  contacts: Contact[];
 }

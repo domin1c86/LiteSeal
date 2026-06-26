@@ -1,37 +1,39 @@
-import type { User, Conversation } from "../types";
+import type { Contact } from "../types";
 
 interface ContactListProps {
-  contacts: User[];
-  conversations: Conversation[];
+  contacts: Contact[];
   activeConversation: string | null;
-  onSelect: (conversationId: string) => void;
+  onSelect: (contactId: string) => void;
+  onAddClick: () => void;
 }
 
 export default function ContactList({
   contacts,
-  conversations,
   activeConversation,
   onSelect,
+  onAddClick,
 }: ContactListProps) {
   return (
     <div style={styles.container}>
-      <h3 style={styles.heading}>Contacts</h3>
+      <div style={styles.header}>
+        <h3 style={styles.heading}>Contacts</h3>
+        <button style={styles.addBtn} onClick={onAddClick}>
+          +
+        </button>
+      </div>
       {contacts.length === 0 && (
         <p style={styles.empty}>No contacts yet</p>
       )}
       {contacts.map((contact) => {
-        const conv = conversations.find(
-          (c) => c.conversation_type === "direct"
-        );
-        const isActive = conv && conv.id === activeConversation;
+        const isActive = contact.user_id === activeConversation;
         return (
           <div
-            key={contact.id}
+            key={contact.user_id}
             style={{
               ...styles.item,
               ...(isActive ? styles.itemActive : {}),
             }}
-            onClick={() => conv && onSelect(conv.id)}
+            onClick={() => onSelect(contact.user_id)}
           >
             <div style={styles.avatar}>
               {contact.username.charAt(0).toUpperCase()}
@@ -55,12 +57,34 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     flexDirection: "column",
   },
+  header: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: "0 16px",
+    marginTop: "16px",
+  },
   heading: {
-    margin: "16px",
+    margin: 0,
     color: "#a0a0b0",
     fontSize: "13px",
     textTransform: "uppercase",
     letterSpacing: "1px",
+  },
+  addBtn: {
+    width: "24px",
+    height: "24px",
+    borderRadius: "50%",
+    border: "none",
+    backgroundColor: "#e94560",
+    color: "#fff",
+    fontSize: "16px",
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    lineHeight: 1,
+    padding: 0,
   },
   empty: {
     color: "#555",
