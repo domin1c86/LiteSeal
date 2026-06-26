@@ -1,5 +1,5 @@
 use liteseal_app::db::repository::MessageRepository;
-use liteseal_app::db::models::{MessageModel, ConversationModel, AttachmentModel, DeviceModel};
+use liteseal_app::db::models::{MessageModel, ConversationModel, AttachmentModel, DeviceModel, ContactModel};
 
 #[test]
 fn test_insert_and_get_message() {
@@ -216,4 +216,182 @@ fn test_conversation_not_found() {
     let repo = MessageRepository::new(":memory:").unwrap();
     let result = repo.get_conversation("nonexistent").unwrap();
     assert!(result.is_none());
+}
+
+#[test]
+fn test_contact_operations() {
+    let repo = MessageRepository::new(":memory:").unwrap();
+
+    let contact = ContactModel {
+        user_id: "user-1".to_string(),
+        username: "alice".to_string(),
+        public_key: vec![1, 2, 3],
+        added_at: 1000,
+    };
+
+    repo.insert_contact(&contact).unwrap();
+
+    let retrieved = repo.get_contact("user-1").unwrap().unwrap();
+    assert_eq!(retrieved.user_id, "user-1");
+    assert_eq!(retrieved.username, "alice");
+    assert_eq!(retrieved.public_key, vec![1, 2, 3]);
+
+    let contact2 = ContactModel {
+        user_id: "user-2".to_string(),
+        username: "bob".to_string(),
+        public_key: vec![4, 5, 6],
+        added_at: 2000,
+    };
+    repo.insert_contact(&contact2).unwrap();
+
+    let all = repo.get_contacts().unwrap();
+    assert_eq!(all.len(), 2);
+
+    repo.delete_contact("user-1").unwrap();
+    assert!(repo.get_contact("user-1").unwrap().is_none());
+    assert_eq!(repo.get_contacts().unwrap().len(), 1);
+}
+
+#[test]
+fn test_storage_stats() {
+    let repo = MessageRepository::new(":memory:").unwrap();
+
+    let conv = ConversationModel {
+        id: "conv-1".to_string(),
+        conversation_type: "direct".to_string(),
+        created_at: 1000,
+        updated_at: 1000,
+        storage_policy: None,
+        privacy_mode: None,
+    };
+    repo.insert_conversation(&conv).unwrap();
+
+    for i in 0..3 {
+        let msg = MessageModel {
+            id: format!("msg-{}", i),
+            conversation_id: "conv-1".to_string(),
+            sender_id: "user-1".to_string(),
+            sender_device_id: "device-1".to_string(),
+            sender_seq: i,
+            timestamp: 1000 + i,
+            message_type: "text".to_string(),
+            local_state: "sent".to_string(),
+            expire_at: None,
+            ciphertext: vec![0u8; 10],
+            signature: vec![],
+            prev_hash: vec![],
+        };
+        repo.insert_message(&msg).unwrap();
+    }
+
+    let contact = ContactModel {
+        user_id: "user-2".to_string(),
+        username: "bob".to_string(),
+        public_key: vec![],
+        added_at: 1000,
+    };
+    repo.insert_contact(&contact).unwrap();
+
+    let stats = repo.get_storage_stats().unwrap();
+    assert_eq!(stats.conversation_count, 1);
+    assert_eq!(stats.message_count, 3);
+    assert_eq!(stats.contact_count, 1);
+    assert_eq!(stats.ciphertext_bytes, 30);
+}
+
+#[test]
+fn test_clear_expired_messages() {
+    let repo = MessageRepository::new(":memory:").unwrap();
+
+    let msg_expired = MessageModel {
+        id: "msg-exp".to_string(),
+        conversation_id: "conv-1".to_string(),
+        sender_id: "user-1".to_string(),
+        sender_device_id: "device-1".to_string(),
+        sender_seq: 1,
+        timestamp: 1000,
+        message_type: "text".to_string(),
+        local_state: "sent".to_string(),
+        expire_at: Some(5000),
+        ciphertext: vec![1],
+        signature: vec![],
+        prev_hash: vec![],
+    };
+    repo.insert_message(&msg_expired).unwrap();
+
+    let msg_fresh = MessageModel {
+        id: "msg-fresh".to_string(),
+        conversation_id: "conv-1".to_string(),
+        sender_id: "user-1".to_string(),
+        sender_device_id: "device-1".to_string(),
+        sender_seq: 2,
+        timestamp: 1000,
+        message_type: "text".to_string(),
+        local_state: "sent".to_string(),
+        expire_at: Some(99999),
+        ciphertext: vec![2],
+        signature: vec![],
+        prev_hash: vec![],
+    };
+    repo.insert_message(&msg_fresh).unwrap();
+
+    let msg_no_expire = MessageModel {
+        id: "msg-keep".to_string(),
+        conversation_id: "conv-1".to_string(),
+        sender_id: "user-1".to_string(),
+        sender_device_id: "device-1".to_string(),
+        sender_seq: 3,
+        timestamp: 1000,
+        message_type: "text".to_string(),
+        local_state: "sent".to_string(),
+        expire_at: None,
+        ciphertext: vec![3],
+        signature: vec![],
+        prev_hash: vec![],
+    };
+    repo.insert_message(&msg_no_expire).unwrap();
+
+    let deleted = repo.clear_expired_messages(6000).unwrap();
+    assert_eq!(deleted, 1);
+    assert!(repo.get_message("msg-exp").unwrap().is_none());
+    assert!(repo.get_message("msg-fresh").unwrap().is_some());
+    assert!(repo.get_message("msg-keep").unwrap().is_some());
+}
+
+#[test]
+fn test_clear_unpinned_attachments() {
+    let repo = MessageRepository::new(":memory:").unwrap();
+
+    let att_unpinned = AttachmentModel {
+        id: "att-unpinned".to_string(),
+        message_id: "msg-1".to_string(),
+        blob_id: "blob-1".to_string(),
+        encrypted_name: vec![],
+        encrypted_mime: vec![],
+        size: 100,
+        downloaded: false,
+        pinned: false,
+        expire_at: None,
+        last_accessed_at: None,
+    };
+    repo.insert_attachment(&att_unpinned).unwrap();
+
+    let att_pinned = AttachmentModel {
+        id: "att-pinned".to_string(),
+        message_id: "msg-1".to_string(),
+        blob_id: "blob-2".to_string(),
+        encrypted_name: vec![],
+        encrypted_mime: vec![],
+        size: 200,
+        downloaded: false,
+        pinned: true,
+        expire_at: None,
+        last_accessed_at: None,
+    };
+    repo.insert_attachment(&att_pinned).unwrap();
+
+    let deleted = repo.clear_unpinned_attachments().unwrap();
+    assert_eq!(deleted, 1);
+    assert!(repo.get_attachment("att-unpinned").unwrap().is_none());
+    assert!(repo.get_attachment("att-pinned").unwrap().is_some());
 }
