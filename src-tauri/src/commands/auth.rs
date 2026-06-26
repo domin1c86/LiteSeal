@@ -18,6 +18,8 @@ pub struct ConnectResult {
 pub async fn register(
     username: String,
     server_url: String,
+    public_key: Vec<u8>,
+    ed25519_pk: Vec<u8>,
 ) -> Result<RegisterResult, String> {
     if username.is_empty() {
         return Err("Username cannot be empty".to_string());
@@ -28,7 +30,11 @@ pub async fn register(
 
     let resp = client
         .post(&url)
-        .json(&serde_json::json!({ "username": username }))
+        .json(&serde_json::json!({
+            "username": username,
+            "public_key": public_key,
+            "ed25519_pk": ed25519_pk,
+        }))
         .send()
         .await
         .map_err(|e| format!("Registration request failed: {}", e))?;
