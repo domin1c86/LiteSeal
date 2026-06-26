@@ -1,32 +1,15 @@
 {
+  "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-config-schema/schema.json",
+  "productName": "LiteSeal",
+  "version": "0.1.0",
+  "identifier": "com.liteseal.app",
   "build": {
-    "beforeDevCommand": "cd ../ui && npm run dev",
-    "beforeBuildCommand": "cd ../ui && npm run build",
-    "devPath": "../ui/dist",
-    "distDir": "../ui/dist"
+    "beforeDevCommand": "npm run dev --prefix ui",
+    "beforeBuildCommand": "npm run build --prefix ui",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../ui/dist"
   },
-  "package": {
-    "productName": "LiteSeal",
-    "version": "0.1.0"
-  },
-  "tauri": {
-    "allowlist": {
-      "all": false,
-      "shell": {
-        "all": false,
-        "open": true
-      }
-    },
-    "bundle": {
-      "active": true,
-      "identifier": "com.liteseal.app",
-      "icon": [
-        "icons/icon.ico"
-      ]
-    },
-    "security": {
-      "csp": null
-    },
+  "app": {
     "windows": [
       {
         "fullscreen": false,
@@ -35,6 +18,15 @@
         "width": 1024,
         "height": 768
       }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "icon": [
+      "icons/icon.ico"
     ]
   }
 }

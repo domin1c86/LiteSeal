@@ -16,9 +16,15 @@ Thumbs.db
 
 # Tauri
 src-tauri/target/
+src-tauri/gen/
 
 # Compose
 .compose/
+
+# Project docs (managed separately)
+docs/
+plan-book.md
+design-architecture.html
 
 # AI
 CLAUDE.md

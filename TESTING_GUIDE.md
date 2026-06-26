@@ -1,23 +1,21 @@
 # LiteSeal 开发测试指南
 
-你是开发者，代码已写好，现在要验证功能是否正常。
-
----
-
 ## 快速启动（3步）
 
 ### 第 1 步：安装前端依赖（仅首次）
 
-```bash
-cd ui && npm install
+```powershell
+cd ui
+npm install
 ```
 
 ### 第 2 步：启动服务器
 
 打开终端 A：
 
-```bash
-cd server && cargo run
+```powershell
+cd server
+cargo run
 ```
 
 看到 `Server listening on 0.0.0.0:3000` 表示成功。**保持这个终端运行。**
@@ -26,8 +24,9 @@ cd server && cargo run
 
 打开终端 B：
 
-```bash
-cd src-tauri && cargo tauri dev
+```powershell
+cd src-tauri
+cargo tauri dev
 ```
 
 首次会编译几分钟，之后会自动打开 LiteSeal 窗口。
@@ -52,12 +51,12 @@ cd src-tauri && cargo tauri dev
 
 需要同时运行两个客户端实例：
 
-```bash
+```powershell
 # 终端 B - 用户 Alice
-cd src-tauri && cargo tauri dev
+cd src-tauri; cargo tauri dev
 
 # 终端 C - 用户 Bob（新终端窗口）
-cd src-tauri && cargo tauri dev
+cd src-tauri; cargo tauri dev
 ```
 
 两个窗口分别注册 `alice` 和 `bob`，然后互相发消息。
@@ -68,8 +67,8 @@ cd src-tauri && cargo tauri dev
 
 ## 运行单元测试
 
-```bash
-# 全部测试（27个）
+```powershell
+# 全部测试
 cargo test --workspace
 
 # 只测加密模块
@@ -89,15 +88,15 @@ cargo test -p liteseal-app
 
 Windows 需要安装 libsodium：
 
-```bash
+```powershell
 # 方法1：用 vcpkg
 vcpkg install libsodium
 
 # 方法2：手动下载
 # 从 https://download.libsodium.org/libsodium/releases/ 下载
 # 解压后设置环境变量：
-set SODIUM_LIB_DIR=C:\path\to\libsodium\lib
-set SODIUM_INCLUDE_DIR=C:\path\to\libsodium\include
+$env:SODIUM_LIB_DIR = "C:\path\to\libsodium\lib"
+$env:SODIUM_INCLUDE_DIR = "C:\path\to\libsodium\include"
 ```
 
 ### Tauri 启动失败：WebView2 错误
@@ -106,7 +105,7 @@ set SODIUM_INCLUDE_DIR=C:\path\to\libsodium\include
 
 ### 端口 3000 被占用
 
-```bash
+```powershell
 # 找到占用进程
 netstat -ano | findstr :3000
 
@@ -116,9 +115,9 @@ taskkill /PID <进程ID> /F
 
 ### 前端白屏或报错
 
-```bash
+```powershell
 cd ui
-rm -rf node_modules
+Remove-Item -Recurse -Force node_modules
 npm install
 ```
 
@@ -132,22 +131,22 @@ npm install
 
 ### 查看详细日志
 
-```bash
+```powershell
 # 服务器
-RUST_LOG=debug cargo run -p liteseal-server
+$env:RUST_LOG = "debug"; cargo run -p liteseal-server
 
 # 客户端
-RUST_LOG=debug cargo tauri dev
+$env:RUST_LOG = "debug"; cargo tauri dev
 ```
 
 ### 检查数据库内容
 
-数据库文件位置：`%LOCALAPPDATA%\liteseal\data.db`
+数据库文件位置：`$env:LOCALAPPDATA\liteseal\data.db`
 
 用 SQLite 工具打开查看：
 
-```bash
-sqlite3 "%LOCALAPPDATA%\liteseal\data.db" ".tables"
+```powershell
+sqlite3 "$env:LOCALAPPDATA\liteseal\data.db" ".tables"
 ```
 
 ### 验证服务器只转发密文
