@@ -61,10 +61,12 @@ pub async fn search_users(
     query: String,
 ) -> Result<Vec<PublicKeyInfo>, String> {
     let client = reqwest::Client::new();
-    let url = format!("{}/users/search?q={}", server_url, query);
+    let mut url = url::Url::parse(&format!("{}/users/search", server_url))
+        .map_err(|e| format!("Invalid server URL: {}", e))?;
+    url.query_pairs_mut().append_pair("q", &query);
 
     let resp = client
-        .get(&url)
+        .get(url.as_str())
         .send()
         .await
         .map_err(|e| format!("Search request failed: {}", e))?;

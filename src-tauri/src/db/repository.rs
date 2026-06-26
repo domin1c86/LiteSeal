@@ -389,8 +389,9 @@ impl MessageRepository {
 
     pub fn insert_contact(&self, contact: &ContactModel) -> Result<(), DbError> {
         self.conn.execute(
-            "INSERT OR REPLACE INTO contacts (user_id, username, public_key, added_at)
-             VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO contacts (user_id, username, public_key, added_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(user_id) DO UPDATE SET username = excluded.username, public_key = excluded.public_key",
             params![contact.user_id, contact.username, contact.public_key, contact.added_at],
         )?;
         Ok(())

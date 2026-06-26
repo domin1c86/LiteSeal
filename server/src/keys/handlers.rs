@@ -34,6 +34,9 @@ pub async fn search_users(
     let mut results = Vec::new();
 
     for entry in state.users.iter() {
+        if results.len() >= 50 {
+            break;
+        }
         let user_id = entry.key();
         let user = entry.value();
         if user.username.to_lowercase().contains(&query) || user_id.contains(&query) {
