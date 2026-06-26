@@ -153,6 +153,17 @@ pub async fn generate_keypair_cmd() -> Result<(Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8
 }
 
 #[tauri::command]
+pub async fn verify_message(
+    message: Vec<u8>,
+    signature: Vec<u8>,
+    sender_public_key: Vec<u8>,
+) -> Result<bool, String> {
+    let ed_pk: [u8; 32] = sender_public_key.try_into().map_err(|_| "Invalid public key length")?;
+    liteseal_shared::crypto::verify_with_public_key(&message, &signature, &ed_pk)
+        .map_err(|e| format!("Verification failed: {}", e))
+}
+
+#[tauri::command]
 pub async fn get_local_messages(
     conversation_id: String,
     limit: i64,

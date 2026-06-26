@@ -16,16 +16,31 @@ export default function Chat({ conversationId, userId, secretKey, contacts }: Ch
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const { sendMessage, pollMessages, getLocalMessages, encryptMessage, decryptMessage, signMessage } = useTauri();
+  const { sendMessage, pollMessages, getLocalMessages, encryptMessage, decryptMessage, signMessage, verifyMessage } = useTauri();
 
   useEffect(() => {
     if (!conversationId) return;
     setLoading(true);
     getLocalMessages(conversationId, 50, 0)
-      .then(setMessages)
+      .then(async (msgs) => {
+        const decrypted = await Promise.all(
+          msgs.map(async (msg) => {
+            if (msg.sender_id === userId) return msg;
+            const sender = contacts.find((c) => c.user_id === msg.sender_id);
+            if (!sender) return msg;
+            try {
+              const plaintext = await decryptMessage(msg.ciphertext, sender.public_key, secretKey);
+              return { ...msg, ciphertext: plaintext };
+            } catch {
+              return { ...msg, ciphertext: Array.from(new TextEncoder().encode("[encrypted]")) };
+            }
+          })
+        );
+        setMessages(decrypted);
+      })
       .catch(console.error)
       .finally(() => setLoading(false));
-  }, [conversationId]);
+  }, [conversationId, contacts, secretKey]);
 
   useEffect(() => {
     if (!conversationId) return;
@@ -33,33 +48,89 @@ export default function Chat({ conversationId, userId, secretKey, contacts }: Ch
       try {
         const incoming: IncomingMessage[] = await pollMessages();
         if (incoming.length > 0) {
-          const decrypted = await Promise.all(
+          const decoded = await Promise.all(
             incoming
               .filter((m) => m.conversation_id === conversationId)
               .map(async (m) => {
-                let plaintext: number[];
-                try {
-                  const sender = contacts.find((c) => c.user_id === m.from);
-                  if (!sender) throw new Error("Sender not in contacts");
-                  plaintext = await decryptMessage(m.ciphertext, sender.public_key, secretKey);
-                } catch {
-                  plaintext = m.ciphertext;
+                const sender = contacts.find((c) => c.user_id === m.from);
+                if (!sender) {
+                  return {
+                    id: m.message_id,
+                    conversation_id: m.conversation_id,
+                    sender_id: m.from,
+                    sender_device_id: m.sender_device_id,
+                    sender_seq: m.sender_seq,
+                    timestamp: m.timestamp,
+                    message_type: "text",
+                    ciphertext: Array.from(new TextEncoder().encode("[sender not in contacts]")),
+                    signature: m.signature,
+                    prev_hash: [],
+                  };
                 }
-                return {
-                  id: m.message_id,
-                  conversation_id: m.conversation_id,
-                  sender_id: m.from,
-                  sender_device_id: m.sender_device_id,
-                  sender_seq: m.sender_seq,
-                  timestamp: m.timestamp,
-                  message_type: "text",
-                  ciphertext: plaintext,
-                  signature: m.signature,
-                  prev_hash: [],
-                };
+
+                try {
+                  const valid = await verifyMessage(m.ciphertext, m.signature, sender.public_key);
+                  if (!valid) {
+                    return {
+                      id: m.message_id,
+                      conversation_id: m.conversation_id,
+                      sender_id: m.from,
+                      sender_device_id: m.sender_device_id,
+                      sender_seq: m.sender_seq,
+                      timestamp: m.timestamp,
+                      message_type: "text",
+                      ciphertext: Array.from(new TextEncoder().encode("[signature invalid]")),
+                      signature: m.signature,
+                      prev_hash: [],
+                    };
+                  }
+                } catch {
+                  // verification itself failed — treat as invalid
+                  return {
+                    id: m.message_id,
+                    conversation_id: m.conversation_id,
+                    sender_id: m.from,
+                    sender_device_id: m.sender_device_id,
+                    sender_seq: m.sender_seq,
+                    timestamp: m.timestamp,
+                    message_type: "text",
+                    ciphertext: Array.from(new TextEncoder().encode("[signature invalid]")),
+                    signature: m.signature,
+                    prev_hash: [],
+                  };
+                }
+
+                try {
+                  const plaintext = await decryptMessage(m.ciphertext, sender.public_key, secretKey);
+                  return {
+                    id: m.message_id,
+                    conversation_id: m.conversation_id,
+                    sender_id: m.from,
+                    sender_device_id: m.sender_device_id,
+                    sender_seq: m.sender_seq,
+                    timestamp: m.timestamp,
+                    message_type: "text",
+                    ciphertext: plaintext,
+                    signature: m.signature,
+                    prev_hash: [],
+                  };
+                } catch {
+                  return {
+                    id: m.message_id,
+                    conversation_id: m.conversation_id,
+                    sender_id: m.from,
+                    sender_device_id: m.sender_device_id,
+                    sender_seq: m.sender_seq,
+                    timestamp: m.timestamp,
+                    message_type: "text",
+                    ciphertext: Array.from(new TextEncoder().encode("[decryption failed]")),
+                    signature: m.signature,
+                    prev_hash: [],
+                  };
+                }
               })
           );
-          setMessages((prev) => [...prev, ...decrypted]);
+          setMessages((prev) => [...prev, ...decoded]);
         }
       } catch {
         // ignore poll errors

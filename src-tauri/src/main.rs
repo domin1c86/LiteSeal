@@ -29,6 +29,7 @@ fn main() {
             commands::chat::encrypt_message,
             commands::chat::decrypt_message,
             commands::chat::sign_message,
+            commands::chat::verify_message,
             commands::chat::generate_keypair_cmd,
             commands::contacts::add_contact,
             commands::contacts::get_contacts,

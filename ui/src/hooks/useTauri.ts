@@ -128,6 +128,18 @@ export function useTauri() {
     return invoke<number[]>("sign_message", { message, secretKey });
   }
 
+  async function verifyMessage(
+    message: number[],
+    signature: number[],
+    senderPublicKey: number[]
+  ): Promise<boolean> {
+    return invoke<boolean>("verify_message", {
+      message,
+      signature,
+      senderPublicKey,
+    });
+  }
+
   async function generateKeypair(): Promise<
     [number[], number[], number[], number[]]
   > {
@@ -150,6 +162,7 @@ export function useTauri() {
     encryptMessage,
     decryptMessage,
     signMessage,
+    verifyMessage,
     generateKeypair,
   };
 }
