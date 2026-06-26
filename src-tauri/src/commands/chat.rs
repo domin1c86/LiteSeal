@@ -98,6 +98,61 @@ pub async fn poll_messages(
 }
 
 #[tauri::command]
+pub async fn encrypt_message(
+    plaintext: Vec<u8>,
+    recipient_public_key: Vec<u8>,
+    sender_secret_key: Vec<u8>,
+) -> Result<Vec<u8>, String> {
+    let pk: [u8; 32] = recipient_public_key
+        .try_into()
+        .map_err(|_| "Invalid public key length")?;
+    let sk: [u8; 32] = sender_secret_key
+        .try_into()
+        .map_err(|_| "Invalid secret key length")?;
+    liteseal_shared::crypto::encrypt(&plaintext, &pk, &sk)
+        .map_err(|e| format!("Encryption failed: {}", e))
+}
+
+#[tauri::command]
+pub async fn decrypt_message(
+    ciphertext: Vec<u8>,
+    sender_public_key: Vec<u8>,
+    recipient_secret_key: Vec<u8>,
+) -> Result<Vec<u8>, String> {
+    let pk: [u8; 32] = sender_public_key
+        .try_into()
+        .map_err(|_| "Invalid public key length")?;
+    let sk: [u8; 32] = recipient_secret_key
+        .try_into()
+        .map_err(|_| "Invalid secret key length")?;
+    liteseal_shared::crypto::decrypt(&ciphertext, &pk, &sk)
+        .map_err(|e| format!("Decryption failed: {}", e))
+}
+
+#[tauri::command]
+pub async fn sign_message(
+    message: Vec<u8>,
+    secret_key: Vec<u8>,
+) -> Result<Vec<u8>, String> {
+    let sk: [u8; 32] = secret_key
+        .try_into()
+        .map_err(|_| "Invalid secret key length")?;
+    liteseal_shared::crypto::sign(&message, &sk)
+        .map_err(|e| format!("Signing failed: {}", e))
+}
+
+#[tauri::command]
+pub async fn generate_keypair_cmd() -> Result<(Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>), String> {
+    let kp = liteseal_shared::crypto::generate_keypair().map_err(|e| e.to_string())?;
+    Ok((
+        kp.public_key.to_vec(),
+        kp.secret_key.to_vec(),
+        kp.ed25519_pk.to_vec(),
+        kp.ed25519_sk.to_vec(),
+    ))
+}
+
+#[tauri::command]
 pub async fn get_local_messages(
     conversation_id: String,
     limit: i64,

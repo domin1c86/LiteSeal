@@ -10,6 +10,7 @@ interface Session {
   user_id: string;
   token: string;
   serverUrl: string;
+  secretKey: number[];
 }
 
 export default function App() {
@@ -21,11 +22,12 @@ export default function App() {
   const [showAddContact, setShowAddContact] = useState(false);
   const { getContacts } = useTauri();
 
-  function handleLogin(result: RegisterResult & { serverUrl: string }) {
+  function handleLogin(result: RegisterResult & { serverUrl: string; secretKey: number[] }) {
     setSession({
       user_id: result.user_id,
       token: result.token,
       serverUrl: result.serverUrl,
+      secretKey: result.secretKey,
     });
   }
 
@@ -60,6 +62,8 @@ export default function App() {
         userId={session.user_id}
         token={session.token}
         serverUrl={session.serverUrl}
+        secretKey={session.secretKey}
+        contacts={contacts}
       />
       {showAddContact && (
         <AddContact

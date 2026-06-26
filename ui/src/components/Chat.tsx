@@ -1,20 +1,22 @@
 import { useState, useEffect, useRef } from "react";
 import { useTauri } from "../hooks/useTauri";
-import type { Message, IncomingMessage } from "../types";
+import type { Message, IncomingMessage, Contact } from "../types";
 
 interface ChatProps {
   conversationId: string | null;
   userId: string;
   token: string;
   serverUrl: string;
+  secretKey: number[];
+  contacts: Contact[];
 }
 
-export default function Chat({ conversationId, userId }: ChatProps) {
+export default function Chat({ conversationId, userId, secretKey, contacts }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const { sendMessage, pollMessages, getLocalMessages } = useTauri();
+  const { sendMessage, pollMessages, getLocalMessages, encryptMessage, decryptMessage, signMessage } = useTauri();
 
   useEffect(() => {
     if (!conversationId) return;
@@ -31,30 +33,40 @@ export default function Chat({ conversationId, userId }: ChatProps) {
       try {
         const incoming: IncomingMessage[] = await pollMessages();
         if (incoming.length > 0) {
-          setMessages((prev) => [
-            ...prev,
-            ...incoming
+          const decrypted = await Promise.all(
+            incoming
               .filter((m) => m.conversation_id === conversationId)
-              .map((m) => ({
-                id: m.message_id,
-                conversation_id: m.conversation_id,
-                sender_id: m.from,
-                sender_device_id: m.sender_device_id,
-                sender_seq: m.sender_seq,
-                timestamp: m.timestamp,
-                message_type: "text",
-                ciphertext: m.ciphertext,
-                signature: m.signature,
-                prev_hash: [],
-              })),
-          ]);
+              .map(async (m) => {
+                let plaintext: number[];
+                try {
+                  const sender = contacts.find((c) => c.user_id === m.from);
+                  if (!sender) throw new Error("Sender not in contacts");
+                  plaintext = await decryptMessage(m.ciphertext, sender.public_key, secretKey);
+                } catch {
+                  plaintext = m.ciphertext;
+                }
+                return {
+                  id: m.message_id,
+                  conversation_id: m.conversation_id,
+                  sender_id: m.from,
+                  sender_device_id: m.sender_device_id,
+                  sender_seq: m.sender_seq,
+                  timestamp: m.timestamp,
+                  message_type: "text",
+                  ciphertext: plaintext,
+                  signature: m.signature,
+                  prev_hash: [],
+                };
+              })
+          );
+          setMessages((prev) => [...prev, ...decrypted]);
         }
       } catch {
         // ignore poll errors
       }
     }, 2000);
     return () => clearInterval(interval);
-  }, [conversationId]);
+  }, [conversationId, contacts, secretKey]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -68,12 +80,16 @@ export default function Chat({ conversationId, userId }: ChatProps) {
     setInput("");
 
     try {
+      const contact = contacts.find((c) => c.user_id === conversationId);
+      if (!contact) throw new Error("Recipient not found in contacts");
+
       const encoder = new TextEncoder();
-      const ciphertext = Array.from(encoder.encode(text));
-      const signature: number[] = [];
+      const plaintext = Array.from(encoder.encode(text));
+      const ciphertext = await encryptMessage(plaintext, contact.public_key, secretKey);
+      const signature = await signMessage(ciphertext, secretKey);
 
       await sendMessage(
-        userId,
+        conversationId,
         conversationId,
         ciphertext,
         signature,
@@ -91,7 +107,7 @@ export default function Chat({ conversationId, userId }: ChatProps) {
           sender_seq: prev.length,
           timestamp: Date.now(),
           message_type: "text",
-          ciphertext: Array.from(encoder.encode(text)),
+          ciphertext: plaintext,
           signature: [],
           prev_hash: [],
         },

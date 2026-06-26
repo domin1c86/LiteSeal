@@ -3,7 +3,7 @@ import { useTauri } from "../hooks/useTauri";
 import type { RegisterResult } from "../types";
 
 interface LoginProps {
-  onLogin: (result: RegisterResult & { serverUrl: string }) => void;
+  onLogin: (result: RegisterResult & { serverUrl: string; secretKey: number[] }) => void;
 }
 
 export default function Login({ onLogin }: LoginProps) {
@@ -11,7 +11,7 @@ export default function Login({ onLogin }: LoginProps) {
   const [serverUrl, setServerUrl] = useState("http://localhost:3000");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { register, connectRelay } = useTauri();
+  const { register, connectRelay, generateKeypair } = useTauri();
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -21,9 +21,10 @@ export default function Login({ onLogin }: LoginProps) {
     setError(null);
 
     try {
-      const result = await register(username.trim(), serverUrl, [], []);
+      const [publicKey, secretKey, ed25519Pk] = await generateKeypair();
+      const result = await register(username.trim(), serverUrl, publicKey, ed25519Pk);
       await connectRelay(serverUrl, result.user_id, result.token);
-      onLogin({ ...result, serverUrl });
+      onLogin({ ...result, serverUrl, secretKey });
     } catch (err) {
       setError(String(err));
     } finally {

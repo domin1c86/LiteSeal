@@ -97,6 +97,45 @@ export function useTauri() {
     return invoke<UserSearchResult[]>("search_users", { query, serverUrl });
   }
 
+  async function encryptMessage(
+    plaintext: number[],
+    recipientPublicKey: number[],
+    senderSecretKey: number[]
+  ): Promise<number[]> {
+    return invoke<number[]>("encrypt_message", {
+      plaintext,
+      recipientPublicKey,
+      senderSecretKey,
+    });
+  }
+
+  async function decryptMessage(
+    ciphertext: number[],
+    senderPublicKey: number[],
+    recipientSecretKey: number[]
+  ): Promise<number[]> {
+    return invoke<number[]>("decrypt_message", {
+      ciphertext,
+      senderPublicKey,
+      recipientSecretKey,
+    });
+  }
+
+  async function signMessage(
+    message: number[],
+    secretKey: number[]
+  ): Promise<number[]> {
+    return invoke<number[]>("sign_message", { message, secretKey });
+  }
+
+  async function generateKeypair(): Promise<
+    [number[], number[], number[], number[]]
+  > {
+    return invoke<[number[], number[], number[], number[]]>(
+      "generate_keypair_cmd"
+    );
+  }
+
   return {
     register,
     connectRelay,
@@ -108,5 +147,9 @@ export function useTauri() {
     getContacts,
     removeContact,
     searchUsers,
+    encryptMessage,
+    decryptMessage,
+    signMessage,
+    generateKeypair,
   };
 }
