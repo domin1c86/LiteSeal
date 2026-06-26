@@ -3,7 +3,7 @@ import { useTauri } from "../hooks/useTauri";
 import type { RegisterResult } from "../types";
 
 interface LoginProps {
-  onLogin: (result: RegisterResult & { serverUrl: string; secretKey: number[] }) => void;
+  onLogin: (result: RegisterResult & { serverUrl: string; publicKey: number[]; secretKey: number[]; ed25519Pk: number[]; ed25519Sk: number[] }) => void;
 }
 
 export default function Login({ onLogin }: LoginProps) {
@@ -11,7 +11,7 @@ export default function Login({ onLogin }: LoginProps) {
   const [serverUrl, setServerUrl] = useState("http://localhost:3000");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { register, connectRelay, generateKeypair } = useTauri();
+  const { register, connectRelay, generateKeypair, saveKeypair } = useTauri();
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -21,10 +21,11 @@ export default function Login({ onLogin }: LoginProps) {
     setError(null);
 
     try {
-      const [publicKey, secretKey, ed25519Pk] = await generateKeypair();
+      const [publicKey, secretKey, ed25519Pk, ed25519Sk] = await generateKeypair();
       const result = await register(username.trim(), serverUrl, publicKey, ed25519Pk);
       await connectRelay(serverUrl, result.user_id, result.token);
-      onLogin({ ...result, serverUrl, secretKey });
+      await saveKeypair(result.user_id, publicKey, secretKey, ed25519Pk, ed25519Sk);
+      onLogin({ ...result, serverUrl, publicKey, secretKey, ed25519Pk, ed25519Sk });
     } catch (err) {
       setError(String(err));
     } finally {

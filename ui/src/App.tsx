@@ -11,7 +11,10 @@ interface Session {
   user_id: string;
   token: string;
   serverUrl: string;
+  publicKey: number[];
   secretKey: number[];
+  ed25519Pk: number[];
+  ed25519Sk: number[];
 }
 
 export default function App() {
@@ -22,15 +25,48 @@ export default function App() {
   );
   const [showAddContact, setShowAddContact] = useState(false);
   const [showStorage, setShowStorage] = useState(false);
-  const { getContacts } = useTauri();
+  const { getContacts, loadKeypair, connectRelay, clearKeypair, disconnect } = useTauri();
+  const [loading, setLoading] = useState(true);
 
-  function handleLogin(result: RegisterResult & { serverUrl: string; secretKey: number[] }) {
+  function handleLogin(result: RegisterResult & { serverUrl: string; publicKey: number[]; secretKey: number[]; ed25519Pk: number[]; ed25519Sk: number[] }) {
     setSession({
       user_id: result.user_id,
       token: result.token,
       serverUrl: result.serverUrl,
+      publicKey: result.publicKey,
       secretKey: result.secretKey,
+      ed25519Pk: result.ed25519Pk,
+      ed25519Sk: result.ed25519Sk,
     });
+  }
+
+  useEffect(() => {
+    loadKeypair()
+      .then(async ([userId, publicKey, secretKey, ed25519Pk, ed25519Sk]) => {
+        const serverUrl = "http://localhost:3000";
+        try {
+          const connectResult = await connectRelay(serverUrl, userId, "restored");
+          if (connectResult.connected) {
+            setSession({ user_id: userId, token: "restored", serverUrl, publicKey, secretKey, ed25519Pk, ed25519Sk });
+          }
+        } catch {
+          setSession({ user_id: userId, token: "restored", serverUrl, publicKey, secretKey, ed25519Pk, ed25519Sk });
+        }
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  async function handleLogout() {
+    try {
+      await disconnect();
+    } catch {}
+    try {
+      await clearKeypair();
+    } catch {}
+    setSession(null);
+    setContacts([]);
+    setActiveConversation(null);
   }
 
   useEffect(() => {
@@ -47,6 +83,14 @@ export default function App() {
     setShowAddContact(false);
   }
 
+  if (loading) {
+    return (
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", backgroundColor: "#1a1a2e", color: "#a0a0b0" }}>
+        Loading...
+      </div>
+    );
+  }
+
   if (!session) {
     return <Login onLogin={handleLogin} />;
   }
@@ -59,6 +103,7 @@ export default function App() {
         onSelect={setActiveConversation}
         onAddClick={() => setShowAddContact(true)}
         onStorageClick={() => setShowStorage(true)}
+        onLogout={handleLogout}
       />
       <Chat
         conversationId={activeConversation}

@@ -6,6 +6,7 @@ interface ContactListProps {
   onSelect: (contactId: string) => void;
   onAddClick: () => void;
   onStorageClick: () => void;
+  onLogout: () => void;
 }
 
 export default function ContactList({
@@ -14,6 +15,7 @@ export default function ContactList({
   onSelect,
   onAddClick,
   onStorageClick,
+  onLogout,
 }: ContactListProps) {
   return (
     <div style={styles.container}>
@@ -25,6 +27,9 @@ export default function ContactList({
           </button>
           <button style={styles.addBtn} onClick={onAddClick}>
             +
+          </button>
+          <button style={styles.iconBtn} onClick={onLogout} title="Logout">
+            ⏻
           </button>
         </div>
       </div>

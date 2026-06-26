@@ -162,6 +162,24 @@ export function useTauri() {
     return invoke<number>("clear_downloaded_attachments");
   }
 
+  async function saveKeypair(
+    userId: string,
+    publicKey: number[],
+    secretKey: number[],
+    ed25519Pk: number[],
+    ed25519Sk: number[]
+  ): Promise<void> {
+    return invoke("save_keypair", { userId, publicKey, secretKey, ed25519Pk, ed25519Sk });
+  }
+
+  async function loadKeypair(): Promise<[string, number[], number[], number[], number[]]> {
+    return invoke("load_keypair");
+  }
+
+  async function clearKeypair(): Promise<void> {
+    return invoke("clear_keypair");
+  }
+
   return {
     register,
     connectRelay,
@@ -181,5 +199,8 @@ export function useTauri() {
     getStorageStats,
     clearExpiredMessages,
     clearDownloadedAttachments,
+    saveKeypair,
+    loadKeypair,
+    clearKeypair,
   };
 }
