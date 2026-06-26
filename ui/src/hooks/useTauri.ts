@@ -12,9 +12,16 @@ import type {
 export function useTauri() {
   async function register(
     username: string,
-    serverUrl: string
+    serverUrl: string,
+    publicKey: number[] = [],
+    ed25519Pk: number[] = []
   ): Promise<RegisterResult> {
-    return invoke<RegisterResult>("register", { username, serverUrl });
+    return invoke<RegisterResult>("register", {
+      username,
+      serverUrl,
+      publicKey,
+      ed25519Pk,
+    });
   }
 
   async function connectRelay(

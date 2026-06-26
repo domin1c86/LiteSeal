@@ -16,6 +16,7 @@ export default function AddContact({
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<UserSearchResult[]>([]);
   const [searching, setSearching] = useState(false);
+  const [searched, setSearched] = useState(false);
   const [adding, setAdding] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const { searchUsers, addContact } = useTauri();
@@ -29,6 +30,7 @@ export default function AddContact({
     try {
       const res = await searchUsers(query.trim(), serverUrl);
       setResults(res);
+      setSearched(true);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -80,7 +82,7 @@ export default function AddContact({
         {error && <p style={styles.error}>{error}</p>}
 
         <div style={styles.results}>
-          {results.length === 0 && !searching && (
+          {searched && results.length === 0 && !searching && (
             <p style={styles.empty}>No results</p>
           )}
           {results.map((user) => (

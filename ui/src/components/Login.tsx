@@ -21,7 +21,7 @@ export default function Login({ onLogin }: LoginProps) {
     setError(null);
 
     try {
-      const result = await register(username.trim(), serverUrl);
+      const result = await register(username.trim(), serverUrl, [], []);
       await connectRelay(serverUrl, result.user_id, result.token);
       onLogin({ ...result, serverUrl });
     } catch (err) {
