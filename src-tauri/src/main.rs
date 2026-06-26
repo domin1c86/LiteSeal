@@ -26,6 +26,10 @@ fn main() {
             commands::chat::send_message,
             commands::chat::poll_messages,
             commands::chat::get_local_messages,
+            commands::contacts::add_contact,
+            commands::contacts::get_contacts,
+            commands::contacts::remove_contact,
+            commands::contacts::search_users,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

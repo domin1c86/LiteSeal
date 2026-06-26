@@ -4,15 +4,23 @@ use tokio::sync::mpsc;
 
 pub type MessageSender = mpsc::UnboundedSender<String>;
 
+pub struct RegisteredUser {
+    pub username: String,
+    pub public_key: Option<Vec<u8>>,
+    pub ed25519_pk: Option<Vec<u8>>,
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub connections: Arc<DashMap<String, MessageSender>>,
+    pub users: Arc<DashMap<String, RegisteredUser>>,
 }
 
 impl AppState {
     pub fn new() -> Self {
         Self {
             connections: Arc::new(DashMap::new()),
+            users: Arc::new(DashMap::new()),
         }
     }
 

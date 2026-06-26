@@ -36,3 +36,18 @@ pub struct Conversation {
     pub created_at: i64,
     pub updated_at: i64,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Contact {
+    pub user_id: String,
+    pub username: String,
+    pub public_key: Vec<u8>,
+    pub added_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PublicKeyInfo {
+    pub user_id: String,
+    pub username: String,
+    pub public_key: Vec<u8>,
+}

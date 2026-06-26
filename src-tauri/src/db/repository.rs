@@ -1,7 +1,7 @@
 use rusqlite::{Connection, params};
 use thiserror::Error;
 
-use super::models::{MessageModel, ConversationModel, AttachmentModel, DeviceModel};
+use super::models::{MessageModel, ConversationModel, AttachmentModel, DeviceModel, ContactModel};
 
 #[derive(Error, Debug)]
 pub enum DbError {
@@ -63,6 +63,13 @@ impl MessageRepository {
                 public_key BLOB NOT NULL,
                 created_at INTEGER NOT NULL,
                 last_seen INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS contacts (
+                user_id TEXT PRIMARY KEY,
+                username TEXT NOT NULL,
+                public_key BLOB NOT NULL,
+                added_at INTEGER NOT NULL
             );
 
             CREATE INDEX IF NOT EXISTS idx_messages_conversation
@@ -377,4 +384,96 @@ impl MessageRepository {
             None => Ok(None),
         }
     }
+
+    // Contact operations
+
+    pub fn insert_contact(&self, contact: &ContactModel) -> Result<(), DbError> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO contacts (user_id, username, public_key, added_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![contact.user_id, contact.username, contact.public_key, contact.added_at],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_contacts(&self) -> Result<Vec<ContactModel>, DbError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT user_id, username, public_key, added_at FROM contacts ORDER BY added_at DESC"
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            Ok(ContactModel {
+                user_id: row.get(0)?,
+                username: row.get(1)?,
+                public_key: row.get(2)?,
+                added_at: row.get(3)?,
+            })
+        })?;
+
+        let mut contacts = Vec::new();
+        for row in rows {
+            contacts.push(row?);
+        }
+        Ok(contacts)
+    }
+
+    pub fn get_contact(&self, user_id: &str) -> Result<Option<ContactModel>, DbError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT user_id, username, public_key, added_at FROM contacts WHERE user_id = ?1"
+        )?;
+
+        let mut rows = stmt.query_map(params![user_id], |row| {
+            Ok(ContactModel {
+                user_id: row.get(0)?,
+                username: row.get(1)?,
+                public_key: row.get(2)?,
+                added_at: row.get(3)?,
+            })
+        })?;
+
+        match rows.next() {
+            Some(Ok(contact)) => Ok(Some(contact)),
+            Some(Err(e)) => Err(DbError::SqliteError(e)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn delete_contact(&self, user_id: &str) -> Result<(), DbError> {
+        let rows_changed = self.conn.execute(
+            "DELETE FROM contacts WHERE user_id = ?1",
+            params![user_id],
+        )?;
+        if rows_changed == 0 {
+            return Err(DbError::NotFound);
+        }
+        Ok(())
+    }
+
+    // Storage stats
+
+    pub fn get_storage_stats(&self) -> Result<StorageStats, DbError> {
+        let conversation_count: i64 = self.conn
+            .query_row("SELECT COUNT(*) FROM conversations", [], |r| r.get(0))?;
+        let message_count: i64 = self.conn
+            .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))?;
+        let contact_count: i64 = self.conn
+            .query_row("SELECT COUNT(*) FROM contacts", [], |r| r.get(0))?;
+        let device_count: i64 = self.conn
+            .query_row("SELECT COUNT(*) FROM devices", [], |r| r.get(0))?;
+
+        Ok(StorageStats {
+            conversation_count,
+            message_count,
+            contact_count,
+            device_count,
+        })
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct StorageStats {
+    pub conversation_count: i64,
+    pub message_count: i64,
+    pub contact_count: i64,
+    pub device_count: i64,
 }

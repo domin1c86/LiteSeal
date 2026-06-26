@@ -1,4 +1,5 @@
 mod auth;
+mod keys;
 mod relay;
 mod state;
 
@@ -14,6 +15,8 @@ async fn main() {
 
     let app = Router::new()
         .route("/register", post(auth::handlers::register))
+        .route("/users/search", get(keys::handlers::search_users))
+        .route("/users/{user_id}/key", get(keys::handlers::get_public_key))
         .route("/ws", get(relay::handlers::ws_handler))
         .with_state(state);
 

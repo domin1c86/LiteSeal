@@ -48,3 +48,11 @@ pub struct DeviceModel {
     pub created_at: i64,
     pub last_seen: i64,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContactModel {
+    pub user_id: String,
+    pub username: String,
+    pub public_key: Vec<u8>,
+    pub added_at: i64,
+}
