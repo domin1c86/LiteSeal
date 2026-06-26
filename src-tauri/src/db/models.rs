@@ -54,5 +54,6 @@ pub struct ContactModel {
     pub user_id: String,
     pub username: String,
     pub public_key: Vec<u8>,
+    pub ed25519_pk: Option<Vec<u8>>,
     pub added_at: i64,
 }

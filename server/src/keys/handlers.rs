@@ -17,6 +17,7 @@ pub struct UserSearchResult {
     pub user_id: String,
     pub username: String,
     pub public_key: Option<Vec<u8>>,
+    pub ed25519_pk: Option<Vec<u8>>,
 }
 
 #[derive(Serialize)]
@@ -24,6 +25,7 @@ pub struct PublicKeyResponse {
     pub user_id: String,
     pub username: String,
     pub public_key: Option<Vec<u8>>,
+    pub ed25519_pk: Option<Vec<u8>>,
 }
 
 pub async fn search_users(
@@ -44,6 +46,7 @@ pub async fn search_users(
                 user_id: user_id.clone(),
                 username: user.username.clone(),
                 public_key: user.public_key.clone(),
+                ed25519_pk: user.ed25519_pk.clone(),
             });
         }
     }
@@ -60,6 +63,7 @@ pub async fn get_public_key(
             user_id: user_id.clone(),
             username: user.username.clone(),
             public_key: user.public_key.clone(),
+            ed25519_pk: user.ed25519_pk.clone(),
         })),
         None => Err(StatusCode::NOT_FOUND),
     }

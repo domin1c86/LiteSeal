@@ -52,6 +52,7 @@ export interface Contact {
   user_id: string;
   username: string;
   public_key: number[];
+  ed25519_pk?: number[];
   added_at: number;
 }
 
@@ -59,6 +60,7 @@ export interface UserSearchResult {
   user_id: string;
   username: string;
   public_key: number[];
+  ed25519_pk?: number[];
 }
 
 export interface AppState {

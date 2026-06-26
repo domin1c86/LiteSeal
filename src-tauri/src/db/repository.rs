@@ -69,6 +69,7 @@ impl MessageRepository {
                 user_id TEXT PRIMARY KEY,
                 username TEXT NOT NULL,
                 public_key BLOB NOT NULL,
+                ed25519_pk BLOB,
                 added_at INTEGER NOT NULL
             );
 
@@ -78,6 +79,8 @@ impl MessageRepository {
             CREATE INDEX IF NOT EXISTS idx_attachments_message
             ON attachments(message_id);
         ")?;
+
+        let _ = conn.execute("ALTER TABLE contacts ADD COLUMN ed25519_pk BLOB", []);
 
         Ok(Self { conn })
     }
@@ -389,17 +392,17 @@ impl MessageRepository {
 
     pub fn insert_contact(&self, contact: &ContactModel) -> Result<(), DbError> {
         self.conn.execute(
-            "INSERT INTO contacts (user_id, username, public_key, added_at)
-             VALUES (?1, ?2, ?3, ?4)
-             ON CONFLICT(user_id) DO UPDATE SET username = excluded.username, public_key = excluded.public_key",
-            params![contact.user_id, contact.username, contact.public_key, contact.added_at],
+            "INSERT INTO contacts (user_id, username, public_key, ed25519_pk, added_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(user_id) DO UPDATE SET username = excluded.username, public_key = excluded.public_key, ed25519_pk = excluded.ed25519_pk",
+            params![contact.user_id, contact.username, contact.public_key, contact.ed25519_pk, contact.added_at],
         )?;
         Ok(())
     }
 
     pub fn get_contacts(&self) -> Result<Vec<ContactModel>, DbError> {
         let mut stmt = self.conn.prepare(
-            "SELECT user_id, username, public_key, added_at FROM contacts ORDER BY added_at DESC"
+            "SELECT user_id, username, public_key, ed25519_pk, added_at FROM contacts ORDER BY added_at DESC"
         )?;
 
         let rows = stmt.query_map([], |row| {
@@ -407,7 +410,8 @@ impl MessageRepository {
                 user_id: row.get(0)?,
                 username: row.get(1)?,
                 public_key: row.get(2)?,
-                added_at: row.get(3)?,
+                ed25519_pk: row.get(3)?,
+                added_at: row.get(4)?,
             })
         })?;
 
@@ -420,7 +424,7 @@ impl MessageRepository {
 
     pub fn get_contact(&self, user_id: &str) -> Result<Option<ContactModel>, DbError> {
         let mut stmt = self.conn.prepare(
-            "SELECT user_id, username, public_key, added_at FROM contacts WHERE user_id = ?1"
+            "SELECT user_id, username, public_key, ed25519_pk, added_at FROM contacts WHERE user_id = ?1"
         )?;
 
         let mut rows = stmt.query_map(params![user_id], |row| {
@@ -428,7 +432,8 @@ impl MessageRepository {
                 user_id: row.get(0)?,
                 username: row.get(1)?,
                 public_key: row.get(2)?,
-                added_at: row.get(3)?,
+                ed25519_pk: row.get(3)?,
+                added_at: row.get(4)?,
             })
         })?;
 

@@ -69,7 +69,21 @@ export default function Chat({ conversationId, userId, secretKey, contacts }: Ch
                 }
 
                 try {
-                  const valid = await verifyMessage(m.ciphertext, m.signature, sender.public_key);
+                  if (!sender.ed25519_pk || sender.ed25519_pk.length === 0) {
+                    return {
+                      id: m.message_id,
+                      conversation_id: m.conversation_id,
+                      sender_id: m.from,
+                      sender_device_id: m.sender_device_id,
+                      sender_seq: m.sender_seq,
+                      timestamp: m.timestamp,
+                      message_type: "text",
+                      ciphertext: Array.from(new TextEncoder().encode("[no ed25519 key, verification skipped]")),
+                      signature: m.signature,
+                      prev_hash: [],
+                    };
+                  }
+                  const valid = await verifyMessage(m.ciphertext, m.signature, sender.ed25519_pk);
                   if (!valid) {
                     return {
                       id: m.message_id,

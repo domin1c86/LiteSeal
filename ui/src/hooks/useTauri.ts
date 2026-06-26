@@ -78,9 +78,10 @@ export function useTauri() {
   async function addContact(
     userId: string,
     username: string,
-    publicKey: number[]
+    publicKey: number[],
+    ed25519Pk?: number[]
   ): Promise<Contact> {
-    return invoke<Contact>("add_contact", { userId, username, publicKey });
+    return invoke<Contact>("add_contact", { userId, username, publicKey, ed25519Pk });
   }
 
   async function getContacts(): Promise<Contact[]> {

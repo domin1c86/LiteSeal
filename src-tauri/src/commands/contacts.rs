@@ -21,12 +21,14 @@ pub async fn add_contact(
     user_id: String,
     username: String,
     public_key: Vec<u8>,
+    ed25519_pk: Option<Vec<u8>>,
     state: State<'_, AppState>,
 ) -> Result<AddContactResult, String> {
     let contact = ContactModel {
         user_id,
         username,
         public_key,
+        ed25519_pk,
         added_at: Utc::now().timestamp(),
     };
 

@@ -226,6 +226,7 @@ fn test_contact_operations() {
         user_id: "user-1".to_string(),
         username: "alice".to_string(),
         public_key: vec![1, 2, 3],
+        ed25519_pk: None,
         added_at: 1000,
     };
 
@@ -240,6 +241,7 @@ fn test_contact_operations() {
         user_id: "user-2".to_string(),
         username: "bob".to_string(),
         public_key: vec![4, 5, 6],
+        ed25519_pk: None,
         added_at: 2000,
     };
     repo.insert_contact(&contact2).unwrap();
@@ -288,6 +290,7 @@ fn test_storage_stats() {
         user_id: "user-2".to_string(),
         username: "bob".to_string(),
         public_key: vec![],
+        ed25519_pk: None,
         added_at: 1000,
     };
     repo.insert_contact(&contact).unwrap();
