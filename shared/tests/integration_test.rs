@@ -209,12 +209,8 @@ fn test_message_serialization_roundtrip() {
     assert_eq!(deserialized.signature, msg.signature);
     assert_eq!(deserialized.prev_hash, msg.prev_hash);
 
-    let decrypted = crypto::decrypt(
-        &deserialized.ciphertext,
-        &alice.public_key,
-        &bob.secret_key,
-    )
-    .unwrap();
+    let decrypted =
+        crypto::decrypt(&deserialized.ciphertext, &alice.public_key, &bob.secret_key).unwrap();
     assert_eq!(decrypted, ALICE_MSG);
 
     let sig_valid = crypto::verify(
@@ -254,20 +250,16 @@ fn test_end_to_end_encrypted_message_delivery() {
     let serialized = serde_json::to_string(&msg).unwrap();
     let relayed: Message = serde_json::from_str(&serialized).unwrap();
 
-    let sig_valid = crypto::verify_with_public_key(
-        &relayed.ciphertext,
-        &relayed.signature,
-        &alice.ed25519_pk,
-    )
-    .unwrap();
-    assert!(sig_valid, "Signature verification should pass for relayed message");
+    let sig_valid =
+        crypto::verify_with_public_key(&relayed.ciphertext, &relayed.signature, &alice.ed25519_pk)
+            .unwrap();
+    assert!(
+        sig_valid,
+        "Signature verification should pass for relayed message"
+    );
 
-    let decrypted = crypto::decrypt(
-        &relayed.ciphertext,
-        &alice.public_key,
-        &bob.secret_key,
-    )
-    .unwrap();
+    let decrypted =
+        crypto::decrypt(&relayed.ciphertext, &alice.public_key, &bob.secret_key).unwrap();
     assert_eq!(decrypted, plaintext);
 }
 
@@ -299,13 +291,13 @@ fn test_relay_tampering_detected_by_signature() {
     let serialized = serde_json::to_string(&msg).unwrap();
     let relayed: Message = serde_json::from_str(&serialized).unwrap();
 
-    let sig_valid = crypto::verify_with_public_key(
-        &relayed.ciphertext,
-        &relayed.signature,
-        &alice.ed25519_pk,
-    )
-    .unwrap();
-    assert!(!sig_valid, "Tampered ciphertext should fail signature verification");
+    let sig_valid =
+        crypto::verify_with_public_key(&relayed.ciphertext, &relayed.signature, &alice.ed25519_pk)
+            .unwrap();
+    assert!(
+        !sig_valid,
+        "Tampered ciphertext should fail signature verification"
+    );
 }
 
 #[test]
@@ -345,8 +337,8 @@ fn test_multiple_messages_in_conversation() {
     for (i, json) in relayed_messages.iter().enumerate() {
         let msg: Message = serde_json::from_str(json).unwrap();
 
-        let decrypted = crypto::decrypt(&msg.ciphertext, &alice.public_key, &bob.secret_key)
-            .unwrap();
+        let decrypted =
+            crypto::decrypt(&msg.ciphertext, &alice.public_key, &bob.secret_key).unwrap();
         assert_eq!(decrypted, messages[i]);
 
         let sig_valid =
@@ -397,12 +389,8 @@ fn test_complete_message_lifecycle() {
     .unwrap();
     assert!(sig_valid, "Signature must be valid on receipt");
 
-    let decrypted = crypto::decrypt(
-        &received.ciphertext,
-        &alice.public_key,
-        &bob.secret_key,
-    )
-    .unwrap();
+    let decrypted =
+        crypto::decrypt(&received.ciphertext, &alice.public_key, &bob.secret_key).unwrap();
     assert_eq!(decrypted, plaintext);
 
     let ack_json = serde_json::json!({
@@ -429,7 +417,10 @@ fn test_concurrent_encryption_independence() {
     assert_eq!(pt_charlie, b"msg for charlie");
 
     let cross_result = crypto::decrypt(&ct_bob, &alice.public_key, &charlie.secret_key);
-    assert!(cross_result.is_err(), "Charlie should not decrypt Bob's message");
+    assert!(
+        cross_result.is_err(),
+        "Charlie should not decrypt Bob's message"
+    );
 }
 
 #[test]
@@ -462,7 +453,10 @@ fn test_same_plaintext_different_ciphertext() {
     let ct1 = crypto::encrypt(ALICE_MSG, &bob.public_key, &alice.secret_key).unwrap();
     let ct2 = crypto::encrypt(ALICE_MSG, &bob.public_key, &alice.secret_key).unwrap();
 
-    assert_ne!(ct1, ct2, "Same plaintext should produce different ciphertexts due to random nonces");
+    assert_ne!(
+        ct1, ct2,
+        "Same plaintext should produce different ciphertexts due to random nonces"
+    );
 
     let pt1 = crypto::decrypt(&ct1, &alice.public_key, &bob.secret_key).unwrap();
     let pt2 = crypto::decrypt(&ct2, &alice.public_key, &bob.secret_key).unwrap();

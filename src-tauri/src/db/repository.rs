@@ -1,7 +1,7 @@
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use thiserror::Error;
 
-use super::models::{MessageModel, ConversationModel, AttachmentModel, DeviceModel, ContactModel};
+use super::models::{AttachmentModel, ContactModel, ConversationModel, DeviceModel, MessageModel};
 
 #[derive(Error, Debug)]
 pub enum DbError {
@@ -19,7 +19,8 @@ impl MessageRepository {
     pub fn new(db_path: &str) -> Result<Self, DbError> {
         let conn = Connection::open(db_path)?;
 
-        conn.execute_batch("
+        conn.execute_batch(
+            "
             CREATE TABLE IF NOT EXISTS conversations (
                 id TEXT PRIMARY KEY,
                 type TEXT NOT NULL,
@@ -78,7 +79,8 @@ impl MessageRepository {
 
             CREATE INDEX IF NOT EXISTS idx_attachments_message
             ON attachments(message_id);
-        ")?;
+        ",
+        )?;
 
         let _ = conn.execute("ALTER TABLE contacts ADD COLUMN ed25519_pk BLOB", []);
 
@@ -106,7 +108,7 @@ impl MessageRepository {
     pub fn get_conversation(&self, id: &str) -> Result<Option<ConversationModel>, DbError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, type, created_at, updated_at, storage_policy, privacy_mode
-             FROM conversations WHERE id = ?1"
+             FROM conversations WHERE id = ?1",
         )?;
 
         let mut rows = stmt.query_map(params![id], |row| {
@@ -169,7 +171,7 @@ impl MessageRepository {
             "SELECT id, conversation_id, sender_id, sender_device_id,
              sender_seq, timestamp, message_type, local_state, expire_at,
              ciphertext, signature, prev_hash
-             FROM messages WHERE id = ?1"
+             FROM messages WHERE id = ?1",
         )?;
 
         let mut rows = stmt.query_map(params![id], |row| {
@@ -207,7 +209,7 @@ impl MessageRepository {
              sender_seq, timestamp, message_type, local_state, expire_at,
              ciphertext, signature, prev_hash
              FROM messages WHERE conversation_id = ?1
-             ORDER BY timestamp DESC LIMIT ?2 OFFSET ?3"
+             ORDER BY timestamp DESC LIMIT ?2 OFFSET ?3",
         )?;
 
         let rows = stmt.query_map(params![conversation_id, limit, offset], |row| {
@@ -235,10 +237,9 @@ impl MessageRepository {
     }
 
     pub fn delete_message(&self, id: &str) -> Result<(), DbError> {
-        let rows_changed = self.conn.execute(
-            "DELETE FROM messages WHERE id = ?1",
-            params![id],
-        )?;
+        let rows_changed = self
+            .conn
+            .execute("DELETE FROM messages WHERE id = ?1", params![id])?;
         if rows_changed == 0 {
             return Err(DbError::NotFound);
         }
@@ -272,7 +273,7 @@ impl MessageRepository {
         let mut stmt = self.conn.prepare(
             "SELECT id, message_id, blob_id, encrypted_name, encrypted_mime,
              size, downloaded, pinned, expire_at, last_accessed_at
-             FROM attachments WHERE id = ?1"
+             FROM attachments WHERE id = ?1",
         )?;
 
         let mut rows = stmt.query_map(params![id], |row| {
@@ -297,11 +298,14 @@ impl MessageRepository {
         }
     }
 
-    pub fn get_attachments_by_message(&self, message_id: &str) -> Result<Vec<AttachmentModel>, DbError> {
+    pub fn get_attachments_by_message(
+        &self,
+        message_id: &str,
+    ) -> Result<Vec<AttachmentModel>, DbError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, message_id, blob_id, encrypted_name, encrypted_mime,
              size, downloaded, pinned, expire_at, last_accessed_at
-             FROM attachments WHERE message_id = ?1"
+             FROM attachments WHERE message_id = ?1",
         )?;
 
         let rows = stmt.query_map(params![message_id], |row| {
@@ -338,10 +342,9 @@ impl MessageRepository {
     }
 
     pub fn delete_attachment(&self, id: &str) -> Result<(), DbError> {
-        let rows_changed = self.conn.execute(
-            "DELETE FROM attachments WHERE id = ?1",
-            params![id],
-        )?;
+        let rows_changed = self
+            .conn
+            .execute("DELETE FROM attachments WHERE id = ?1", params![id])?;
         if rows_changed == 0 {
             return Err(DbError::NotFound);
         }
@@ -368,7 +371,7 @@ impl MessageRepository {
     pub fn get_device(&self, id: &str) -> Result<Option<DeviceModel>, DbError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, user_id, public_key, created_at, last_seen
-             FROM devices WHERE id = ?1"
+             FROM devices WHERE id = ?1",
         )?;
 
         let mut rows = stmt.query_map(params![id], |row| {
@@ -445,10 +448,9 @@ impl MessageRepository {
     }
 
     pub fn delete_contact(&self, user_id: &str) -> Result<(), DbError> {
-        let rows_changed = self.conn.execute(
-            "DELETE FROM contacts WHERE user_id = ?1",
-            params![user_id],
-        )?;
+        let rows_changed = self
+            .conn
+            .execute("DELETE FROM contacts WHERE user_id = ?1", params![user_id])?;
         if rows_changed == 0 {
             return Err(DbError::NotFound);
         }
@@ -458,20 +460,31 @@ impl MessageRepository {
     // Storage stats
 
     pub fn get_storage_stats(&self) -> Result<StorageStats, DbError> {
-        let conversation_count: i64 = self.conn
-            .query_row("SELECT COUNT(*) FROM conversations", [], |r| r.get(0))?;
-        let message_count: i64 = self.conn
+        let conversation_count: i64 =
+            self.conn
+                .query_row("SELECT COUNT(*) FROM conversations", [], |r| r.get(0))?;
+        let message_count: i64 = self
+            .conn
             .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))?;
-        let ciphertext_bytes: i64 = self.conn
-            .query_row("SELECT COALESCE(SUM(LENGTH(ciphertext)), 0) FROM messages", [], |r| r.get(0))?;
-        let contact_count: i64 = self.conn
+        let ciphertext_bytes: i64 = self.conn.query_row(
+            "SELECT COALESCE(SUM(LENGTH(ciphertext)), 0) FROM messages",
+            [],
+            |r| r.get(0),
+        )?;
+        let contact_count: i64 = self
+            .conn
             .query_row("SELECT COUNT(*) FROM contacts", [], |r| r.get(0))?;
-        let device_count: i64 = self.conn
+        let device_count: i64 = self
+            .conn
             .query_row("SELECT COUNT(*) FROM devices", [], |r| r.get(0))?;
-        let attachment_count: i64 = self.conn
-            .query_row("SELECT COUNT(*) FROM attachments", [], |r| r.get(0))?;
-        let attachment_bytes: i64 = self.conn
-            .query_row("SELECT COALESCE(SUM(size), 0) FROM attachments", [], |r| r.get(0))?;
+        let attachment_count: i64 =
+            self.conn
+                .query_row("SELECT COUNT(*) FROM attachments", [], |r| r.get(0))?;
+        let attachment_bytes: i64 =
+            self.conn
+                .query_row("SELECT COALESCE(SUM(size), 0) FROM attachments", [], |r| {
+                    r.get(0)
+                })?;
 
         Ok(StorageStats {
             conversation_count,
@@ -493,10 +506,9 @@ impl MessageRepository {
     }
 
     pub fn clear_unpinned_attachments(&self) -> Result<usize, DbError> {
-        let deleted = self.conn.execute(
-            "DELETE FROM attachments WHERE pinned = 0",
-            [],
-        )?;
+        let deleted = self
+            .conn
+            .execute("DELETE FROM attachments WHERE pinned = 0", [])?;
         Ok(deleted)
     }
 }

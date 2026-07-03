@@ -176,6 +176,7 @@ export default function Chat({ conversationId, userId, secretKey, contacts }: Ch
       await sendMessage(
         conversationId,
         conversationId,
+        userId,
         ciphertext,
         signature,
         "device-1",

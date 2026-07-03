@@ -1,5 +1,7 @@
+use liteseal_app::db::models::{
+    AttachmentModel, ContactModel, ConversationModel, DeviceModel, MessageModel,
+};
 use liteseal_app::db::repository::MessageRepository;
-use liteseal_app::db::models::{MessageModel, ConversationModel, AttachmentModel, DeviceModel, ContactModel};
 
 #[test]
 fn test_insert_and_get_message() {

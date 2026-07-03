@@ -42,15 +42,19 @@ export default function App() {
 
   useEffect(() => {
     loadKeypair()
-      .then(async ([userId, publicKey, secretKey, ed25519Pk, ed25519Sk]) => {
+      .then(async ([userId, token, publicKey, secretKey, ed25519Pk, ed25519Sk]) => {
         const serverUrl = "http://localhost:3000";
+        if (!token) {
+          setSession({ user_id: userId, token, serverUrl, publicKey, secretKey, ed25519Pk, ed25519Sk });
+          return;
+        }
         try {
-          const connectResult = await connectRelay(serverUrl, userId, "restored");
+          const connectResult = await connectRelay(serverUrl, userId, token);
           if (connectResult.connected) {
-            setSession({ user_id: userId, token: "restored", serverUrl, publicKey, secretKey, ed25519Pk, ed25519Sk });
+            setSession({ user_id: userId, token, serverUrl, publicKey, secretKey, ed25519Pk, ed25519Sk });
           }
         } catch {
-          setSession({ user_id: userId, token: "restored", serverUrl, publicKey, secretKey, ed25519Pk, ed25519Sk });
+          setSession({ user_id: userId, token, serverUrl, publicKey, secretKey, ed25519Pk, ed25519Sk });
         }
       })
       .catch(() => {})

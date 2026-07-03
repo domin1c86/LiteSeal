@@ -1,11 +1,12 @@
-use std::sync::Arc;
 use dashmap::DashMap;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 
 pub type MessageSender = mpsc::UnboundedSender<String>;
 
 pub struct RegisteredUser {
     pub username: String,
+    pub token: String,
     pub public_key: Option<Vec<u8>>,
     pub ed25519_pk: Option<Vec<u8>>,
 }
@@ -38,5 +39,34 @@ impl AppState {
         } else {
             false
         }
+    }
+
+    pub fn validate_auth(&self, user_id: &str, token: &str) -> bool {
+        self.users
+            .get(user_id)
+            .is_some_and(|user| user.token == token)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_auth_accepts_only_registered_token() {
+        let state = AppState::new();
+        state.users.insert(
+            "user-1".to_string(),
+            RegisteredUser {
+                username: "alice".to_string(),
+                token: "token-1".to_string(),
+                public_key: None,
+                ed25519_pk: None,
+            },
+        );
+
+        assert!(state.validate_auth("user-1", "token-1"));
+        assert!(!state.validate_auth("user-1", "wrong-token"));
+        assert!(!state.validate_auth("missing-user", "token-1"));
     }
 }

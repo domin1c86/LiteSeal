@@ -28,11 +28,15 @@ pub async fn register(
     let user_id = Uuid::new_v4().to_string();
     let token = Uuid::new_v4().to_string();
 
-    state.users.insert(user_id.clone(), crate::state::RegisteredUser {
-        username: req.username.clone(),
-        public_key: req.public_key,
-        ed25519_pk: req.ed25519_pk,
-    });
+    state.users.insert(
+        user_id.clone(),
+        crate::state::RegisteredUser {
+            username: req.username.clone(),
+            token: token.clone(),
+            public_key: req.public_key,
+            ed25519_pk: req.ed25519_pk,
+        },
+    );
 
     tracing::info!("User registered: {} ({})", req.username, user_id);
 

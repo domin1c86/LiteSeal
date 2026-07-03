@@ -44,6 +44,7 @@ export function useTauri() {
   async function sendMessage(
     to: string,
     conversationId: string,
+    senderId: string,
     ciphertext: number[],
     signature: number[],
     senderDeviceId: string,
@@ -52,6 +53,7 @@ export function useTauri() {
     return invoke<SendMessageResult>("send_message", {
       to,
       conversationId,
+      senderId,
       ciphertext,
       signature,
       senderDeviceId,
@@ -164,15 +166,16 @@ export function useTauri() {
 
   async function saveKeypair(
     userId: string,
+    token: string,
     publicKey: number[],
     secretKey: number[],
     ed25519Pk: number[],
     ed25519Sk: number[]
   ): Promise<void> {
-    return invoke("save_keypair", { userId, publicKey, secretKey, ed25519Pk, ed25519Sk });
+    return invoke("save_keypair", { userId, token, publicKey, secretKey, ed25519Pk, ed25519Sk });
   }
 
-  async function loadKeypair(): Promise<[string, number[], number[], number[], number[]]> {
+  async function loadKeypair(): Promise<[string, string, number[], number[], number[], number[]]> {
     return invoke("load_keypair");
   }
 

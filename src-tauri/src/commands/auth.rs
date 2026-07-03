@@ -40,7 +40,10 @@ pub async fn register(
         .map_err(|e| format!("Registration request failed: {}", e))?;
 
     if !resp.status().is_success() {
-        return Err(format!("Registration failed with status: {}", resp.status()));
+        return Err(format!(
+            "Registration failed with status: {}",
+            resp.status()
+        ));
     }
 
     let result: RegisterResult = resp

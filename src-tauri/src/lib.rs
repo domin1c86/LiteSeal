@@ -6,7 +6,8 @@ use std::sync::Mutex;
 use tokio::sync::Mutex as AsyncMutex;
 
 use db::repository::MessageRepository;
-use network::websocket::{ServerMessage, WebSocketClient};
+use liteseal_shared::protocol::ServerMessage;
+use network::websocket::WebSocketClient;
 
 pub struct AppState {
     pub db: Mutex<MessageRepository>,

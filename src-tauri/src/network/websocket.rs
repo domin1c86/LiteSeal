@@ -1,59 +1,18 @@
 use futures_util::{SinkExt, StreamExt};
-use serde::{Deserialize, Serialize};
+use liteseal_shared::protocol::{ClientMessage, ServerMessage};
 use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex};
+use tokio::time::{timeout, Duration};
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 use tracing::{error, info};
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum ClientMessage {
-    #[serde(rename = "auth")]
-    Auth { user_id: String, token: String },
-    #[serde(rename = "send")]
-    Send {
-        to: String,
-        conversation_id: String,
-        ciphertext: Vec<u8>,
-        signature: Vec<u8>,
-        sender_device_id: String,
-        sender_seq: i64,
-    },
-    #[serde(rename = "ack")]
-    Ack { message_id: String },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum ServerMessage {
-    #[serde(rename = "auth_ok")]
-    AuthOk,
-    #[serde(rename = "auth_fail")]
-    AuthFail { reason: String },
-    #[serde(rename = "message")]
-    Message {
-        message_id: String,
-        from: String,
-        conversation_id: String,
-        ciphertext: Vec<u8>,
-        signature: Vec<u8>,
-        sender_device_id: String,
-        sender_seq: i64,
-        timestamp: i64,
-    },
-    #[serde(rename = "error")]
-    Error { code: String, message: String },
-    #[serde(rename = "delivered")]
-    Delivered { message_id: String },
-    #[serde(rename = "offline")]
-    Offline { to: String },
-}
 
 pub type MessageReceiver = mpsc::UnboundedReceiver<ServerMessage>;
 
 pub struct WebSocketClient {
-    write: Arc<Mutex<futures_util::stream::SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>>,
+    write: Arc<
+        Mutex<futures_util::stream::SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>,
+    >,
     recv_task: Option<tokio::task::JoinHandle<()>>,
 }
 
@@ -85,23 +44,38 @@ impl WebSocketClient {
             .await
             .map_err(|e| format!("Failed to send auth: {}", e))?;
 
+        let auth_response = timeout(Duration::from_secs(5), async {
+            while let Some(msg) = read.next().await {
+                match msg.map_err(|e| format!("Failed to read auth response: {}", e))? {
+                    Message::Text(text) => {
+                        return serde_json::from_str::<ServerMessage>(&text)
+                            .map_err(|e| format!("Failed to parse auth response: {}", e));
+                    }
+                    Message::Close(_) => return Err("WebSocket closed during auth".to_string()),
+                    _ => {}
+                }
+            }
+            Err("WebSocket ended during auth".to_string())
+        })
+        .await
+        .map_err(|_| "Timed out waiting for auth response".to_string())??;
+        classify_auth_response(auth_response)?;
+
         let (tx, rx) = mpsc::unbounded_channel::<ServerMessage>();
 
         let recv_task = tokio::spawn(async move {
             while let Some(Ok(msg)) = read.next().await {
                 match msg {
-                    Message::Text(text) => {
-                        match serde_json::from_str::<ServerMessage>(&text) {
-                            Ok(server_msg) => {
-                                if tx.send(server_msg).is_err() {
-                                    break;
-                                }
-                            }
-                            Err(e) => {
-                                error!("Failed to parse server message: {}", e);
+                    Message::Text(text) => match serde_json::from_str::<ServerMessage>(&text) {
+                        Ok(server_msg) => {
+                            if tx.send(server_msg).is_err() {
+                                break;
                             }
                         }
-                    }
+                        Err(e) => {
+                            error!("Failed to parse server message: {}", e);
+                        }
+                    },
                     Message::Close(_) => {
                         info!("WebSocket closed by server");
                         break;
@@ -160,14 +134,38 @@ impl WebSocketClient {
     }
 
     pub async fn disconnect(&mut self) {
-        let _ = self
-            .write
-            .lock()
-            .await
-            .send(Message::Close(None))
-            .await;
+        let _ = self.write.lock().await.send(Message::Close(None)).await;
         if let Some(task) = self.recv_task.take() {
             task.abort();
         }
+    }
+}
+
+fn classify_auth_response(msg: ServerMessage) -> Result<(), String> {
+    match msg {
+        ServerMessage::AuthOk => Ok(()),
+        ServerMessage::AuthFail { reason } => Err(format!("Authentication failed: {}", reason)),
+        _ => Err("Unexpected server response during authentication".to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auth_response_accepts_only_auth_ok() {
+        assert!(classify_auth_response(ServerMessage::AuthOk).is_ok());
+
+        let err = classify_auth_response(ServerMessage::AuthFail {
+            reason: "bad token".to_string(),
+        })
+        .unwrap_err();
+        assert!(err.contains("bad token"));
+
+        assert!(classify_auth_response(ServerMessage::Offline {
+            to: "user-2".to_string(),
+        })
+        .is_err());
     }
 }

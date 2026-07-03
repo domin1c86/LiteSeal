@@ -24,7 +24,7 @@ export default function Login({ onLogin }: LoginProps) {
       const [publicKey, secretKey, ed25519Pk, ed25519Sk] = await generateKeypair();
       const result = await register(username.trim(), serverUrl, publicKey, ed25519Pk);
       await connectRelay(serverUrl, result.user_id, result.token);
-      await saveKeypair(result.user_id, publicKey, secretKey, ed25519Pk, ed25519Sk);
+      await saveKeypair(result.user_id, result.token, publicKey, secretKey, ed25519Pk, ed25519Sk);
       onLogin({ ...result, serverUrl, publicKey, secretKey, ed25519Pk, ed25519Sk });
     } catch (err) {
       setError(String(err));

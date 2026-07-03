@@ -1,9 +1,9 @@
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use tauri::State;
-use chrono::Utc;
 
-use crate::AppState;
 use crate::db::models::ContactModel;
+use crate::AppState;
 use liteseal_shared::types::PublicKeyInfo;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -39,9 +39,7 @@ pub async fn add_contact(
 }
 
 #[tauri::command]
-pub async fn get_contacts(
-    state: State<'_, AppState>,
-) -> Result<Vec<ContactModel>, String> {
+pub async fn get_contacts(state: State<'_, AppState>) -> Result<Vec<ContactModel>, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
     db.get_contacts().map_err(|e| e.to_string())
 }
@@ -58,10 +56,7 @@ pub async fn remove_contact(
 }
 
 #[tauri::command]
-pub async fn search_users(
-    server_url: String,
-    query: String,
-) -> Result<Vec<PublicKeyInfo>, String> {
+pub async fn search_users(server_url: String, query: String) -> Result<Vec<PublicKeyInfo>, String> {
     let client = reqwest::Client::new();
     let mut url = url::Url::parse(&format!("{}/users/search", server_url))
         .map_err(|e| format!("Invalid server URL: {}", e))?;
