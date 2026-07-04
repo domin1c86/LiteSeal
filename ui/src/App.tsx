@@ -10,6 +10,7 @@ import type { RegisterResult, Contact } from "./types";
 interface Session {
   user_id: string;
   token: string;
+  deviceId?: string;
   serverUrl: string;
   publicKey: number[];
   secretKey: number[];
@@ -31,7 +32,8 @@ export default function App() {
   function handleLogin(result: RegisterResult & { serverUrl: string; publicKey: number[]; secretKey: number[]; ed25519Pk: number[]; ed25519Sk: number[] }) {
     setSession({
       user_id: result.user_id,
-      token: result.token,
+      token: result.access_token ?? result.token,
+      deviceId: result.device_id,
       serverUrl: result.serverUrl,
       publicKey: result.publicKey,
       secretKey: result.secretKey,
@@ -73,11 +75,15 @@ export default function App() {
     setActiveConversation(null);
   }
 
-  useEffect(() => {
-    if (!session) return;
+  function refreshContacts() {
     getContacts()
       .then(setContacts)
       .catch((err) => console.error("Failed to load contacts:", err));
+  }
+
+  useEffect(() => {
+    if (!session) return;
+    refreshContacts();
   }, [session]);
 
   function handleContactAdded() {
@@ -89,7 +95,7 @@ export default function App() {
 
   if (loading) {
     return (
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", backgroundColor: "#1a1a2e", color: "#a0a0b0" }}>
+      <div style={styles.loading}>
         Loading...
       </div>
     );
@@ -100,7 +106,7 @@ export default function App() {
   }
 
   return (
-    <div style={styles.layout}>
+    <div className="app-shell" style={styles.layout}>
       <ContactList
         contacts={contacts}
         activeConversation={activeConversation}
@@ -116,10 +122,13 @@ export default function App() {
         serverUrl={session.serverUrl}
         secretKey={session.secretKey}
         contacts={contacts}
+        onContactsChanged={refreshContacts}
       />
       {showAddContact && (
         <AddContact
           serverUrl={session.serverUrl}
+          userId={session.user_id}
+          contacts={contacts}
           onClose={() => setShowAddContact(false)}
           onAdded={handleContactAdded}
         />
@@ -132,9 +141,19 @@ export default function App() {
 }
 
 const styles: Record<string, React.CSSProperties> = {
+  loading: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    height: "100vh",
+    backgroundColor: "var(--workspace-bg)",
+    color: "var(--text-muted)",
+  },
   layout: {
     display: "flex",
     height: "100vh",
     overflow: "hidden",
+    backgroundColor: "var(--workspace-bg)",
+    color: "var(--text)",
   },
 };

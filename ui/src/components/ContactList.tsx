@@ -18,17 +18,17 @@ export default function ContactList({
   onLogout,
 }: ContactListProps) {
   return (
-    <div style={styles.container}>
+    <div className="contact-sidebar" style={styles.container}>
       <div style={styles.header}>
-        <h3 style={styles.heading}>Contacts</h3>
+        <h3 className="contact-sidebar-title" style={styles.heading}>Contacts</h3>
         <div style={styles.headerBtns}>
-          <button style={styles.iconBtn} onClick={onStorageClick} title="Storage">
+          <button className="icon-button" style={styles.iconBtn} onClick={onStorageClick} title="Storage">
             ⚙
           </button>
-          <button style={styles.addBtn} onClick={onAddClick}>
+          <button className="primary-button" style={styles.addBtn} onClick={onAddClick}>
             +
           </button>
-          <button style={styles.iconBtn} onClick={onLogout} title="Logout">
+          <button className="icon-button" style={styles.iconBtn} onClick={onLogout} title="Logout">
             ⏻
           </button>
         </div>
@@ -40,6 +40,7 @@ export default function ContactList({
         const isActive = contact.user_id === activeConversation;
         return (
           <div
+            className="contact-row"
             key={contact.user_id}
             style={{
               ...styles.item,
@@ -51,7 +52,14 @@ export default function ContactList({
               {contact.username.charAt(0).toUpperCase()}
             </div>
             <div style={styles.info}>
-              <span style={styles.name}>{contact.username}</span>
+              <span className="contact-name" style={styles.name}>{contact.username}</span>
+              <span style={styles.trust}>
+                {contact.trust_state === "verified"
+                  ? "Verified"
+                  : contact.trust_state === "key_changed" || contact.key_changed
+                    ? "Key changed"
+                    : "Unverified"}
+              </span>
             </div>
           </div>
         );
@@ -62,26 +70,28 @@ export default function ContactList({
 
 const styles: Record<string, React.CSSProperties> = {
   container: {
-    width: "240px",
-    backgroundColor: "#16213e",
-    borderRight: "1px solid #0f3460",
+    width: "280px",
+    backgroundColor: "var(--sidebar-bg)",
+    borderRight: "1px solid var(--border)",
     overflowY: "auto",
     display: "flex",
     flexDirection: "column",
+    flexShrink: 0,
   },
   header: {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
-    padding: "0 16px",
-    marginTop: "16px",
+    minHeight: "58px",
+    padding: "0 14px 0 18px",
+    borderBottom: "1px solid var(--border)",
   },
   heading: {
     margin: 0,
-    color: "#a0a0b0",
-    fontSize: "13px",
-    textTransform: "uppercase",
-    letterSpacing: "1px",
+    color: "var(--text-muted)",
+    fontSize: "14px",
+    fontWeight: 600,
+    letterSpacing: 0,
   },
   headerBtns: {
     display: "flex",
@@ -91,9 +101,9 @@ const styles: Record<string, React.CSSProperties> = {
     width: "24px",
     height: "24px",
     borderRadius: "50%",
-    border: "none",
-    backgroundColor: "#0f3460",
-    color: "#a0a0b0",
+    border: "1px solid var(--border)",
+    backgroundColor: "var(--surface-muted)",
+    color: "var(--text-muted)",
     fontSize: "13px",
     cursor: "pointer",
     display: "flex",
@@ -107,8 +117,8 @@ const styles: Record<string, React.CSSProperties> = {
     height: "24px",
     borderRadius: "50%",
     border: "none",
-    backgroundColor: "#e94560",
-    color: "#fff",
+    backgroundColor: "var(--accent)",
+    color: "white",
     fontSize: "16px",
     cursor: "pointer",
     display: "flex",
@@ -118,7 +128,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: 0,
   },
   empty: {
-    color: "#555",
+    color: "var(--text-subtle)",
     fontSize: "13px",
     textAlign: "center",
     marginTop: "20px",
@@ -126,33 +136,45 @@ const styles: Record<string, React.CSSProperties> = {
   item: {
     display: "flex",
     alignItems: "center",
-    padding: "10px 16px",
+    padding: "9px 12px",
+    margin: "6px 8px 0",
+    borderRadius: "var(--radius-md)",
     cursor: "pointer",
     gap: "10px",
     transition: "background-color 0.15s",
   },
   itemActive: {
-    backgroundColor: "#0f3460",
+    backgroundColor: "var(--surface-active)",
   },
   avatar: {
     width: "36px",
     height: "36px",
     borderRadius: "50%",
-    backgroundColor: "#e94560",
+    backgroundColor: "var(--accent-soft)",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    color: "#fff",
-    fontWeight: "bold",
+    color: "var(--accent)",
+    fontWeight: 600,
     fontSize: "14px",
     flexShrink: 0,
   },
   info: {
     overflow: "hidden",
+    display: "flex",
+    flexDirection: "column",
+    gap: "2px",
   },
   name: {
-    color: "#e0e0e0",
+    color: "var(--text)",
     fontSize: "14px",
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+  },
+  trust: {
+    color: "var(--text-subtle)",
+    fontSize: "11px",
     whiteSpace: "nowrap",
     overflow: "hidden",
     textOverflow: "ellipsis",

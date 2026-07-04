@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useTauri } from "../hooks/useTauri";
-import type { Message, IncomingMessage, Contact } from "../types";
+import type { Message, IncomingMessage, Contact, RelayEvent } from "../types";
 
 interface ChatProps {
   conversationId: string | null;
@@ -9,27 +9,51 @@ interface ChatProps {
   serverUrl: string;
   secretKey: number[];
   contacts: Contact[];
+  onContactsChanged: () => void;
 }
 
-export default function Chat({ conversationId, userId, secretKey, contacts }: ChatProps) {
+export default function Chat({ conversationId, userId, secretKey, contacts, onContactsChanged }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const { sendMessage, pollMessages, getLocalMessages, encryptMessage, decryptMessage, signMessage, verifyMessage } = useTauri();
+  const { sendMessage, pollMessages, getLocalMessages, encryptMessage, decryptMessage, signMessage, verifyMessage, setContactTrust } = useTauri();
+  const activeContact = contacts.find((c) => c.user_id === conversationId);
+
+  function incomingToMessage(m: IncomingMessage, ciphertext: number[]): Message {
+    return {
+      id: m.message_id,
+      conversation_id: m.conversation_id,
+      sender_id: m.from,
+      sender_device_id: m.sender_device_id,
+      sender_seq: m.sender_seq,
+      timestamp: m.timestamp,
+      message_type: "text",
+      ciphertext,
+      signature: m.signature,
+      prev_hash: m.prev_hash ?? [],
+      local_state: m.local_state ?? "received",
+    };
+  }
 
   useEffect(() => {
     if (!conversationId) return;
     setLoading(true);
+    setSendError(null);
     getLocalMessages(conversationId, 50, 0)
       .then(async (msgs) => {
         const decrypted = await Promise.all(
           msgs.map(async (msg) => {
-            if (msg.sender_id === userId) return msg;
-            const sender = contacts.find((c) => c.user_id === msg.sender_id);
-            if (!sender) return msg;
+            const peer = contacts.find((c) =>
+              msg.sender_id === userId
+                ? c.user_id === msg.conversation_id
+                : c.user_id === msg.sender_id
+            );
+            if (!peer) return msg;
             try {
-              const plaintext = await decryptMessage(msg.ciphertext, sender.public_key, secretKey);
+              const plaintext = await decryptMessage(msg.ciphertext, peer.public_key, secretKey);
               return { ...msg, ciphertext: plaintext };
             } catch {
               return { ...msg, ciphertext: Array.from(new TextEncoder().encode("[encrypted]")) };
@@ -40,13 +64,15 @@ export default function Chat({ conversationId, userId, secretKey, contacts }: Ch
       })
       .catch(console.error)
       .finally(() => setLoading(false));
-  }, [conversationId, contacts, secretKey]);
+  }, [conversationId, contacts, secretKey, userId]);
 
   useEffect(() => {
     if (!conversationId) return;
     const interval = setInterval(async () => {
       try {
-        const incoming: IncomingMessage[] = await pollMessages();
+        const result = await pollMessages();
+        applyRelayEvents(result.events);
+        const incoming: IncomingMessage[] = result.messages;
         if (incoming.length > 0) {
           const decoded = await Promise.all(
             incoming
@@ -54,97 +80,49 @@ export default function Chat({ conversationId, userId, secretKey, contacts }: Ch
               .map(async (m) => {
                 const sender = contacts.find((c) => c.user_id === m.from);
                 if (!sender) {
-                  return {
-                    id: m.message_id,
-                    conversation_id: m.conversation_id,
-                    sender_id: m.from,
-                    sender_device_id: m.sender_device_id,
-                    sender_seq: m.sender_seq,
-                    timestamp: m.timestamp,
-                    message_type: "text",
-                    ciphertext: Array.from(new TextEncoder().encode("[sender not in contacts]")),
-                    signature: m.signature,
-                    prev_hash: [],
-                  };
+                  return incomingToMessage(
+                    m,
+                    Array.from(new TextEncoder().encode("[sender not in contacts]"))
+                  );
                 }
 
                 try {
                   if (!sender.ed25519_pk || sender.ed25519_pk.length === 0) {
-                    return {
-                      id: m.message_id,
-                      conversation_id: m.conversation_id,
-                      sender_id: m.from,
-                      sender_device_id: m.sender_device_id,
-                      sender_seq: m.sender_seq,
-                      timestamp: m.timestamp,
-                      message_type: "text",
-                      ciphertext: Array.from(new TextEncoder().encode("[no ed25519 key, verification skipped]")),
-                      signature: m.signature,
-                      prev_hash: [],
-                    };
+                    return incomingToMessage(
+                      m,
+                      Array.from(new TextEncoder().encode("[no ed25519 key, verification skipped]"))
+                    );
                   }
                   const valid = await verifyMessage(m.ciphertext, m.signature, sender.ed25519_pk);
                   if (!valid) {
-                    return {
-                      id: m.message_id,
-                      conversation_id: m.conversation_id,
-                      sender_id: m.from,
-                      sender_device_id: m.sender_device_id,
-                      sender_seq: m.sender_seq,
-                      timestamp: m.timestamp,
-                      message_type: "text",
-                      ciphertext: Array.from(new TextEncoder().encode("[signature invalid]")),
-                      signature: m.signature,
-                      prev_hash: [],
-                    };
+                    return incomingToMessage(
+                      m,
+                      Array.from(new TextEncoder().encode("[signature invalid]"))
+                    );
                   }
                 } catch {
                   // verification itself failed — treat as invalid
-                  return {
-                    id: m.message_id,
-                    conversation_id: m.conversation_id,
-                    sender_id: m.from,
-                    sender_device_id: m.sender_device_id,
-                    sender_seq: m.sender_seq,
-                    timestamp: m.timestamp,
-                    message_type: "text",
-                    ciphertext: Array.from(new TextEncoder().encode("[signature invalid]")),
-                    signature: m.signature,
-                    prev_hash: [],
-                  };
+                  return incomingToMessage(
+                    m,
+                    Array.from(new TextEncoder().encode("[signature invalid]"))
+                  );
                 }
 
                 try {
                   const plaintext = await decryptMessage(m.ciphertext, sender.public_key, secretKey);
-                  return {
-                    id: m.message_id,
-                    conversation_id: m.conversation_id,
-                    sender_id: m.from,
-                    sender_device_id: m.sender_device_id,
-                    sender_seq: m.sender_seq,
-                    timestamp: m.timestamp,
-                    message_type: "text",
-                    ciphertext: plaintext,
-                    signature: m.signature,
-                    prev_hash: [],
-                  };
+                  return incomingToMessage(m, plaintext);
                 } catch {
-                  return {
-                    id: m.message_id,
-                    conversation_id: m.conversation_id,
-                    sender_id: m.from,
-                    sender_device_id: m.sender_device_id,
-                    sender_seq: m.sender_seq,
-                    timestamp: m.timestamp,
-                    message_type: "text",
-                    ciphertext: Array.from(new TextEncoder().encode("[decryption failed]")),
-                    signature: m.signature,
-                    prev_hash: [],
-                  };
+                  return incomingToMessage(
+                    m,
+                    Array.from(new TextEncoder().encode("[decryption failed]"))
+                  );
                 }
               })
           );
-          setMessages((prev) => [...prev, ...decoded]);
+          setMessages((prev) => {
+            const seen = new Set(prev.map((msg) => msg.id));
+            return [...prev, ...decoded.filter((msg) => !seen.has(msg.id))];
+          });
         }
       } catch {
         // ignore poll errors
@@ -152,6 +130,33 @@ export default function Chat({ conversationId, userId, secretKey, contacts }: Ch
     }, 2000);
     return () => clearInterval(interval);
   }, [conversationId, contacts, secretKey]);
+
+  function applyRelayEvents(events: RelayEvent[]) {
+    if (events.length === 0) return;
+
+    const stateByMessage = new Map<string, Message["local_state"]>();
+    for (const event of events) {
+      if (event.type === "delivered") {
+        stateByMessage.set(event.message_id, "delivered");
+      } else if (event.type === "offline") {
+        stateByMessage.set(event.message_id, "offline");
+      } else if (event.type === "delivery_update") {
+        stateByMessage.set(event.message_id, event.status);
+      } else if (event.type === "error") {
+        setSendError(event.message);
+      }
+    }
+
+    if (stateByMessage.size > 0) {
+      setMessages((prev) =>
+        prev.map((msg) =>
+          stateByMessage.has(msg.id)
+            ? { ...msg, local_state: stateByMessage.get(msg.id) }
+            : msg
+        )
+      );
+    }
+  }
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -163,6 +168,8 @@ export default function Chat({ conversationId, userId, secretKey, contacts }: Ch
 
     const text = input.trim();
     setInput("");
+    setSendError(null);
+    setSending(true);
 
     try {
       const contact = contacts.find((c) => c.user_id === conversationId);
@@ -173,7 +180,7 @@ export default function Chat({ conversationId, userId, secretKey, contacts }: Ch
       const ciphertext = await encryptMessage(plaintext, contact.public_key, secretKey);
       const signature = await signMessage(ciphertext, secretKey);
 
-      await sendMessage(
+      const result = await sendMessage(
         conversationId,
         conversationId,
         userId,
@@ -186,13 +193,14 @@ export default function Chat({ conversationId, userId, secretKey, contacts }: Ch
       setMessages((prev) => [
         ...prev,
         {
-          id: crypto.randomUUID(),
+          id: result.message_id,
           conversation_id: conversationId,
           sender_id: userId,
           sender_device_id: "device-1",
           sender_seq: prev.length,
           timestamp: Date.now(),
           message_type: "text",
+          local_state: "pending",
           ciphertext: plaintext,
           signature: [],
           prev_hash: [],
@@ -200,6 +208,9 @@ export default function Chat({ conversationId, userId, secretKey, contacts }: Ch
       ]);
     } catch (err) {
       console.error("Send failed:", err);
+      setSendError(String(err));
+    } finally {
+      setSending(false);
     }
   }
 
@@ -213,7 +224,34 @@ export default function Chat({ conversationId, userId, secretKey, contacts }: Ch
 
   return (
     <div style={styles.container}>
-      <div style={styles.messages}>
+      <div className="chat-header" style={styles.header}>
+        <div style={styles.headerInner}>
+          <div style={styles.headerText}>
+            <span style={styles.headerTitle}>{activeContact?.username ?? "Conversation"}</span>
+            <span style={styles.headerMeta}>
+              {activeContact
+                ? `${activeContact.trust_state === "verified" ? "Verified" : activeContact.key_changed ? "Key changed" : "Unverified"}${activeContact.fingerprint ? ` · ${activeContact.fingerprint.match(/.{1,4}/g)?.join(" ")}` : ""}`
+                : "End-to-end encrypted"}
+            </span>
+          </div>
+          {activeContact && (
+            <button
+              className="secondary-button"
+              style={styles.verifyBtn}
+              onClick={async () => {
+                await setContactTrust(
+                  activeContact.user_id,
+                  activeContact.trust_state === "verified" ? "unverified" : "verified"
+                );
+                onContactsChanged();
+              }}
+            >
+              {activeContact.trust_state === "verified" ? "Unverify" : "Verify"}
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="chat-messages" style={styles.messages}>
         {loading && <p style={styles.loadingText}>Loading...</p>}
         {messages.map((msg) => {
           const isMine = msg.sender_id === userId;
@@ -243,6 +281,7 @@ export default function Chat({ conversationId, userId, secretKey, contacts }: Ch
                     hour: "2-digit",
                     minute: "2-digit",
                   })}
+                  {isMine && msg.local_state ? ` · ${msg.local_state}` : ""}
                 </span>
               </div>
             </div>
@@ -250,16 +289,23 @@ export default function Chat({ conversationId, userId, secretKey, contacts }: Ch
         })}
         <div ref={messagesEndRef} />
       </div>
-      <form onSubmit={handleSend} style={styles.inputBar}>
+      {sendError && <div style={styles.sendError}>{sendError}</div>}
+      <form className="chat-composer" onSubmit={handleSend} style={styles.inputBar}>
         <input
+          className="composer-input"
           type="text"
           placeholder="Type a message..."
           value={input}
           onChange={(e) => setInput(e.target.value)}
           style={styles.input}
         />
-        <button type="submit" style={styles.sendBtn}>
-          Send
+        <button
+          className="composer-send"
+          type="submit"
+          disabled={sending || !input.trim()}
+          style={styles.sendBtn}
+        >
+          {sending ? "Sending..." : "Send"}
         </button>
       </form>
     </div>
@@ -271,51 +317,102 @@ const styles: Record<string, React.CSSProperties> = {
     flex: 1,
     display: "flex",
     flexDirection: "column",
-    backgroundColor: "#1a1a2e",
+    minWidth: 0,
+    backgroundColor: "var(--workspace-bg)",
   },
   empty: {
     flex: 1,
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#1a1a2e",
+    backgroundColor: "var(--workspace-bg)",
   },
   emptyText: {
-    color: "#555",
+    color: "var(--text-subtle)",
     fontSize: "16px",
+  },
+  header: {
+    minHeight: "58px",
+    borderBottom: "1px solid var(--border)",
+    display: "flex",
+    alignItems: "center",
+    padding: "0 24px",
+    backgroundColor: "var(--workspace-bg)",
+  },
+  headerInner: {
+    width: "100%",
+    maxWidth: "840px",
+    margin: "0 auto",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: "12px",
+  },
+  headerText: {
+    minWidth: 0,
+    display: "flex",
+    flexDirection: "column",
+    gap: "2px",
+  },
+  headerTitle: {
+    color: "var(--text)",
+    fontSize: "15px",
+    fontWeight: 600,
+  },
+  headerMeta: {
+    color: "var(--accent)",
+    fontSize: "12px",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+  verifyBtn: {
+    flexShrink: 0,
+    border: "1px solid var(--border)",
+    backgroundColor: "var(--surface-muted)",
+    color: "var(--text)",
+    borderRadius: "8px",
+    padding: "6px 10px",
+    cursor: "pointer",
+    fontSize: "12px",
   },
   messages: {
     flex: 1,
     overflowY: "auto",
-    padding: "16px",
+    width: "100%",
+    maxWidth: "840px",
+    margin: "0 auto",
+    padding: "24px 24px 18px",
     display: "flex",
     flexDirection: "column",
-    gap: "8px",
+    gap: "12px",
   },
   loadingText: {
-    color: "#a0a0b0",
+    color: "var(--text-muted)",
     textAlign: "center",
   },
   messageRow: {
     display: "flex",
   },
   bubble: {
-    maxWidth: "65%",
-    padding: "8px 12px",
-    borderRadius: "12px",
+    maxWidth: "72%",
+    padding: "10px 13px",
+    borderRadius: "16px",
     display: "flex",
     flexDirection: "column",
     gap: "4px",
+    border: "1px solid transparent",
   },
   bubbleMine: {
-    backgroundColor: "#e94560",
-    color: "#fff",
-    borderBottomRightRadius: "4px",
+    backgroundColor: "var(--accent)",
+    color: "white",
+    borderBottomRightRadius: "6px",
   },
   bubbleTheirs: {
-    backgroundColor: "#0f3460",
-    color: "#e0e0e0",
-    borderBottomLeftRadius: "4px",
+    backgroundColor: "var(--surface-muted)",
+    color: "var(--text)",
+    borderColor: "var(--border)",
+    borderBottomLeftRadius: "6px",
   },
   messageText: {
     fontSize: "14px",
@@ -326,31 +423,45 @@ const styles: Record<string, React.CSSProperties> = {
     opacity: 0.7,
     alignSelf: "flex-end",
   },
+  sendError: {
+    width: "calc(100% - 48px)",
+    maxWidth: "840px",
+    margin: "0 auto 8px",
+    color: "var(--danger)",
+    fontSize: "13px",
+  },
   inputBar: {
     display: "flex",
-    padding: "12px 16px",
-    borderTop: "1px solid #0f3460",
-    gap: "8px",
-    backgroundColor: "#16213e",
+    alignItems: "center",
+    width: "calc(100% - 48px)",
+    maxWidth: "840px",
+    margin: "0 auto 20px",
+    padding: "8px 8px 8px 16px",
+    border: "1px solid var(--border-strong)",
+    borderRadius: "var(--composer-radius)",
+    gap: "10px",
+    backgroundColor: "var(--surface)",
+    boxShadow: "var(--shadow-composer)",
   },
   input: {
     flex: 1,
-    padding: "10px 14px",
-    borderRadius: "6px",
-    border: "1px solid #333",
-    backgroundColor: "#0f3460",
-    color: "#fff",
+    padding: "8px 0",
+    border: "none",
+    backgroundColor: "transparent",
+    color: "var(--text)",
     fontSize: "14px",
     outline: "none",
+    minWidth: 0,
   },
   sendBtn: {
-    padding: "10px 20px",
-    borderRadius: "6px",
+    padding: "9px 16px",
+    borderRadius: "18px",
     border: "none",
-    backgroundColor: "#e94560",
-    color: "#fff",
+    backgroundColor: "var(--accent)",
+    color: "white",
     fontSize: "14px",
     cursor: "pointer",
-    fontWeight: "bold",
+    fontWeight: 600,
+    flexShrink: 0,
   },
 };

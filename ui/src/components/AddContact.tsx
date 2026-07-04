@@ -1,15 +1,19 @@
 import { useState } from "react";
 import { useTauri } from "../hooks/useTauri";
-import type { UserSearchResult } from "../types";
+import type { Contact, UserSearchResult } from "../types";
 
 interface AddContactProps {
   serverUrl: string;
+  userId: string;
+  contacts: Contact[];
   onClose: () => void;
   onAdded: () => void;
 }
 
 export default function AddContact({
   serverUrl,
+  userId,
+  contacts,
   onClose,
   onAdded,
 }: AddContactProps) {
@@ -39,6 +43,9 @@ export default function AddContact({
   }
 
   async function handleAdd(user: UserSearchResult) {
+    const disabledReason = getDisabledReason(user);
+    if (disabledReason) return;
+
     setAdding(user.user_id);
     setError(null);
     try {
@@ -49,6 +56,15 @@ export default function AddContact({
     } finally {
       setAdding(null);
     }
+  }
+
+  function getDisabledReason(user: UserSearchResult): string | null {
+    if (user.user_id === userId) return "You";
+    if (contacts.some((contact) => contact.user_id === user.user_id)) {
+      return "Already added";
+    }
+    if (!user.public_key || user.public_key.length !== 32) return "Missing key";
+    return null;
   }
 
   return (
@@ -63,6 +79,7 @@ export default function AddContact({
 
         <form onSubmit={handleSearch} style={styles.searchRow}>
           <input
+            className="form-input"
             type="text"
             placeholder="Search by username..."
             value={query}
@@ -71,6 +88,7 @@ export default function AddContact({
             autoFocus
           />
           <button
+            className="primary-button"
             type="submit"
             disabled={searching || !query.trim()}
             style={styles.searchBtn}
@@ -85,24 +103,28 @@ export default function AddContact({
           {searched && results.length === 0 && !searching && (
             <p style={styles.empty}>No results</p>
           )}
-          {results.map((user) => (
-            <div key={user.user_id} style={styles.resultItem}>
-              <div style={styles.avatar}>
-                {user.username.charAt(0).toUpperCase()}
+          {results.map((user) => {
+            const disabledReason = getDisabledReason(user);
+            return (
+              <div key={user.user_id} style={styles.resultItem}>
+                <div style={styles.avatar}>
+                  {user.username.charAt(0).toUpperCase()}
+                </div>
+                <div style={styles.info}>
+                  <span style={styles.name}>{user.username}</span>
+                  <span style={styles.userId}>{user.user_id}</span>
+                </div>
+                <button
+                  className="neutral-button"
+                  style={styles.addBtn}
+                  disabled={adding === user.user_id || disabledReason !== null}
+                  onClick={() => handleAdd(user)}
+                >
+                  {adding === user.user_id ? "..." : disabledReason ?? "Add"}
+                </button>
               </div>
-              <div style={styles.info}>
-                <span style={styles.name}>{user.username}</span>
-                <span style={styles.userId}>{user.user_id}</span>
-              </div>
-              <button
-                style={styles.addBtn}
-                disabled={adding === user.user_id}
-                onClick={() => handleAdd(user)}
-              >
-                {adding === user.user_id ? "..." : "Add"}
-              </button>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </div>
@@ -113,37 +135,40 @@ const styles: Record<string, React.CSSProperties> = {
   overlay: {
     position: "fixed",
     inset: 0,
-    backgroundColor: "rgba(0,0,0,0.6)",
+    backgroundColor: "var(--overlay)",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
+    padding: "16px",
     zIndex: 1000,
   },
   modal: {
-    backgroundColor: "#16213e",
-    borderRadius: "12px",
-    width: "400px",
-    maxHeight: "500px",
+    backgroundColor: "var(--surface)",
+    borderRadius: "var(--radius-lg)",
+    border: "1px solid var(--border)",
+    width: "min(420px, 100%)",
+    maxHeight: "min(520px, calc(100vh - 32px))",
     display: "flex",
     flexDirection: "column",
-    boxShadow: "0 4px 20px rgba(0,0,0,0.4)",
+    boxShadow: "var(--shadow-modal)",
   },
   header: {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
     padding: "16px 20px",
-    borderBottom: "1px solid #0f3460",
+    borderBottom: "1px solid var(--border)",
   },
   title: {
     margin: 0,
-    color: "#e0e0e0",
+    color: "var(--text)",
     fontSize: "16px",
+    fontWeight: 600,
   },
   closeBtn: {
     background: "none",
     border: "none",
-    color: "#a0a0b0",
+    color: "var(--text-muted)",
     fontSize: "18px",
     cursor: "pointer",
     padding: "4px",
@@ -152,30 +177,31 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     padding: "12px 20px",
     gap: "8px",
-    borderBottom: "1px solid #0f3460",
+    borderBottom: "1px solid var(--border)",
   },
   input: {
     flex: 1,
-    padding: "8px 12px",
-    borderRadius: "6px",
-    border: "1px solid #333",
-    backgroundColor: "#0f3460",
-    color: "#fff",
+    padding: "9px 12px",
+    borderRadius: "var(--radius-md)",
+    border: "1px solid var(--border-strong)",
+    backgroundColor: "var(--surface)",
+    color: "var(--text)",
     fontSize: "14px",
     outline: "none",
+    minWidth: 0,
   },
   searchBtn: {
-    padding: "8px 16px",
-    borderRadius: "6px",
+    padding: "9px 16px",
+    borderRadius: "var(--radius-md)",
     border: "none",
-    backgroundColor: "#e94560",
-    color: "#fff",
+    backgroundColor: "var(--accent)",
+    color: "white",
     fontSize: "14px",
     cursor: "pointer",
-    fontWeight: "bold",
+    fontWeight: 600,
   },
   error: {
-    color: "#e94560",
+    color: "var(--danger)",
     fontSize: "13px",
     margin: "0 20px",
     padding: "8px 0",
@@ -186,7 +212,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "8px 0",
   },
   empty: {
-    color: "#555",
+    color: "var(--text-subtle)",
     fontSize: "13px",
     textAlign: "center",
     padding: "20px",
@@ -201,12 +227,12 @@ const styles: Record<string, React.CSSProperties> = {
     width: "36px",
     height: "36px",
     borderRadius: "50%",
-    backgroundColor: "#e94560",
+    backgroundColor: "var(--accent-soft)",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    color: "#fff",
-    fontWeight: "bold",
+    color: "var(--accent)",
+    fontWeight: 600,
     fontSize: "14px",
     flexShrink: 0,
   },
@@ -217,14 +243,14 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
   },
   name: {
-    color: "#e0e0e0",
+    color: "var(--text)",
     fontSize: "14px",
     whiteSpace: "nowrap",
     overflow: "hidden",
     textOverflow: "ellipsis",
   },
   userId: {
-    color: "#666",
+    color: "var(--text-subtle)",
     fontSize: "11px",
     whiteSpace: "nowrap",
     overflow: "hidden",
@@ -232,10 +258,10 @@ const styles: Record<string, React.CSSProperties> = {
   },
   addBtn: {
     padding: "6px 14px",
-    borderRadius: "6px",
-    border: "none",
-    backgroundColor: "#0f3460",
-    color: "#e0e0e0",
+    borderRadius: "var(--radius-sm)",
+    border: "1px solid var(--border)",
+    backgroundColor: "var(--surface-muted)",
+    color: "var(--text)",
     fontSize: "13px",
     cursor: "pointer",
     flexShrink: 0,

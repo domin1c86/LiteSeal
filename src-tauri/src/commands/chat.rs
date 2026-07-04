@@ -3,6 +3,7 @@ use tauri::State;
 use uuid::Uuid;
 
 use crate::db::models::MessageModel;
+use crate::integrity::{IntegrityResult, MessageIntegrityStore};
 use crate::AppState;
 use liteseal_shared::protocol::ServerMessage;
 
@@ -20,7 +21,33 @@ pub struct IncomingMessage {
     pub signature: Vec<u8>,
     pub sender_device_id: String,
     pub sender_seq: i64,
+    pub prev_hash: Vec<u8>,
+    pub recipient_device_id: String,
     pub timestamp: i64,
+    pub local_state: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(tag = "type")]
+pub enum RelayEvent {
+    #[serde(rename = "delivered")]
+    Delivered { message_id: String },
+    #[serde(rename = "offline")]
+    Offline { message_id: String, to: String },
+    #[serde(rename = "delivery_update")]
+    DeliveryUpdate {
+        message_id: String,
+        recipient_device_id: String,
+        status: String,
+    },
+    #[serde(rename = "error")]
+    Error { code: String, message: String },
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PollMessagesResult {
+    pub messages: Vec<IncomingMessage>,
+    pub events: Vec<RelayEvent>,
 }
 
 #[tauri::command]
@@ -40,39 +67,52 @@ pub async fn send_message(
     let message_id = Uuid::new_v4().to_string();
     let timestamp = chrono::Utc::now().timestamp_millis();
 
-    client
-        .send_message(
-            to,
-            conversation_id.clone(),
-            ciphertext.clone(),
-            signature.clone(),
-            sender_device_id.clone(),
-            sender_seq,
-        )
-        .await?;
-
-    let db = state.db.lock().map_err(|e| e.to_string())?;
-    db.insert_message(&build_outgoing_message_model(
+    let outgoing = build_outgoing_message_model(
         message_id.clone(),
-        conversation_id,
+        conversation_id.clone(),
         sender_id,
-        sender_device_id,
+        sender_device_id.clone(),
         sender_seq,
         timestamp,
-        ciphertext,
-        signature,
-    ))
-    .map_err(|e| e.to_string())?;
+        ciphertext.clone(),
+        signature.clone(),
+        "pending",
+    );
+
+    {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.insert_message(&outgoing).map_err(|e| e.to_string())?;
+    }
+
+    if let Err(err) = client
+        .send_message(
+            message_id.clone(),
+            to,
+            conversation_id,
+            ciphertext,
+            signature,
+            sender_device_id,
+            sender_seq,
+            Vec::new(),
+        )
+        .await
+    {
+        if let Ok(db) = state.db.lock() {
+            let _ = db.update_message_state(&message_id, "failed");
+        }
+        return Err(err);
+    }
 
     Ok(SendMessageResult { message_id })
 }
 
 #[tauri::command]
-pub async fn poll_messages(state: State<'_, AppState>) -> Result<Vec<IncomingMessage>, String> {
+pub async fn poll_messages(state: State<'_, AppState>) -> Result<PollMessagesResult, String> {
     let mut recv_guard = state.msg_receiver.lock().await;
     let rx = recv_guard.as_mut().ok_or("Not connected to relay server")?;
 
     let mut messages = Vec::new();
+    let mut events = Vec::new();
 
     while let Ok(msg) = rx.try_recv() {
         match msg {
@@ -84,12 +124,14 @@ pub async fn poll_messages(state: State<'_, AppState>) -> Result<Vec<IncomingMes
                 signature,
                 sender_device_id,
                 sender_seq,
+                prev_hash,
+                recipient_device_id,
                 timestamp,
             } => {
                 if let Some(ws) = state.ws_client.lock().await.as_ref() {
                     let _ = ws.send_ack(message_id.clone()).await;
                 }
-                let incoming = IncomingMessage {
+                let mut incoming = IncomingMessage {
                     message_id,
                     from,
                     conversation_id,
@@ -97,18 +139,62 @@ pub async fn poll_messages(state: State<'_, AppState>) -> Result<Vec<IncomingMes
                     signature,
                     sender_device_id,
                     sender_seq,
+                    prev_hash,
+                    recipient_device_id,
                     timestamp,
+                    local_state: "received".to_string(),
                 };
                 if let Ok(db) = state.db.lock() {
-                    let _ = db.insert_message(&build_incoming_message_model(incoming.clone()));
+                    let mut model = build_incoming_message_model(incoming.clone());
+                    let previous = db
+                        .get_latest_message_for_sender(
+                            &model.conversation_id,
+                            &model.sender_device_id,
+                        )
+                        .ok()
+                        .flatten();
+                    if MessageIntegrityStore::validate_next(previous.as_ref(), &model)
+                        != IntegrityResult::Valid
+                    {
+                        model.local_state = "integrity_failed".to_string();
+                        incoming.local_state = "integrity_failed".to_string();
+                    }
+                    let _ = db.insert_message(&model);
                 }
                 messages.push(incoming);
+            }
+            ServerMessage::Delivered { message_id } => {
+                if let Ok(db) = state.db.lock() {
+                    let _ = db.update_message_state(&message_id, "delivered");
+                }
+                events.push(RelayEvent::Delivered { message_id });
+            }
+            ServerMessage::Offline { message_id, to } => {
+                if let Ok(db) = state.db.lock() {
+                    let _ = db.update_message_state(&message_id, "offline");
+                }
+                events.push(RelayEvent::Offline { message_id, to });
+            }
+            ServerMessage::DeliveryUpdate { updates } => {
+                for update in updates {
+                    if let Ok(db) = state.db.lock() {
+                        let _ = db.update_message_state(&update.message_id, &update.status);
+                    }
+                    events.push(RelayEvent::DeliveryUpdate {
+                        message_id: update.message_id,
+                        recipient_device_id: update.recipient_device_id,
+                        status: update.status,
+                    });
+                }
+            }
+            ServerMessage::Error { code, message } => {
+                events.push(RelayEvent::Error { code, message });
             }
             _ => {}
         }
     }
 
-    Ok(messages)
+    Ok(PollMessagesResult { messages, events })
 }
 
 #[tauri::command]
@@ -196,6 +282,7 @@ fn build_outgoing_message_model(
     timestamp: i64,
     ciphertext: Vec<u8>,
     signature: Vec<u8>,
+    local_state: &str,
 ) -> MessageModel {
     MessageModel {
         id: message_id,
@@ -205,7 +292,7 @@ fn build_outgoing_message_model(
         sender_seq,
         timestamp,
         message_type: "text".to_string(),
-        local_state: "sent".to_string(),
+        local_state: local_state.to_string(),
         expire_at: None,
         ciphertext,
         signature,
@@ -222,11 +309,11 @@ fn build_incoming_message_model(msg: IncomingMessage) -> MessageModel {
         sender_seq: msg.sender_seq,
         timestamp: msg.timestamp,
         message_type: "text".to_string(),
-        local_state: "received".to_string(),
+        local_state: msg.local_state,
         expire_at: None,
         ciphertext: msg.ciphertext,
         signature: msg.signature,
-        prev_hash: Vec::new(),
+        prev_hash: msg.prev_hash,
     }
 }
 
@@ -245,6 +332,7 @@ mod tests {
             1234,
             vec![1, 2, 3],
             vec![4, 5, 6],
+            "pending",
         );
 
         assert_eq!(msg.id, "msg-1");
@@ -254,7 +342,7 @@ mod tests {
         assert_eq!(msg.sender_seq, 3);
         assert_eq!(msg.timestamp, 1234);
         assert_eq!(msg.message_type, "text");
-        assert_eq!(msg.local_state, "sent");
+        assert_eq!(msg.local_state, "pending");
         assert_eq!(msg.ciphertext, vec![1, 2, 3]);
         assert_eq!(msg.signature, vec![4, 5, 6]);
         assert!(msg.prev_hash.is_empty());
@@ -270,7 +358,10 @@ mod tests {
             signature: vec![9, 10],
             sender_device_id: "device-bob".to_string(),
             sender_seq: 4,
+            prev_hash: vec![1; 32],
+            recipient_device_id: "device-alice".to_string(),
             timestamp: 5678,
+            local_state: "received".to_string(),
         });
 
         assert_eq!(msg.id, "msg-2");
@@ -278,5 +369,6 @@ mod tests {
         assert_eq!(msg.local_state, "received");
         assert_eq!(msg.ciphertext, vec![7, 8]);
         assert_eq!(msg.signature, vec![9, 10]);
+        assert_eq!(msg.prev_hash, vec![1; 32]);
     }
 }

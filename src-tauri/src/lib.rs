@@ -1,6 +1,8 @@
 pub mod commands;
 pub mod db;
+pub mod integrity;
 pub mod network;
+pub mod secret_store;
 
 use std::sync::Mutex;
 use tokio::sync::Mutex as AsyncMutex;

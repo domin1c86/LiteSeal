@@ -1,5 +1,5 @@
 use futures_util::{SinkExt, StreamExt};
-use liteseal_shared::protocol::{ClientMessage, ServerMessage};
+use liteseal_shared::protocol::{ClientMessage, EncryptedPayload, ServerMessage};
 use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex};
@@ -21,6 +21,7 @@ impl WebSocketClient {
         url: &str,
         user_id: String,
         token: String,
+        device_id: String,
     ) -> Result<(Self, MessageReceiver), String> {
         let (ws_stream, _) = connect_async(url)
             .await
@@ -34,6 +35,7 @@ impl WebSocketClient {
         let auth_msg = ClientMessage::Auth {
             user_id: user_id.clone(),
             token,
+            device_id,
         };
         let auth_json = serde_json::to_string(&auth_msg).map_err(|e| e.to_string())?;
 
@@ -96,20 +98,29 @@ impl WebSocketClient {
 
     pub async fn send_message(
         &self,
+        message_id: String,
         to: String,
         conversation_id: String,
         ciphertext: Vec<u8>,
         signature: Vec<u8>,
         sender_device_id: String,
         sender_seq: i64,
+        prev_hash: Vec<u8>,
     ) -> Result<(), String> {
         let msg = ClientMessage::Send {
-            to,
+            message_id,
             conversation_id,
-            ciphertext,
-            signature,
-            sender_device_id,
+            ciphertext: ciphertext.clone(),
+            signature: signature.clone(),
+            sender_device_id: sender_device_id.clone(),
             sender_seq,
+            prev_hash,
+            payloads: vec![EncryptedPayload {
+                recipient_user_id: to.clone(),
+                recipient_device_id: to,
+                ciphertext,
+                signature,
+            }],
         };
         let json = serde_json::to_string(&msg).map_err(|e| e.to_string())?;
 
@@ -122,7 +133,10 @@ impl WebSocketClient {
     }
 
     pub async fn send_ack(&self, message_id: String) -> Result<(), String> {
-        let msg = ClientMessage::Ack { message_id };
+        let msg = ClientMessage::Ack {
+            message_id,
+            recipient_device_id: "device-1".to_string(),
+        };
         let json = serde_json::to_string(&msg).map_err(|e| e.to_string())?;
 
         self.write
@@ -164,6 +178,7 @@ mod tests {
         assert!(err.contains("bad token"));
 
         assert!(classify_auth_response(ServerMessage::Offline {
+            message_id: "msg-1".to_string(),
             to: "user-2".to_string(),
         })
         .is_err());

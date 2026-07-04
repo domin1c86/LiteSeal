@@ -1,6 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use liteseal_app::{commands, AppState};
+use liteseal_app_lib::{commands, AppState};
 
 fn main() {
     tracing_subscriber::fmt::init();
@@ -21,6 +21,7 @@ fn main() {
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             commands::auth::register,
+            commands::auth::login,
             commands::auth::connect_relay,
             commands::auth::disconnect,
             commands::chat::send_message,
@@ -34,6 +35,7 @@ fn main() {
             commands::contacts::add_contact,
             commands::contacts::get_contacts,
             commands::contacts::remove_contact,
+            commands::contacts::set_contact_trust,
             commands::contacts::search_users,
             commands::storage::get_storage_stats,
             commands::storage::clear_expired_messages,

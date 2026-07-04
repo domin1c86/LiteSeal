@@ -3,7 +3,7 @@ import type {
   RegisterResult,
   ConnectResult,
   SendMessageResult,
-  IncomingMessage,
+  PollMessagesResult,
   Message,
   Contact,
   UserSearchResult,
@@ -13,12 +13,30 @@ import type {
 export function useTauri() {
   async function register(
     username: string,
+    password: string,
     serverUrl: string,
     publicKey: number[] = [],
     ed25519Pk: number[] = []
   ): Promise<RegisterResult> {
     return invoke<RegisterResult>("register", {
       username,
+      password,
+      serverUrl,
+      publicKey,
+      ed25519Pk,
+    });
+  }
+
+  async function login(
+    username: string,
+    password: string,
+    serverUrl: string,
+    publicKey: number[] = [],
+    ed25519Pk: number[] = []
+  ): Promise<RegisterResult> {
+    return invoke<RegisterResult>("login", {
+      username,
+      password,
       serverUrl,
       publicKey,
       ed25519Pk,
@@ -28,12 +46,14 @@ export function useTauri() {
   async function connectRelay(
     serverUrl: string,
     userId: string,
-    token: string
+    token: string,
+    deviceId?: string
   ): Promise<ConnectResult> {
     return invoke<ConnectResult>("connect_relay", {
       serverUrl,
       userId,
       token,
+      deviceId,
     });
   }
 
@@ -61,8 +81,8 @@ export function useTauri() {
     });
   }
 
-  async function pollMessages(): Promise<IncomingMessage[]> {
-    return invoke<IncomingMessage[]>("poll_messages");
+  async function pollMessages(): Promise<PollMessagesResult> {
+    return invoke<PollMessagesResult>("poll_messages");
   }
 
   async function getLocalMessages(
@@ -92,6 +112,13 @@ export function useTauri() {
 
   async function removeContact(userId: string): Promise<void> {
     return invoke("remove_contact", { userId });
+  }
+
+  async function setContactTrust(
+    userId: string,
+    trustState: "unverified" | "verified" | "key_changed"
+  ): Promise<void> {
+    return invoke("set_contact_trust", { userId, trustState });
   }
 
   async function searchUsers(
@@ -185,6 +212,7 @@ export function useTauri() {
 
   return {
     register,
+    login,
     connectRelay,
     disconnect,
     sendMessage,
@@ -193,6 +221,7 @@ export function useTauri() {
     addContact,
     getContacts,
     removeContact,
+    setContactTrust,
     searchUsers,
     encryptMessage,
     decryptMessage,

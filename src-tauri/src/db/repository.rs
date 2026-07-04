@@ -71,6 +71,9 @@ impl MessageRepository {
                 username TEXT NOT NULL,
                 public_key BLOB NOT NULL,
                 ed25519_pk BLOB,
+                trust_state TEXT NOT NULL DEFAULT 'unverified',
+                fingerprint TEXT NOT NULL DEFAULT '',
+                key_changed INTEGER NOT NULL DEFAULT 0,
                 added_at INTEGER NOT NULL
             );
 
@@ -83,6 +86,18 @@ impl MessageRepository {
         )?;
 
         let _ = conn.execute("ALTER TABLE contacts ADD COLUMN ed25519_pk BLOB", []);
+        let _ = conn.execute(
+            "ALTER TABLE contacts ADD COLUMN trust_state TEXT NOT NULL DEFAULT 'unverified'",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE contacts ADD COLUMN fingerprint TEXT NOT NULL DEFAULT ''",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE contacts ADD COLUMN key_changed INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
 
         Ok(Self { conn })
     }
@@ -144,7 +159,7 @@ impl MessageRepository {
 
     pub fn insert_message(&self, msg: &MessageModel) -> Result<(), DbError> {
         self.conn.execute(
-            "INSERT INTO messages (id, conversation_id, sender_id, sender_device_id,
+            "INSERT OR IGNORE INTO messages (id, conversation_id, sender_id, sender_device_id,
              sender_seq, timestamp, message_type, local_state, expire_at,
              ciphertext, signature, prev_hash)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
@@ -163,6 +178,17 @@ impl MessageRepository {
                 msg.prev_hash,
             ],
         )?;
+        Ok(())
+    }
+
+    pub fn update_message_state(&self, id: &str, local_state: &str) -> Result<(), DbError> {
+        let rows_changed = self.conn.execute(
+            "UPDATE messages SET local_state = ?1 WHERE id = ?2",
+            params![local_state, id],
+        )?;
+        if rows_changed == 0 {
+            return Err(DbError::NotFound);
+        }
         Ok(())
     }
 
@@ -209,7 +235,7 @@ impl MessageRepository {
              sender_seq, timestamp, message_type, local_state, expire_at,
              ciphertext, signature, prev_hash
              FROM messages WHERE conversation_id = ?1
-             ORDER BY timestamp DESC LIMIT ?2 OFFSET ?3",
+             ORDER BY timestamp ASC LIMIT ?2 OFFSET ?3",
         )?;
 
         let rows = stmt.query_map(params![conversation_id, limit, offset], |row| {
@@ -234,6 +260,44 @@ impl MessageRepository {
             messages.push(row?);
         }
         Ok(messages)
+    }
+
+    pub fn get_latest_message_for_sender(
+        &self,
+        conversation_id: &str,
+        sender_device_id: &str,
+    ) -> Result<Option<MessageModel>, DbError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, conversation_id, sender_id, sender_device_id,
+             sender_seq, timestamp, message_type, local_state, expire_at,
+             ciphertext, signature, prev_hash
+             FROM messages
+             WHERE conversation_id = ?1 AND sender_device_id = ?2 AND local_state != 'integrity_failed'
+             ORDER BY sender_seq DESC LIMIT 1",
+        )?;
+
+        let mut rows = stmt.query_map(params![conversation_id, sender_device_id], |row| {
+            Ok(MessageModel {
+                id: row.get(0)?,
+                conversation_id: row.get(1)?,
+                sender_id: row.get(2)?,
+                sender_device_id: row.get(3)?,
+                sender_seq: row.get(4)?,
+                timestamp: row.get(5)?,
+                message_type: row.get(6)?,
+                local_state: row.get(7)?,
+                expire_at: row.get(8)?,
+                ciphertext: row.get(9)?,
+                signature: row.get(10)?,
+                prev_hash: row.get(11)?,
+            })
+        })?;
+
+        match rows.next() {
+            Some(Ok(msg)) => Ok(Some(msg)),
+            Some(Err(e)) => Err(DbError::SqliteError(e)),
+            None => Ok(None),
+        }
     }
 
     pub fn delete_message(&self, id: &str) -> Result<(), DbError> {
@@ -395,17 +459,40 @@ impl MessageRepository {
 
     pub fn insert_contact(&self, contact: &ContactModel) -> Result<(), DbError> {
         self.conn.execute(
-            "INSERT INTO contacts (user_id, username, public_key, ed25519_pk, added_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)
-             ON CONFLICT(user_id) DO UPDATE SET username = excluded.username, public_key = excluded.public_key, ed25519_pk = excluded.ed25519_pk",
-            params![contact.user_id, contact.username, contact.public_key, contact.ed25519_pk, contact.added_at],
+            "INSERT INTO contacts
+             (user_id, username, public_key, ed25519_pk, trust_state, fingerprint, key_changed, added_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(user_id) DO UPDATE SET
+                username = excluded.username,
+                public_key = excluded.public_key,
+                ed25519_pk = excluded.ed25519_pk,
+                fingerprint = excluded.fingerprint,
+                key_changed = CASE
+                    WHEN contacts.public_key != excluded.public_key
+                         OR COALESCE(contacts.ed25519_pk, x'') != COALESCE(excluded.ed25519_pk, x'')
+                    THEN 1 ELSE contacts.key_changed END,
+                trust_state = CASE
+                    WHEN contacts.public_key != excluded.public_key
+                         OR COALESCE(contacts.ed25519_pk, x'') != COALESCE(excluded.ed25519_pk, x'')
+                    THEN 'key_changed' ELSE contacts.trust_state END",
+            params![
+                contact.user_id,
+                contact.username,
+                contact.public_key,
+                contact.ed25519_pk,
+                contact.trust_state,
+                contact.fingerprint,
+                contact.key_changed as i32,
+                contact.added_at
+            ],
         )?;
         Ok(())
     }
 
     pub fn get_contacts(&self) -> Result<Vec<ContactModel>, DbError> {
         let mut stmt = self.conn.prepare(
-            "SELECT user_id, username, public_key, ed25519_pk, added_at FROM contacts ORDER BY added_at DESC"
+            "SELECT user_id, username, public_key, ed25519_pk, trust_state, fingerprint, key_changed, added_at
+             FROM contacts ORDER BY added_at DESC"
         )?;
 
         let rows = stmt.query_map([], |row| {
@@ -414,7 +501,10 @@ impl MessageRepository {
                 username: row.get(1)?,
                 public_key: row.get(2)?,
                 ed25519_pk: row.get(3)?,
-                added_at: row.get(4)?,
+                trust_state: row.get(4)?,
+                fingerprint: row.get(5)?,
+                key_changed: row.get::<_, i32>(6)? != 0,
+                added_at: row.get(7)?,
             })
         })?;
 
@@ -427,7 +517,8 @@ impl MessageRepository {
 
     pub fn get_contact(&self, user_id: &str) -> Result<Option<ContactModel>, DbError> {
         let mut stmt = self.conn.prepare(
-            "SELECT user_id, username, public_key, ed25519_pk, added_at FROM contacts WHERE user_id = ?1"
+            "SELECT user_id, username, public_key, ed25519_pk, trust_state, fingerprint, key_changed, added_at
+             FROM contacts WHERE user_id = ?1"
         )?;
 
         let mut rows = stmt.query_map(params![user_id], |row| {
@@ -436,7 +527,10 @@ impl MessageRepository {
                 username: row.get(1)?,
                 public_key: row.get(2)?,
                 ed25519_pk: row.get(3)?,
-                added_at: row.get(4)?,
+                trust_state: row.get(4)?,
+                fingerprint: row.get(5)?,
+                key_changed: row.get::<_, i32>(6)? != 0,
+                added_at: row.get(7)?,
             })
         })?;
 
@@ -451,6 +545,18 @@ impl MessageRepository {
         let rows_changed = self
             .conn
             .execute("DELETE FROM contacts WHERE user_id = ?1", params![user_id])?;
+        if rows_changed == 0 {
+            return Err(DbError::NotFound);
+        }
+        Ok(())
+    }
+
+    pub fn update_contact_trust(&self, user_id: &str, trust_state: &str) -> Result<(), DbError> {
+        let rows_changed = self.conn.execute(
+            "UPDATE contacts SET trust_state = ?1, key_changed = CASE WHEN ?1 = 'verified' THEN 0 ELSE key_changed END
+             WHERE user_id = ?2",
+            params![trust_state, user_id],
+        )?;
         if rows_changed == 0 {
             return Err(DbError::NotFound);
         }

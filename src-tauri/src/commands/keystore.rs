@@ -15,7 +15,12 @@ fn keystore_path() -> Result<std::path::PathBuf, String> {
     let base = dirs::data_local_dir().ok_or("Cannot find local data directory")?;
     let dir = base.join("liteseal");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    Ok(dir.join("keystore.json"))
+    Ok(dir.join("keystore.bin"))
+}
+
+fn legacy_keystore_path() -> Result<std::path::PathBuf, String> {
+    let base = dirs::data_local_dir().ok_or("Cannot find local data directory")?;
+    Ok(base.join("liteseal").join("keystore.json"))
 }
 
 #[tauri::command]
@@ -37,16 +42,20 @@ pub fn save_keypair(
     };
     validate_keystore_data(&data)?;
     let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
-    std::fs::write(keystore_path()?, json).map_err(|e| e.to_string())
+    crate::secret_store::secret_store(keystore_path()?).save(json.as_bytes())
 }
 
 #[tauri::command]
 pub fn load_keypair() -> Result<(String, String, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>), String> {
     let path = keystore_path()?;
     if !path.exists() {
+        migrate_legacy_keystore()?;
+    }
+    if !path.exists() {
         return Err("No saved keypair found".to_string());
     }
-    let json = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let json = String::from_utf8(crate::secret_store::secret_store(path).load()?)
+        .map_err(|e| e.to_string())?;
     let data: KeystoreData = serde_json::from_str(&json).map_err(|e| e.to_string())?;
     validate_keystore_data(&data)?;
     Ok((
@@ -61,10 +70,20 @@ pub fn load_keypair() -> Result<(String, String, Vec<u8>, Vec<u8>, Vec<u8>, Vec<
 
 #[tauri::command]
 pub fn clear_keypair() -> Result<(), String> {
-    let path = keystore_path()?;
-    if path.exists() {
-        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+    crate::secret_store::secret_store(keystore_path()?).clear()
+}
+
+fn migrate_legacy_keystore() -> Result<(), String> {
+    let legacy = legacy_keystore_path()?;
+    if !legacy.exists() {
+        return Ok(());
     }
+    let json = std::fs::read_to_string(&legacy).map_err(|e| e.to_string())?;
+    let data: KeystoreData = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+    validate_keystore_data(&data)?;
+    crate::secret_store::secret_store(keystore_path()?).save(json.as_bytes())?;
+    let backup = legacy.with_extension("json.migrated.bak");
+    std::fs::rename(legacy, backup).map_err(|e| e.to_string())?;
     Ok(())
 }
 

@@ -55,5 +55,8 @@ pub struct ContactModel {
     pub username: String,
     pub public_key: Vec<u8>,
     pub ed25519_pk: Option<Vec<u8>>,
+    pub trust_state: String,
+    pub fingerprint: String,
+    pub key_changed: bool,
     pub added_at: i64,
 }

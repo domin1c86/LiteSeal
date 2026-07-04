@@ -95,6 +95,7 @@ export default function StorageManager({ onClose }: StorageManagerProps) {
 
             <div style={styles.actions}>
               <button
+                className="neutral-button"
                 style={styles.actionBtn}
                 onClick={handleClearExpired}
                 disabled={clearing}
@@ -102,6 +103,7 @@ export default function StorageManager({ onClose }: StorageManagerProps) {
                 {clearing ? "Clearing..." : "Clear Expired Messages"}
               </button>
               <button
+                className="neutral-button"
                 style={styles.actionBtn}
                 onClick={handleClearAttachments}
                 disabled={clearing}
@@ -144,36 +146,39 @@ const styles: Record<string, React.CSSProperties> = {
   overlay: {
     position: "fixed",
     inset: 0,
-    backgroundColor: "rgba(0,0,0,0.6)",
+    backgroundColor: "var(--overlay)",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
+    padding: "16px",
     zIndex: 1000,
   },
   modal: {
-    backgroundColor: "#1a1a2e",
-    borderRadius: "12px",
-    width: "420px",
-    maxHeight: "80vh",
+    backgroundColor: "var(--surface)",
+    borderRadius: "var(--radius-lg)",
+    width: "min(440px, 100%)",
+    maxHeight: "min(80vh, calc(100vh - 32px))",
     overflow: "auto",
-    border: "1px solid #0f3460",
+    border: "1px solid var(--border)",
+    boxShadow: "var(--shadow-modal)",
   },
   header: {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
     padding: "16px 20px",
-    borderBottom: "1px solid #0f3460",
+    borderBottom: "1px solid var(--border)",
   },
   title: {
     margin: 0,
-    color: "#e0e0e0",
+    color: "var(--text)",
     fontSize: "16px",
+    fontWeight: 600,
   },
   closeBtn: {
     background: "none",
     border: "none",
-    color: "#888",
+    color: "var(--text-muted)",
     fontSize: "22px",
     cursor: "pointer",
     padding: "0 4px",
@@ -188,29 +193,31 @@ const styles: Record<string, React.CSSProperties> = {
     marginBottom: "20px",
   },
   statCard: {
-    backgroundColor: "#16213e",
-    borderRadius: "8px",
+    backgroundColor: "var(--surface-muted)",
+    border: "1px solid var(--border)",
+    borderRadius: "var(--radius-md)",
     padding: "12px",
     display: "flex",
     flexDirection: "column",
     gap: "4px",
   },
   statHighlight: {
-    border: "1px solid #e94560",
+    border: "1px solid var(--accent)",
+    backgroundColor: "var(--accent-soft)",
   },
   statLabel: {
-    color: "#888",
+    color: "var(--text-muted)",
     fontSize: "12px",
     textTransform: "uppercase" as const,
-    letterSpacing: "0.5px",
+    letterSpacing: 0,
   },
   statValue: {
-    color: "#e0e0e0",
+    color: "var(--text)",
     fontSize: "20px",
-    fontWeight: "bold",
+    fontWeight: 600,
   },
   statSub: {
-    color: "#666",
+    color: "var(--text-subtle)",
     fontSize: "12px",
   },
   actions: {
@@ -219,23 +226,23 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "10px",
   },
   actionBtn: {
-    backgroundColor: "#0f3460",
-    color: "#e0e0e0",
-    border: "none",
-    borderRadius: "6px",
+    backgroundColor: "var(--surface-muted)",
+    color: "var(--text)",
+    border: "1px solid var(--border)",
+    borderRadius: "var(--radius-md)",
     padding: "10px 16px",
     cursor: "pointer",
     fontSize: "14px",
     transition: "background-color 0.15s",
   },
   result: {
-    color: "#e94560",
+    color: "var(--accent)",
     fontSize: "13px",
     marginTop: "12px",
     textAlign: "center" as const,
   },
   loading: {
-    color: "#888",
+    color: "var(--text-muted)",
     textAlign: "center" as const,
     padding: "40px 0",
   },

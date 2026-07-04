@@ -12,6 +12,7 @@ export interface Message {
   sender_seq: number;
   timestamp: number;
   message_type: string;
+  local_state?: "pending" | "delivered" | "offline" | "received" | "failed" | string;
   ciphertext: number[];
   signature: number[];
   prev_hash: number[];
@@ -27,6 +28,9 @@ export interface Conversation {
 export interface RegisterResult {
   user_id: string;
   token: string;
+  access_token?: string;
+  refresh_token?: string;
+  device_id?: string;
 }
 
 export interface ConnectResult {
@@ -45,7 +49,21 @@ export interface IncomingMessage {
   signature: number[];
   sender_device_id: string;
   sender_seq: number;
+  prev_hash: number[];
+  recipient_device_id: string;
   timestamp: number;
+  local_state: Message["local_state"];
+}
+
+export type RelayEvent =
+  | { type: "delivered"; message_id: string }
+  | { type: "offline"; message_id: string; to: string }
+  | { type: "delivery_update"; message_id: string; recipient_device_id: string; status: string }
+  | { type: "error"; code: string; message: string };
+
+export interface PollMessagesResult {
+  messages: IncomingMessage[];
+  events: RelayEvent[];
 }
 
 export interface Contact {
@@ -53,6 +71,9 @@ export interface Contact {
   username: string;
   public_key: number[];
   ed25519_pk?: number[];
+  trust_state: "unverified" | "verified" | "key_changed" | string;
+  fingerprint: string;
+  key_changed: boolean;
   added_at: number;
 }
 

@@ -2,26 +2,21 @@ use dashmap::DashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-pub type MessageSender = mpsc::UnboundedSender<String>;
+use crate::db::Db;
 
-pub struct RegisteredUser {
-    pub username: String,
-    pub token: String,
-    pub public_key: Option<Vec<u8>>,
-    pub ed25519_pk: Option<Vec<u8>>,
-}
+pub type MessageSender = mpsc::UnboundedSender<String>;
 
 #[derive(Clone)]
 pub struct AppState {
     pub connections: Arc<DashMap<String, MessageSender>>,
-    pub users: Arc<DashMap<String, RegisteredUser>>,
+    pub db: Db,
 }
 
 impl AppState {
-    pub fn new() -> Self {
+    pub fn new(db: Db) -> Self {
         Self {
             connections: Arc::new(DashMap::new()),
-            users: Arc::new(DashMap::new()),
+            db,
         }
     }
 
@@ -35,16 +30,24 @@ impl AppState {
 
     pub fn send_to(&self, user_id: &str, message: String) -> bool {
         if let Some(sender) = self.connections.get(user_id) {
-            sender.send(message).is_ok()
+            let sent = sender.send(message).is_ok();
+            drop(sender);
+            if !sent {
+                self.connections.remove(user_id);
+            }
+            sent
         } else {
             false
         }
     }
 
-    pub fn validate_auth(&self, user_id: &str, token: &str) -> bool {
-        self.users
-            .get(user_id)
-            .is_some_and(|user| user.token == token)
+    pub async fn validate_auth(&self, token: &str, device_id: &str) -> Option<String> {
+        let hash = crate::auth::service::hash_token(token);
+        self.db
+            .validate_access_token(&hash, device_id)
+            .await
+            .ok()
+            .flatten()
     }
 }
 
@@ -52,21 +55,14 @@ impl AppState {
 mod tests {
     use super::*;
 
-    #[test]
-    fn validate_auth_accepts_only_registered_token() {
-        let state = AppState::new();
-        state.users.insert(
-            "user-1".to_string(),
-            RegisteredUser {
-                username: "alice".to_string(),
-                token: "token-1".to_string(),
-                public_key: None,
-                ed25519_pk: None,
-            },
-        );
-
-        assert!(state.validate_auth("user-1", "token-1"));
-        assert!(!state.validate_auth("user-1", "wrong-token"));
-        assert!(!state.validate_auth("missing-user", "token-1"));
+    #[tokio::test]
+    async fn send_to_removes_dead_connections() {
+        let db = Db::connect_lazy("postgres://postgres:postgres@localhost/liteseal").unwrap();
+        let state = AppState::new(db);
+        let (tx, rx) = mpsc::unbounded_channel();
+        drop(rx);
+        state.register("device-1".to_string(), tx);
+        assert!(!state.send_to("device-1", "{}".to_string()));
+        assert!(!state.connections.contains_key("device-1"));
     }
 }

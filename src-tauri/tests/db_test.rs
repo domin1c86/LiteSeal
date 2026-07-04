@@ -1,7 +1,7 @@
-use liteseal_app::db::models::{
+use liteseal_app_lib::db::models::{
     AttachmentModel, ContactModel, ConversationModel, DeviceModel, MessageModel,
 };
-use liteseal_app::db::repository::MessageRepository;
+use liteseal_app_lib::db::repository::MessageRepository;
 
 #[test]
 fn test_insert_and_get_message() {
@@ -54,6 +54,62 @@ fn test_get_messages_by_conversation() {
 
     let messages = repo.get_messages_by_conversation("conv-1", 10, 0).unwrap();
     assert_eq!(messages.len(), 5);
+    assert_eq!(messages[0].id, "msg-0");
+    assert_eq!(messages[4].id, "msg-4");
+}
+
+#[test]
+fn test_update_message_state() {
+    let repo = MessageRepository::new(":memory:").unwrap();
+
+    let msg = MessageModel {
+        id: "msg-state".to_string(),
+        conversation_id: "conv-1".to_string(),
+        sender_id: "user-1".to_string(),
+        sender_device_id: "device-1".to_string(),
+        sender_seq: 1,
+        timestamp: 1234567890,
+        message_type: "text".to_string(),
+        local_state: "pending".to_string(),
+        expire_at: None,
+        ciphertext: vec![1, 2, 3],
+        signature: vec![],
+        prev_hash: vec![],
+    };
+
+    repo.insert_message(&msg).unwrap();
+    repo.update_message_state("msg-state", "delivered").unwrap();
+
+    let updated = repo.get_message("msg-state").unwrap().unwrap();
+    assert_eq!(updated.local_state, "delivered");
+    assert!(repo.update_message_state("missing", "offline").is_err());
+}
+
+#[test]
+fn test_insert_message_is_idempotent_for_duplicate_ids() {
+    let repo = MessageRepository::new(":memory:").unwrap();
+
+    let msg = MessageModel {
+        id: "msg-dupe".to_string(),
+        conversation_id: "conv-1".to_string(),
+        sender_id: "user-1".to_string(),
+        sender_device_id: "device-1".to_string(),
+        sender_seq: 1,
+        timestamp: 1000,
+        message_type: "text".to_string(),
+        local_state: "received".to_string(),
+        expire_at: None,
+        ciphertext: vec![1],
+        signature: vec![],
+        prev_hash: vec![],
+    };
+
+    repo.insert_message(&msg).unwrap();
+    repo.insert_message(&msg).unwrap();
+
+    let messages = repo.get_messages_by_conversation("conv-1", 10, 0).unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].id, "msg-dupe");
 }
 
 #[test]
@@ -229,6 +285,9 @@ fn test_contact_operations() {
         username: "alice".to_string(),
         public_key: vec![1, 2, 3],
         ed25519_pk: None,
+        trust_state: "unverified".to_string(),
+        fingerprint: "fingerprint-1".to_string(),
+        key_changed: false,
         added_at: 1000,
     };
 
@@ -238,12 +297,21 @@ fn test_contact_operations() {
     assert_eq!(retrieved.user_id, "user-1");
     assert_eq!(retrieved.username, "alice");
     assert_eq!(retrieved.public_key, vec![1, 2, 3]);
+    assert_eq!(retrieved.trust_state, "unverified");
+    assert_eq!(retrieved.fingerprint, "fingerprint-1");
+
+    repo.update_contact_trust("user-1", "verified").unwrap();
+    let verified = repo.get_contact("user-1").unwrap().unwrap();
+    assert_eq!(verified.trust_state, "verified");
 
     let contact2 = ContactModel {
         user_id: "user-2".to_string(),
         username: "bob".to_string(),
         public_key: vec![4, 5, 6],
         ed25519_pk: None,
+        trust_state: "unverified".to_string(),
+        fingerprint: "fingerprint-2".to_string(),
+        key_changed: false,
         added_at: 2000,
     };
     repo.insert_contact(&contact2).unwrap();
@@ -293,6 +361,9 @@ fn test_storage_stats() {
         username: "bob".to_string(),
         public_key: vec![],
         ed25519_pk: None,
+        trust_state: "unverified".to_string(),
+        fingerprint: "".to_string(),
+        key_changed: false,
         added_at: 1000,
     };
     repo.insert_contact(&contact).unwrap();
