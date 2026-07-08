@@ -71,6 +71,7 @@ pub async fn login(
     server_url: String,
     public_key: Vec<u8>,
     ed25519_pk: Vec<u8>,
+    device_id: Option<String>,
 ) -> Result<RegisterResult, String> {
     let username = username.trim().to_string();
     if username.is_empty() {
@@ -88,6 +89,7 @@ pub async fn login(
             "username": username,
             "password": password,
             "device_name": "Windows desktop",
+            "device_id": device_id,
             "device_public_key": public_key,
             "ed25519_pk": ed25519_pk,
         }))
@@ -102,6 +104,34 @@ pub async fn login(
     resp.json()
         .await
         .map_err(|e| format!("Failed to parse login response: {}", e))
+}
+
+#[tauri::command]
+pub async fn refresh_session(
+    server_url: String,
+    refresh_token: String,
+) -> Result<RegisterResult, String> {
+    if refresh_token.trim().is_empty() {
+        return Err("No refresh token available".to_string());
+    }
+    let server_url = normalize_server_url(&server_url)?;
+
+    let client = reqwest::Client::new();
+    let url = format!("{}/auth/refresh", server_url);
+    let resp = client
+        .post(&url)
+        .json(&serde_json::json!({ "refresh_token": refresh_token }))
+        .send()
+        .await
+        .map_err(|e| format!("Refresh request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Refresh failed with status: {}", resp.status()));
+    }
+
+    resp.json()
+        .await
+        .map_err(|e| format!("Failed to parse refresh response: {}", e))
 }
 
 fn validate_public_key(label: &str, key: &[u8]) -> Result<(), String> {
@@ -125,9 +155,12 @@ pub async fn connect_relay(
     server_url: String,
     user_id: String,
     token: String,
-    device_id: Option<String>,
+    device_id: String,
     state: State<'_, AppState>,
 ) -> Result<ConnectResult, String> {
+    if device_id.trim().is_empty() {
+        return Err("Device id is required to connect".to_string());
+    }
     let server_url = normalize_server_url(&server_url)?;
     let ws_url = server_url
         .replace("http://", "ws://")
@@ -138,7 +171,7 @@ pub async fn connect_relay(
         &ws_url,
         user_id.clone(),
         token,
-        device_id.unwrap_or_else(|| "device-1".to_string()),
+        device_id,
     )
     .await?;
 

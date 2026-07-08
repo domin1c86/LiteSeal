@@ -1,14 +1,20 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
-struct KeystoreData {
-    user_id: String,
+#[derive(Serialize, Deserialize, Clone)]
+pub struct KeystoreData {
+    pub user_id: String,
     #[serde(default)]
-    token: String,
-    public_key: Vec<u8>,
-    secret_key: Vec<u8>,
-    ed25519_pk: Vec<u8>,
-    ed25519_sk: Vec<u8>,
+    pub token: String,
+    #[serde(default)]
+    pub refresh_token: String,
+    #[serde(default)]
+    pub device_id: String,
+    #[serde(default)]
+    pub server_url: String,
+    pub public_key: Vec<u8>,
+    pub secret_key: Vec<u8>,
+    pub ed25519_pk: Vec<u8>,
+    pub ed25519_sk: Vec<u8>,
 }
 
 fn keystore_path() -> Result<std::path::PathBuf, String> {
@@ -24,29 +30,14 @@ fn legacy_keystore_path() -> Result<std::path::PathBuf, String> {
 }
 
 #[tauri::command]
-pub fn save_keypair(
-    user_id: String,
-    token: String,
-    public_key: Vec<u8>,
-    secret_key: Vec<u8>,
-    ed25519_pk: Vec<u8>,
-    ed25519_sk: Vec<u8>,
-) -> Result<(), String> {
-    let data = KeystoreData {
-        user_id,
-        token,
-        public_key,
-        secret_key,
-        ed25519_pk,
-        ed25519_sk,
-    };
+pub fn save_keypair(data: KeystoreData) -> Result<(), String> {
     validate_keystore_data(&data)?;
     let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
     crate::secret_store::secret_store(keystore_path()?).save(json.as_bytes())
 }
 
 #[tauri::command]
-pub fn load_keypair() -> Result<(String, String, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>), String> {
+pub fn load_keypair() -> Result<KeystoreData, String> {
     let path = keystore_path()?;
     if !path.exists() {
         migrate_legacy_keystore()?;
@@ -58,14 +49,7 @@ pub fn load_keypair() -> Result<(String, String, Vec<u8>, Vec<u8>, Vec<u8>, Vec<
         .map_err(|e| e.to_string())?;
     let data: KeystoreData = serde_json::from_str(&json).map_err(|e| e.to_string())?;
     validate_keystore_data(&data)?;
-    Ok((
-        data.user_id,
-        data.token,
-        data.public_key,
-        data.secret_key,
-        data.ed25519_pk,
-        data.ed25519_sk,
-    ))
+    Ok(data)
 }
 
 #[tauri::command]
@@ -113,23 +97,46 @@ fn validate_keystore_data(data: &KeystoreData) -> Result<(), String> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn keystore_data_requires_token_and_expected_key_lengths() {
-        let data = KeystoreData {
+    fn valid_data() -> KeystoreData {
+        KeystoreData {
             user_id: "user-1".to_string(),
             token: "token-1".to_string(),
+            refresh_token: "refresh-1".to_string(),
+            device_id: "device-abc".to_string(),
+            server_url: "http://localhost:3000".to_string(),
             public_key: vec![0; 32],
             secret_key: vec![0; 32],
             ed25519_pk: vec![0; 32],
             ed25519_sk: vec![0; 64],
-        };
+        }
+    }
 
-        assert!(validate_keystore_data(&data).is_ok());
+    #[test]
+    fn keystore_data_requires_token_and_expected_key_lengths() {
+        assert!(validate_keystore_data(&valid_data()).is_ok());
 
         let invalid = KeystoreData {
             secret_key: vec![0; 31],
-            ..data
+            ..valid_data()
         };
         assert!(validate_keystore_data(&invalid).is_err());
+    }
+
+    #[test]
+    fn legacy_keystore_json_without_new_fields_still_loads() {
+        let legacy_json = r#"{
+            "user_id": "user-1",
+            "token": "token-1",
+            "public_key": [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            "secret_key": [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            "ed25519_pk": [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            "ed25519_sk": [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+                           0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+        }"#;
+        let data: KeystoreData = serde_json::from_str(legacy_json).unwrap();
+        assert!(data.device_id.is_empty());
+        assert!(data.server_url.is_empty());
+        assert!(data.refresh_token.is_empty());
+        assert!(validate_keystore_data(&data).is_ok());
     }
 }

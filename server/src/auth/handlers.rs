@@ -86,6 +86,7 @@ pub struct LoginRequest {
     pub password: String,
     #[serde(default = "default_device_name")]
     pub device_name: String,
+    pub device_id: Option<String>,
     pub device_public_key: Option<Vec<u8>>,
     pub ed25519_pk: Option<Vec<u8>>,
 }
@@ -110,15 +111,39 @@ pub async fn login(
     }
     tracing::info!("User logged in: {} ({})", user.username, user.id);
 
-    let public_key = req.device_public_key.unwrap_or_else(|| vec![0; 32]);
-    let ed25519_pk = req.ed25519_pk.unwrap_or_else(|| vec![0; 32]);
+    let public_key = req.device_public_key.ok_or(StatusCode::BAD_REQUEST)?;
+    let ed25519_pk = req.ed25519_pk.ok_or(StatusCode::BAD_REQUEST)?;
     service::validate_key_material(&public_key, &ed25519_pk)
         .map_err(|_| StatusCode::BAD_REQUEST)?;
-    let device = state
-        .db
-        .register_device(&user.id, &req.device_name, &public_key, &ed25519_pk)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let device = match req.device_id {
+        Some(device_id) => {
+            let existing = state
+                .db
+                .get_user_device(&user.id, &device_id)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            match existing {
+                Some(device) if !device.revoked => {
+                    state
+                        .db
+                        .update_device_keys(&user.id, &device.id, &public_key, &ed25519_pk)
+                        .await
+                        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                    crate::db::DeviceRecord {
+                        public_key: public_key.clone(),
+                        ed25519_pk: ed25519_pk.clone(),
+                        ..device
+                    }
+                }
+                _ => return Err(StatusCode::FORBIDDEN),
+            }
+        }
+        None => state
+            .db
+            .register_device(&user.id, &req.device_name, &public_key, &ed25519_pk)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+    };
     let access_token = service::generate_token();
     let refresh_token = service::generate_token();
     state

@@ -253,6 +253,28 @@ impl Db {
         Ok(())
     }
 
+    pub async fn get_user_device(
+        &self,
+        user_id: &str,
+        device_id: &str,
+    ) -> Result<Option<DeviceRecord>, sqlx::Error> {
+        let row = sqlx::query(
+            "SELECT id, name, public_key, ed25519_pk, revoked FROM devices
+             WHERE user_id = $1 AND id = $2",
+        )
+        .bind(user_id)
+        .bind(device_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| DeviceRecord {
+            id: r.get("id"),
+            name: r.get("name"),
+            public_key: r.get("public_key"),
+            ed25519_pk: r.get("ed25519_pk"),
+            revoked: r.get("revoked"),
+        }))
+    }
+
     pub async fn list_user_devices(&self, user_id: &str) -> Result<Vec<DeviceRecord>, sqlx::Error> {
         let rows = sqlx::query(
             "SELECT id, name, public_key, ed25519_pk, revoked FROM devices

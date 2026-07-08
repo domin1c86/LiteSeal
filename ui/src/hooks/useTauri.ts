@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   RegisterResult,
   ConnectResult,
+  KeystoreData,
   SendMessageResult,
   PollMessagesResult,
   Message,
@@ -32,7 +33,8 @@ export function useTauri() {
     password: string,
     serverUrl: string,
     publicKey: number[] = [],
-    ed25519Pk: number[] = []
+    ed25519Pk: number[] = [],
+    deviceId?: string
   ): Promise<RegisterResult> {
     return invoke<RegisterResult>("login", {
       username,
@@ -40,6 +42,17 @@ export function useTauri() {
       serverUrl,
       publicKey,
       ed25519Pk,
+      deviceId,
+    });
+  }
+
+  async function refreshSession(
+    serverUrl: string,
+    refreshToken: string
+  ): Promise<RegisterResult> {
+    return invoke<RegisterResult>("refresh_session", {
+      serverUrl,
+      refreshToken,
     });
   }
 
@@ -47,7 +60,7 @@ export function useTauri() {
     serverUrl: string,
     userId: string,
     token: string,
-    deviceId?: string
+    deviceId: string
   ): Promise<ConnectResult> {
     return invoke<ConnectResult>("connect_relay", {
       serverUrl,
@@ -191,18 +204,11 @@ export function useTauri() {
     return invoke<number>("clear_downloaded_attachments");
   }
 
-  async function saveKeypair(
-    userId: string,
-    token: string,
-    publicKey: number[],
-    secretKey: number[],
-    ed25519Pk: number[],
-    ed25519Sk: number[]
-  ): Promise<void> {
-    return invoke("save_keypair", { userId, token, publicKey, secretKey, ed25519Pk, ed25519Sk });
+  async function saveKeypair(data: KeystoreData): Promise<void> {
+    return invoke("save_keypair", { data });
   }
 
-  async function loadKeypair(): Promise<[string, string, number[], number[], number[], number[]]> {
+  async function loadKeypair(): Promise<KeystoreData> {
     return invoke("load_keypair");
   }
 
@@ -213,6 +219,7 @@ export function useTauri() {
   return {
     register,
     login,
+    refreshSession,
     connectRelay,
     disconnect,
     sendMessage,

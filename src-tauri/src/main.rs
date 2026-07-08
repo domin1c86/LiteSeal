@@ -22,6 +22,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::auth::register,
             commands::auth::login,
+            commands::auth::refresh_session,
             commands::auth::connect_relay,
             commands::auth::disconnect,
             commands::chat::send_message,

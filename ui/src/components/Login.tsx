@@ -13,7 +13,7 @@ export default function Login({ onLogin }: LoginProps) {
   const [serverUrl, setServerUrl] = useState("http://localhost:3000");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { register, login, connectRelay, generateKeypair, saveKeypair } = useTauri();
+  const { register, login, connectRelay, generateKeypair, saveKeypair, loadKeypair } = useTauri();
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -23,15 +23,71 @@ export default function Login({ onLogin }: LoginProps) {
     setError(null);
 
     try {
-      const [publicKey, secretKey, ed25519Pk, ed25519Sk] = await generateKeypair();
-      const result =
-        mode === "register"
-          ? await register(username.trim(), password, serverUrl, publicKey, ed25519Pk)
-          : await login(username.trim(), password, serverUrl, publicKey, ed25519Pk);
+      // Reuse the saved keypair + device on login so contacts keep a stable
+      // public key for us; fresh keys only for register or first login here.
+      let keys: { publicKey: number[]; secretKey: number[]; ed25519Pk: number[]; ed25519Sk: number[] } | null = null;
+      let savedDeviceId: string | undefined;
+      if (mode === "login") {
+        try {
+          const saved = await loadKeypair();
+          keys = {
+            publicKey: saved.public_key,
+            secretKey: saved.secret_key,
+            ed25519Pk: saved.ed25519_pk,
+            ed25519Sk: saved.ed25519_sk,
+          };
+          savedDeviceId = saved.device_id || undefined;
+        } catch {
+          // no keystore yet
+        }
+      }
+      if (!keys) {
+        const [publicKey, secretKey, ed25519Pk, ed25519Sk] = await generateKeypair();
+        keys = { publicKey, secretKey, ed25519Pk, ed25519Sk };
+      }
+
+      let result: RegisterResult;
+      if (mode === "register") {
+        result = await register(username.trim(), password, serverUrl, keys.publicKey, keys.ed25519Pk);
+      } else {
+        try {
+          result = await login(username.trim(), password, serverUrl, keys.publicKey, keys.ed25519Pk, savedDeviceId);
+        } catch (err) {
+          // Saved device belongs to another account or was revoked: retry
+          // once with a fresh keypair and a new device registration.
+          if (savedDeviceId && String(err).includes("403")) {
+            const [publicKey, secretKey, ed25519Pk, ed25519Sk] = await generateKeypair();
+            keys = { publicKey, secretKey, ed25519Pk, ed25519Sk };
+            result = await login(username.trim(), password, serverUrl, keys.publicKey, keys.ed25519Pk);
+          } else {
+            throw err;
+          }
+        }
+      }
+
       const token = result.access_token ?? result.token;
-      await connectRelay(serverUrl, result.user_id, token, result.device_id);
-      await saveKeypair(result.user_id, token, publicKey, secretKey, ed25519Pk, ed25519Sk);
-      onLogin({ ...result, token, serverUrl, publicKey, secretKey, ed25519Pk, ed25519Sk });
+      const deviceId = result.device_id ?? "";
+      await connectRelay(serverUrl, result.user_id, token, deviceId);
+      await saveKeypair({
+        user_id: result.user_id,
+        token,
+        refresh_token: result.refresh_token ?? "",
+        device_id: deviceId,
+        server_url: serverUrl,
+        public_key: keys.publicKey,
+        secret_key: keys.secretKey,
+        ed25519_pk: keys.ed25519Pk,
+        ed25519_sk: keys.ed25519Sk,
+      });
+      onLogin({
+        ...result,
+        token,
+        serverUrl,
+        publicKey: keys.publicKey,
+        secretKey: keys.secretKey,
+        ed25519Pk: keys.ed25519Pk,
+        ed25519Sk: keys.ed25519Sk,
+      });
     } catch (err) {
       setError(String(err));
     } finally {

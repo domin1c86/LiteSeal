@@ -10,7 +10,8 @@ import type { RegisterResult, Contact } from "./types";
 interface Session {
   user_id: string;
   token: string;
-  deviceId?: string;
+  refreshToken: string;
+  deviceId: string;
   serverUrl: string;
   publicKey: number[];
   secretKey: number[];
@@ -26,14 +27,15 @@ export default function App() {
   );
   const [showAddContact, setShowAddContact] = useState(false);
   const [showStorage, setShowStorage] = useState(false);
-  const { getContacts, loadKeypair, connectRelay, clearKeypair, disconnect } = useTauri();
+  const { getContacts, loadKeypair, saveKeypair, refreshSession, connectRelay, clearKeypair, disconnect } = useTauri();
   const [loading, setLoading] = useState(true);
 
   function handleLogin(result: RegisterResult & { serverUrl: string; publicKey: number[]; secretKey: number[]; ed25519Pk: number[]; ed25519Sk: number[] }) {
     setSession({
       user_id: result.user_id,
       token: result.access_token ?? result.token,
-      deviceId: result.device_id,
+      refreshToken: result.refresh_token ?? "",
+      deviceId: result.device_id ?? "",
       serverUrl: result.serverUrl,
       publicKey: result.publicKey,
       secretKey: result.secretKey,
@@ -44,19 +46,44 @@ export default function App() {
 
   useEffect(() => {
     loadKeypair()
-      .then(async ([userId, token, publicKey, secretKey, ed25519Pk, ed25519Sk]) => {
-        const serverUrl = "http://localhost:3000";
-        if (!token) {
-          setSession({ user_id: userId, token, serverUrl, publicKey, secretKey, ed25519Pk, ed25519Sk });
+      .then(async (saved) => {
+        const serverUrl = saved.server_url || "http://localhost:3000";
+        const base: Session = {
+          user_id: saved.user_id,
+          token: saved.token,
+          refreshToken: saved.refresh_token,
+          deviceId: saved.device_id,
+          serverUrl,
+          publicKey: saved.public_key,
+          secretKey: saved.secret_key,
+          ed25519Pk: saved.ed25519_pk,
+          ed25519Sk: saved.ed25519_sk,
+        };
+        if (!saved.token || !saved.device_id) {
+          // Legacy keystore without a device binding cannot reconnect; force login.
           return;
         }
         try {
-          const connectResult = await connectRelay(serverUrl, userId, token);
-          if (connectResult.connected) {
-            setSession({ user_id: userId, token, serverUrl, publicKey, secretKey, ed25519Pk, ed25519Sk });
-          }
+          await connectRelay(serverUrl, saved.user_id, saved.token, saved.device_id);
+          setSession(base);
         } catch {
-          setSession({ user_id: userId, token, serverUrl, publicKey, secretKey, ed25519Pk, ed25519Sk });
+          // Access token likely expired (30 min TTL): rotate via refresh token.
+          try {
+            const r = await refreshSession(serverUrl, saved.refresh_token);
+            const token = r.access_token ?? r.token;
+            const refreshed = {
+              ...saved,
+              token,
+              refresh_token: r.refresh_token ?? saved.refresh_token,
+            };
+            await saveKeypair(refreshed);
+            await connectRelay(serverUrl, r.user_id, token, saved.device_id);
+            setSession({ ...base, token, refreshToken: refreshed.refresh_token });
+          } catch {
+            // Server unreachable or refresh token stale: offline session so
+            // local history stays readable; sending will surface errors.
+            setSession(base);
+          }
         }
       })
       .catch(() => {})

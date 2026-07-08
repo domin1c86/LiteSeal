@@ -37,6 +37,18 @@ export interface ConnectResult {
   connected: boolean;
 }
 
+export interface KeystoreData {
+  user_id: string;
+  token: string;
+  refresh_token: string;
+  device_id: string;
+  server_url: string;
+  public_key: number[];
+  secret_key: number[];
+  ed25519_pk: number[];
+  ed25519_sk: number[];
+}
+
 export interface SendMessageResult {
   message_id: string;
 }
