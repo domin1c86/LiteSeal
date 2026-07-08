@@ -57,7 +57,6 @@ pub async fn send_message(
     ciphertext: Vec<u8>,
     signature: Vec<u8>,
     sender_device_id: String,
-    sender_seq: i64,
     payloads: Vec<liteseal_shared::protocol::EncryptedPayload>,
     state: State<'_, AppState>,
 ) -> Result<SendMessageResult, String> {
@@ -70,6 +69,17 @@ pub async fn send_message(
     let message_id = Uuid::new_v4().to_string();
     let timestamp = chrono::Utc::now().timestamp_millis();
 
+    // The sender owns its hash chain: seq and prev_hash come from the last
+    // message this device stored for the conversation, matching what
+    // recipients validate in MessageIntegrityStore::validate_next.
+    let (sender_seq, prev_hash) = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        let previous = db
+            .get_latest_message_for_sender(&conversation_id, &sender_device_id)
+            .map_err(|e| e.to_string())?;
+        next_chain_state(previous.as_ref())
+    };
+
     let outgoing = build_outgoing_message_model(
         message_id.clone(),
         conversation_id.clone(),
@@ -79,6 +89,7 @@ pub async fn send_message(
         timestamp,
         ciphertext.clone(),
         signature.clone(),
+        prev_hash.clone(),
         "pending",
     );
 
@@ -95,7 +106,7 @@ pub async fn send_message(
             signature,
             sender_device_id,
             sender_seq,
-            Vec::new(),
+            prev_hash,
             payloads,
         )
         .await
@@ -107,6 +118,16 @@ pub async fn send_message(
     }
 
     Ok(SendMessageResult { message_id })
+}
+
+fn next_chain_state(previous: Option<&MessageModel>) -> (i64, Vec<u8>) {
+    match previous {
+        Some(prev) => (
+            prev.sender_seq + 1,
+            MessageIntegrityStore::hash_message(prev),
+        ),
+        None => (1, Vec::new()),
+    }
 }
 
 #[tauri::command]
@@ -285,6 +306,7 @@ fn build_outgoing_message_model(
     timestamp: i64,
     ciphertext: Vec<u8>,
     signature: Vec<u8>,
+    prev_hash: Vec<u8>,
     local_state: &str,
 ) -> MessageModel {
     MessageModel {
@@ -299,7 +321,7 @@ fn build_outgoing_message_model(
         expire_at: None,
         ciphertext,
         signature,
-        prev_hash: Vec::new(),
+        prev_hash,
     }
 }
 
@@ -335,6 +357,7 @@ mod tests {
             1234,
             vec![1, 2, 3],
             vec![4, 5, 6],
+            vec![7; 32],
             "pending",
         );
 
@@ -348,7 +371,52 @@ mod tests {
         assert_eq!(msg.local_state, "pending");
         assert_eq!(msg.ciphertext, vec![1, 2, 3]);
         assert_eq!(msg.signature, vec![4, 5, 6]);
-        assert!(msg.prev_hash.is_empty());
+        assert_eq!(msg.prev_hash, vec![7; 32]);
+    }
+
+    #[test]
+    fn outgoing_chain_state_passes_receiver_validation() {
+        // First message in a chain: seq 1, empty prev_hash.
+        let (seq, prev_hash) = next_chain_state(None);
+        assert_eq!(seq, 1);
+        assert!(prev_hash.is_empty());
+
+        let first = build_outgoing_message_model(
+            "msg-1".to_string(),
+            "conv-1".to_string(),
+            "alice".to_string(),
+            "device-alice".to_string(),
+            seq,
+            1234,
+            vec![1, 2, 3],
+            vec![4, 5, 6],
+            prev_hash,
+            "pending",
+        );
+        assert_eq!(
+            MessageIntegrityStore::validate_next(None, &first),
+            IntegrityResult::Valid
+        );
+
+        // Second message must extend the chain the receiver validates.
+        let (seq, prev_hash) = next_chain_state(Some(&first));
+        assert_eq!(seq, 2);
+        let second = build_outgoing_message_model(
+            "msg-2".to_string(),
+            "conv-1".to_string(),
+            "alice".to_string(),
+            "device-alice".to_string(),
+            seq,
+            1235,
+            vec![9],
+            vec![8],
+            prev_hash,
+            "pending",
+        );
+        assert_eq!(
+            MessageIntegrityStore::validate_next(Some(&first), &second),
+            IntegrityResult::Valid
+        );
     }
 
     #[test]

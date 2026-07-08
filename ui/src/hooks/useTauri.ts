@@ -82,7 +82,6 @@ export function useTauri() {
     ciphertext: number[],
     signature: number[],
     senderDeviceId: string,
-    senderSeq: number,
     payloads: EncryptedPayload[]
   ): Promise<SendMessageResult> {
     return invoke<SendMessageResult>("send_message", {
@@ -91,7 +90,6 @@ export function useTauri() {
       ciphertext,
       signature,
       senderDeviceId,
-      senderSeq,
       payloads,
     });
   }

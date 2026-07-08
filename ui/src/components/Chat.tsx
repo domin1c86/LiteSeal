@@ -206,7 +206,6 @@ export default function Chat({ conversationId, userId, deviceId, serverUrl, secr
         ciphertext,
         signature,
         deviceId,
-        messages.length,
         payloads
       );
 
@@ -217,7 +216,7 @@ export default function Chat({ conversationId, userId, deviceId, serverUrl, secr
           conversation_id: conversationId,
           sender_id: userId,
           sender_device_id: deviceId,
-          sender_seq: prev.length,
+          sender_seq: 0,
           timestamp: Date.now(),
           message_type: "text",
           local_state: "pending",
