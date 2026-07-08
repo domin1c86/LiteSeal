@@ -105,6 +105,14 @@ impl Db {
         }))
     }
 
+    pub async fn get_username(&self, user_id: &str) -> Result<Option<String>, sqlx::Error> {
+        let row = sqlx::query("SELECT username FROM users WHERE id = $1")
+            .bind(user_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.map(|r| r.get("username")))
+    }
+
     pub async fn create_session(
         &self,
         user_id: &str,
@@ -343,6 +351,15 @@ impl Db {
         &self,
         device_id: &str,
     ) -> Result<Vec<OfflineMessageRecord>, sqlx::Error> {
+        // Opportunistic queue hygiene: acked rows are done, unacked rows
+        // older than 30 days are considered abandoned.
+        sqlx::query(
+            "DELETE FROM offline_messages
+             WHERE acked = true OR created_at < now() - interval '30 days'",
+        )
+        .execute(&self.pool)
+        .await?;
+
         let rows = sqlx::query(
             "SELECT message_id, conversation_id, from_user_id, sender_device_id, sender_seq,
                     prev_hash, recipient_device_id, ciphertext, signature, timestamp

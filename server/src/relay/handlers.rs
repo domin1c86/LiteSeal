@@ -11,8 +11,12 @@ use tokio::sync::mpsc;
 
 use crate::state::AppState;
 
+const MAX_WS_MESSAGE_BYTES: usize = 256 * 1024;
+
 pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_socket(socket, state))
+    ws.max_message_size(MAX_WS_MESSAGE_BYTES)
+        .max_frame_size(MAX_WS_MESSAGE_BYTES)
+        .on_upgrade(move |socket| handle_socket(socket, state))
 }
 
 async fn handle_socket(socket: WebSocket, state: AppState) {
@@ -79,23 +83,26 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                         conversation_id,
                         ciphertext: _,
                         signature: _,
-                        sender_device_id,
+                        // The claimed sender device is untrusted; the relay
+                        // stamps the authenticated device instead.
+                        sender_device_id: _,
                         sender_seq,
                         prev_hash,
                         payloads,
                     }) => {
-                        let from = match &authenticated_user {
-                            Some(uid) => uid.clone(),
-                            None => {
-                                let resp = serde_json::to_string(&ServerMessage::Error {
-                                    code: "unauthorized".into(),
-                                    message: "Not authenticated".into(),
-                                })
-                                .unwrap();
-                                let _ = tx.send(resp);
-                                continue;
-                            }
-                        };
+                        let (from, sender_device_id) =
+                            match (&authenticated_user, &authenticated_device) {
+                                (Some(uid), Some(did)) => (uid.clone(), did.clone()),
+                                _ => {
+                                    let resp = serde_json::to_string(&ServerMessage::Error {
+                                        code: "unauthorized".into(),
+                                        message: "Not authenticated".into(),
+                                    })
+                                    .unwrap();
+                                    let _ = tx.send(resp);
+                                    continue;
+                                }
+                            };
 
                         if payloads.is_empty() {
                             let resp = serde_json::to_string(&ServerMessage::Error {

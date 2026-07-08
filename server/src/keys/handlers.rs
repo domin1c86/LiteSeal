@@ -43,6 +43,13 @@ pub struct TrustContactRequest {
     pub state: String,
 }
 
+fn escape_like_pattern(query: &str) -> String {
+    query
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
 pub async fn search_users(
     State(state): State<AppState>,
     Query(params): Query<SearchQuery>,
@@ -54,15 +61,16 @@ pub async fn search_users(
         return Json(results);
     }
 
+    // One row per user (their newest active device), wildcards escaped.
     let rows = sqlx::query(
-        "SELECT u.id, u.username, d.public_key, d.ed25519_pk
+        r#"SELECT DISTINCT ON (u.id) u.id, u.username, d.public_key, d.ed25519_pk
          FROM users u
          JOIN devices d ON d.user_id = u.id AND d.revoked = false
-         WHERE lower(u.username) LIKE $1 OR u.id LIKE $1
-         ORDER BY u.username ASC
-         LIMIT 50",
+         WHERE lower(u.username) LIKE $1 ESCAPE '\' OR u.id LIKE $1 ESCAPE '\'
+         ORDER BY u.id, d.created_at DESC
+         LIMIT 50"#,
     )
-    .bind(format!("%{}%", query))
+    .bind(format!("%{}%", escape_like_pattern(&query)))
     .fetch_all(state.db.pool())
     .await
     .unwrap_or_default();
@@ -80,6 +88,7 @@ pub async fn search_users(
         }
     }
 
+    results.sort_by(|a, b| a.username.cmp(&b.username));
     Json(results)
 }
 
@@ -87,15 +96,21 @@ pub async fn get_public_key(
     State(state): State<AppState>,
     Path(user_id): Path<String>,
 ) -> Result<Json<PublicKeyResponse>, StatusCode> {
+    let username = state
+        .db
+        .get_username(&user_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
     let rows = state
         .db
         .list_user_devices(&user_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    match rows.into_iter().find(|device| !device.revoked) {
+    match rows.into_iter().rev().find(|device| !device.revoked) {
         Some(device) => Ok(Json(PublicKeyResponse {
-            user_id: user_id.clone(),
-            username: user_id,
+            user_id,
+            username,
             public_key: Some(device.public_key),
             ed25519_pk: Some(device.ed25519_pk),
         })),

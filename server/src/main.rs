@@ -51,7 +51,6 @@ async fn main() {
             "/devices/{device_id}",
             delete(auth::handlers::revoke_device).put(auth::handlers::rotate_device_keys),
         )
-        .route("/register", post(auth::handlers::register))
         .route("/users/search", get(keys::handlers::search_users))
         .route("/users/{user_id}/key", get(keys::handlers::get_public_key))
         .route(
