@@ -5,7 +5,13 @@ import ContactList from "./components/ContactList";
 import AddContact from "./components/AddContact";
 import StorageManager from "./components/StorageManager";
 import { useTauri } from "./hooks/useTauri";
-import type { RegisterResult, Contact } from "./types";
+import type { RegisterResult, Contact, IncomingMessage, RelayEvent } from "./types";
+
+export interface RelayBatch {
+  seq: number;
+  messages: IncomingMessage[];
+  events: RelayEvent[];
+}
 
 interface Session {
   user_id: string;
@@ -27,8 +33,28 @@ export default function App() {
   );
   const [showAddContact, setShowAddContact] = useState(false);
   const [showStorage, setShowStorage] = useState(false);
-  const { getContacts, loadKeypair, saveKeypair, refreshSession, connectRelay, clearKeypair, disconnect } = useTauri();
+  const { getContacts, loadKeypair, saveKeypair, refreshSession, connectRelay, clearKeypair, disconnect, pollMessages } = useTauri();
   const [loading, setLoading] = useState(true);
+  const [relayBatch, setRelayBatch] = useState<RelayBatch | null>(null);
+
+  // Poll at the app level so incoming messages are acked and persisted even
+  // when no conversation is open; Chat consumes batches for its conversation.
+  useEffect(() => {
+    if (!session) return;
+    let seq = 0;
+    const interval = setInterval(async () => {
+      try {
+        const result = await pollMessages();
+        if (result.messages.length > 0 || result.events.length > 0) {
+          seq += 1;
+          setRelayBatch({ seq, messages: result.messages, events: result.events });
+        }
+      } catch {
+        // not connected; ignore
+      }
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [session]);
 
   function handleLogin(result: RegisterResult & { serverUrl: string; publicKey: number[]; secretKey: number[]; ed25519Pk: number[]; ed25519Sk: number[] }) {
     setSession({
@@ -151,6 +177,7 @@ export default function App() {
         secretKey={session.secretKey}
         signingKey={session.ed25519Sk}
         contacts={contacts}
+        relayBatch={relayBatch}
         onContactsChanged={refreshContacts}
       />
       {showAddContact && (

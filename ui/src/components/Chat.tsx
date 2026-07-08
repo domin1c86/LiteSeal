@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useTauri } from "../hooks/useTauri";
 import { dmConversationId } from "../lib/conversation";
+import type { RelayBatch } from "../App";
 import type { Message, IncomingMessage, Contact, RelayEvent } from "../types";
 
 interface ChatProps {
@@ -12,17 +13,18 @@ interface ChatProps {
   secretKey: number[];
   signingKey: number[];
   contacts: Contact[];
+  relayBatch: RelayBatch | null;
   onContactsChanged: () => void;
 }
 
-export default function Chat({ conversationId, userId, deviceId, serverUrl, secretKey, signingKey, contacts, onContactsChanged }: ChatProps) {
+export default function Chat({ conversationId, userId, deviceId, serverUrl, secretKey, signingKey, contacts, relayBatch, onContactsChanged }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const { sendMessage, getUserDevices, pollMessages, getLocalMessages, encryptMessage, decryptMessage, signMessage, verifyMessage, setContactTrust } = useTauri();
+  const { sendMessage, getUserDevices, getLocalMessages, encryptMessage, decryptMessage, signMessage, verifyMessage, setContactTrust } = useTauri();
   const activeContact = contacts.find((c) => c.user_id === conversationId);
   // conversationId prop is the peer's user id; storage/relay use the canonical DM id.
   const storageConversationId = conversationId ? dmConversationId(userId, conversationId) : null;
@@ -72,12 +74,11 @@ export default function Chat({ conversationId, userId, deviceId, serverUrl, secr
   }, [conversationId, contacts, secretKey, userId]);
 
   useEffect(() => {
-    if (!conversationId) return;
-    const interval = setInterval(async () => {
+    if (!conversationId || !relayBatch) return;
+    (async () => {
       try {
-        const result = await pollMessages();
-        applyRelayEvents(result.events);
-        const incoming: IncomingMessage[] = result.messages;
+        applyRelayEvents(relayBatch.events);
+        const incoming: IncomingMessage[] = relayBatch.messages;
         if (incoming.length > 0) {
           const decoded = await Promise.all(
             incoming
@@ -130,11 +131,10 @@ export default function Chat({ conversationId, userId, deviceId, serverUrl, secr
           });
         }
       } catch {
-        // ignore poll errors
+        // ignore batch processing errors
       }
-    }, 2000);
-    return () => clearInterval(interval);
-  }, [conversationId, contacts, secretKey]);
+    })();
+  }, [relayBatch]);
 
   function applyRelayEvents(events: RelayEvent[]) {
     if (events.length === 0) return;
