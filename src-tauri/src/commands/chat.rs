@@ -52,7 +52,6 @@ pub struct PollMessagesResult {
 
 #[tauri::command]
 pub async fn send_message(
-    conversation_id: String,
     sender_id: String,
     ciphertext: Vec<u8>,
     signature: Vec<u8>,
@@ -63,6 +62,16 @@ pub async fn send_message(
     if payloads.is_empty() {
         return Err("Message has no recipient payloads".to_string());
     }
+    let recipient_user_id = payloads[0].recipient_user_id.clone();
+    if payloads
+        .iter()
+        .any(|p| p.recipient_user_id != recipient_user_id)
+    {
+        return Err("All payloads in a direct message must target the same user".to_string());
+    }
+    // Both sides derive the same id regardless of who sends first.
+    let conversation_id = canonical_conversation_id(&sender_id, &recipient_user_id);
+
     let ws_guard = state.ws_client.lock().await;
     let client = ws_guard.as_ref().ok_or("Not connected to relay server")?;
 
@@ -118,6 +127,11 @@ pub async fn send_message(
     }
 
     Ok(SendMessageResult { message_id })
+}
+
+pub fn canonical_conversation_id(a: &str, b: &str) -> String {
+    let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+    format!("dm:{}:{}", lo, hi)
 }
 
 fn next_chain_state(previous: Option<&MessageModel>) -> (i64, Vec<u8>) {
@@ -345,6 +359,15 @@ fn build_incoming_message_model(msg: IncomingMessage) -> MessageModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn canonical_conversation_id_is_order_independent() {
+        assert_eq!(
+            canonical_conversation_id("alice", "bob"),
+            canonical_conversation_id("bob", "alice")
+        );
+        assert_eq!(canonical_conversation_id("alice", "bob"), "dm:alice:bob");
+    }
 
     #[test]
     fn outgoing_message_model_is_ready_for_local_persistence() {

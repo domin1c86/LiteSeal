@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useTauri } from "../hooks/useTauri";
+import { dmConversationId } from "../lib/conversation";
 import type { Message, IncomingMessage, Contact, RelayEvent } from "../types";
 
 interface ChatProps {
@@ -22,6 +23,8 @@ export default function Chat({ conversationId, userId, deviceId, serverUrl, secr
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { sendMessage, getUserDevices, pollMessages, getLocalMessages, encryptMessage, decryptMessage, signMessage, verifyMessage, setContactTrust } = useTauri();
   const activeContact = contacts.find((c) => c.user_id === conversationId);
+  // conversationId prop is the peer's user id; storage/relay use the canonical DM id.
+  const storageConversationId = conversationId ? dmConversationId(userId, conversationId) : null;
 
   function incomingToMessage(m: IncomingMessage, ciphertext: number[]): Message {
     return {
@@ -40,16 +43,16 @@ export default function Chat({ conversationId, userId, deviceId, serverUrl, secr
   }
 
   useEffect(() => {
-    if (!conversationId) return;
+    if (!conversationId || !storageConversationId) return;
     setLoading(true);
     setSendError(null);
-    getLocalMessages(conversationId, 50, 0)
+    getLocalMessages(storageConversationId, 50, 0)
       .then(async (msgs) => {
         const decrypted = await Promise.all(
           msgs.map(async (msg) => {
             const peer = contacts.find((c) =>
               msg.sender_id === userId
-                ? c.user_id === msg.conversation_id
+                ? c.user_id === conversationId
                 : c.user_id === msg.sender_id
             );
             if (!peer) return msg;
@@ -77,7 +80,7 @@ export default function Chat({ conversationId, userId, deviceId, serverUrl, secr
         if (incoming.length > 0) {
           const decoded = await Promise.all(
             incoming
-              .filter((m) => m.conversation_id === conversationId)
+              .filter((m) => m.conversation_id === storageConversationId)
               .map(async (m) => {
                 const sender = contacts.find((c) => c.user_id === m.from);
                 if (!sender) {
@@ -201,7 +204,6 @@ export default function Chat({ conversationId, userId, deviceId, serverUrl, secr
       }
 
       const result = await sendMessage(
-        conversationId,
         userId,
         ciphertext,
         signature,
@@ -213,7 +215,7 @@ export default function Chat({ conversationId, userId, deviceId, serverUrl, secr
         ...prev,
         {
           id: result.message_id,
-          conversation_id: conversationId,
+          conversation_id: storageConversationId ?? conversationId,
           sender_id: userId,
           sender_device_id: deviceId,
           sender_seq: 0,

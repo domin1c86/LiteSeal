@@ -77,7 +77,6 @@ export function useTauri() {
   }
 
   async function sendMessage(
-    conversationId: string,
     senderId: string,
     ciphertext: number[],
     signature: number[],
@@ -85,7 +84,6 @@ export function useTauri() {
     payloads: EncryptedPayload[]
   ): Promise<SendMessageResult> {
     return invoke<SendMessageResult>("send_message", {
-      conversationId,
       senderId,
       ciphertext,
       signature,
