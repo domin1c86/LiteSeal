@@ -5,6 +5,7 @@ import type { Message, IncomingMessage, Contact, RelayEvent } from "../types";
 interface ChatProps {
   conversationId: string | null;
   userId: string;
+  deviceId: string;
   token: string;
   serverUrl: string;
   secretKey: number[];
@@ -12,14 +13,14 @@ interface ChatProps {
   onContactsChanged: () => void;
 }
 
-export default function Chat({ conversationId, userId, secretKey, contacts, onContactsChanged }: ChatProps) {
+export default function Chat({ conversationId, userId, deviceId, serverUrl, secretKey, contacts, onContactsChanged }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const { sendMessage, pollMessages, getLocalMessages, encryptMessage, decryptMessage, signMessage, verifyMessage, setContactTrust } = useTauri();
+  const { sendMessage, getUserDevices, pollMessages, getLocalMessages, encryptMessage, decryptMessage, signMessage, verifyMessage, setContactTrust } = useTauri();
   const activeContact = contacts.find((c) => c.user_id === conversationId);
 
   function incomingToMessage(m: IncomingMessage, ciphertext: number[]): Message {
@@ -175,19 +176,38 @@ export default function Chat({ conversationId, userId, secretKey, contacts, onCo
       const contact = contacts.find((c) => c.user_id === conversationId);
       if (!contact) throw new Error("Recipient not found in contacts");
 
+      const devices = (await getUserDevices(serverUrl, conversationId)).filter(
+        (d) => !d.revoked && d.public_key.length === 32
+      );
+      if (devices.length === 0) throw new Error("Recipient has no active devices");
+
       const encoder = new TextEncoder();
       const plaintext = Array.from(encoder.encode(text));
+
+      // Local copy encrypted to the contact's stored key so history stays readable.
       const ciphertext = await encryptMessage(plaintext, contact.public_key, secretKey);
       const signature = await signMessage(ciphertext, secretKey);
 
+      const payloads = [];
+      for (const device of devices) {
+        const deviceCiphertext = await encryptMessage(plaintext, device.public_key, secretKey);
+        const deviceSignature = await signMessage(deviceCiphertext, secretKey);
+        payloads.push({
+          recipient_user_id: conversationId,
+          recipient_device_id: device.id,
+          ciphertext: deviceCiphertext,
+          signature: deviceSignature,
+        });
+      }
+
       const result = await sendMessage(
-        conversationId,
         conversationId,
         userId,
         ciphertext,
         signature,
-        "device-1",
-        messages.length
+        deviceId,
+        messages.length,
+        payloads
       );
 
       setMessages((prev) => [
@@ -196,7 +216,7 @@ export default function Chat({ conversationId, userId, secretKey, contacts, onCo
           id: result.message_id,
           conversation_id: conversationId,
           sender_id: userId,
-          sender_device_id: "device-1",
+          sender_device_id: deviceId,
           sender_seq: prev.length,
           timestamp: Date.now(),
           message_type: "text",

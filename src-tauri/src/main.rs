@@ -38,6 +38,7 @@ fn main() {
             commands::contacts::remove_contact,
             commands::contacts::set_contact_trust,
             commands::contacts::search_users,
+            commands::contacts::get_user_devices,
             commands::storage::get_storage_stats,
             commands::storage::clear_expired_messages,
             commands::storage::clear_downloaded_attachments,

@@ -13,6 +13,7 @@ pub struct WebSocketClient {
     write: Arc<
         Mutex<futures_util::stream::SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>,
     >,
+    device_id: String,
     recv_task: Option<tokio::task::JoinHandle<()>>,
 }
 
@@ -35,7 +36,7 @@ impl WebSocketClient {
         let auth_msg = ClientMessage::Auth {
             user_id: user_id.clone(),
             token,
-            device_id,
+            device_id: device_id.clone(),
         };
         let auth_json = serde_json::to_string(&auth_msg).map_err(|e| e.to_string())?;
 
@@ -90,6 +91,7 @@ impl WebSocketClient {
         Ok((
             Self {
                 write,
+                device_id,
                 recv_task: Some(recv_task),
             },
             rx,
@@ -99,28 +101,26 @@ impl WebSocketClient {
     pub async fn send_message(
         &self,
         message_id: String,
-        to: String,
         conversation_id: String,
         ciphertext: Vec<u8>,
         signature: Vec<u8>,
         sender_device_id: String,
         sender_seq: i64,
         prev_hash: Vec<u8>,
+        payloads: Vec<EncryptedPayload>,
     ) -> Result<(), String> {
+        if payloads.is_empty() {
+            return Err("Message has no recipient payloads".to_string());
+        }
         let msg = ClientMessage::Send {
             message_id,
             conversation_id,
-            ciphertext: ciphertext.clone(),
-            signature: signature.clone(),
-            sender_device_id: sender_device_id.clone(),
+            ciphertext,
+            signature,
+            sender_device_id,
             sender_seq,
             prev_hash,
-            payloads: vec![EncryptedPayload {
-                recipient_user_id: to.clone(),
-                recipient_device_id: to,
-                ciphertext,
-                signature,
-            }],
+            payloads,
         };
         let json = serde_json::to_string(&msg).map_err(|e| e.to_string())?;
 
@@ -135,7 +135,7 @@ impl WebSocketClient {
     pub async fn send_ack(&self, message_id: String) -> Result<(), String> {
         let msg = ClientMessage::Ack {
             message_id,
-            recipient_device_id: "device-1".to_string(),
+            recipient_device_id: self.device_id.clone(),
         };
         let json = serde_json::to_string(&msg).map_err(|e| e.to_string())?;
 

@@ -53,6 +53,21 @@ export interface SendMessageResult {
   message_id: string;
 }
 
+export interface EncryptedPayload {
+  recipient_user_id: string;
+  recipient_device_id: string;
+  ciphertext: number[];
+  signature: number[];
+}
+
+export interface RemoteDevice {
+  id: string;
+  name: string;
+  public_key: number[];
+  ed25519_pk: number[];
+  revoked: boolean;
+}
+
 export interface IncomingMessage {
   message_id: string;
   from: string;

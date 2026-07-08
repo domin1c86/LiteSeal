@@ -145,6 +145,7 @@ export default function App() {
       <Chat
         conversationId={activeConversation}
         userId={session.user_id}
+        deviceId={session.deviceId}
         token={session.token}
         serverUrl={session.serverUrl}
         secretKey={session.secretKey}

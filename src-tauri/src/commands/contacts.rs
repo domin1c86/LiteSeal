@@ -106,6 +106,44 @@ pub async fn set_contact_trust(
     Ok(SetContactTrustResult { success: true })
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RemoteDevice {
+    pub id: String,
+    pub name: String,
+    pub public_key: Vec<u8>,
+    pub ed25519_pk: Vec<u8>,
+    pub revoked: bool,
+}
+
+#[tauri::command]
+pub async fn get_user_devices(
+    server_url: String,
+    user_id: String,
+) -> Result<Vec<RemoteDevice>, String> {
+    let user_id = user_id.trim().to_string();
+    if user_id.is_empty() {
+        return Err("User id cannot be empty".to_string());
+    }
+
+    let server_url = normalize_server_url(&server_url)?;
+    let client = reqwest::Client::new();
+    let url = format!("{}/users/{}/devices", server_url, user_id);
+
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Device lookup failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Device lookup failed with status: {}", resp.status()));
+    }
+
+    resp.json()
+        .await
+        .map_err(|e| format!("Failed to parse device list: {}", e))
+}
+
 #[tauri::command]
 pub async fn search_users(server_url: String, query: String) -> Result<Vec<PublicKeyInfo>, String> {
     let query = query.trim().to_string();

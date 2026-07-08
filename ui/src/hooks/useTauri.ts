@@ -9,6 +9,8 @@ import type {
   Contact,
   UserSearchResult,
   StorageStats,
+  EncryptedPayload,
+  RemoteDevice,
 } from "../types";
 
 export function useTauri() {
@@ -75,23 +77,30 @@ export function useTauri() {
   }
 
   async function sendMessage(
-    to: string,
     conversationId: string,
     senderId: string,
     ciphertext: number[],
     signature: number[],
     senderDeviceId: string,
-    senderSeq: number
+    senderSeq: number,
+    payloads: EncryptedPayload[]
   ): Promise<SendMessageResult> {
     return invoke<SendMessageResult>("send_message", {
-      to,
       conversationId,
       senderId,
       ciphertext,
       signature,
       senderDeviceId,
       senderSeq,
+      payloads,
     });
+  }
+
+  async function getUserDevices(
+    serverUrl: string,
+    userId: string
+  ): Promise<RemoteDevice[]> {
+    return invoke<RemoteDevice[]>("get_user_devices", { serverUrl, userId });
   }
 
   async function pollMessages(): Promise<PollMessagesResult> {
@@ -223,6 +232,7 @@ export function useTauri() {
     connectRelay,
     disconnect,
     sendMessage,
+    getUserDevices,
     pollMessages,
     getLocalMessages,
     addContact,

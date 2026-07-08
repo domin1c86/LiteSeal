@@ -77,8 +77,8 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     Ok(ClientMessage::Send {
                         message_id,
                         conversation_id,
-                        ciphertext,
-                        signature,
+                        ciphertext: _,
+                        signature: _,
                         sender_device_id,
                         sender_seq,
                         prev_hash,
@@ -97,19 +97,19 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                             }
                         };
 
+                        if payloads.is_empty() {
+                            let resp = serde_json::to_string(&ServerMessage::Error {
+                                code: "no_payloads".into(),
+                                message: "Send requires at least one recipient payload".into(),
+                            })
+                            .unwrap();
+                            let _ = tx.send(resp);
+                            continue;
+                        }
+
                         let timestamp = chrono_now();
                         let mut updates = Vec::new();
-                        let effective_payloads = if payloads.is_empty() {
-                            vec![liteseal_shared::protocol::EncryptedPayload {
-                                recipient_user_id: from.clone(),
-                                recipient_device_id: from.clone(),
-                                ciphertext,
-                                signature,
-                            }]
-                        } else {
-                            payloads
-                        };
-                        for payload in effective_payloads {
+                        for payload in payloads {
                             let relay_msg = serde_json::to_string(&ServerMessage::Message {
                                 message_id: message_id.clone(),
                                 from: from.clone(),

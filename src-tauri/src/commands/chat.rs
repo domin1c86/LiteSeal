@@ -52,15 +52,18 @@ pub struct PollMessagesResult {
 
 #[tauri::command]
 pub async fn send_message(
-    to: String,
     conversation_id: String,
     sender_id: String,
     ciphertext: Vec<u8>,
     signature: Vec<u8>,
     sender_device_id: String,
     sender_seq: i64,
+    payloads: Vec<liteseal_shared::protocol::EncryptedPayload>,
     state: State<'_, AppState>,
 ) -> Result<SendMessageResult, String> {
+    if payloads.is_empty() {
+        return Err("Message has no recipient payloads".to_string());
+    }
     let ws_guard = state.ws_client.lock().await;
     let client = ws_guard.as_ref().ok_or("Not connected to relay server")?;
 
@@ -87,13 +90,13 @@ pub async fn send_message(
     if let Err(err) = client
         .send_message(
             message_id.clone(),
-            to,
             conversation_id,
             ciphertext,
             signature,
             sender_device_id,
             sender_seq,
             Vec::new(),
+            payloads,
         )
         .await
     {
