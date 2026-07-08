@@ -268,10 +268,10 @@ pub async fn decrypt_message(
 }
 
 #[tauri::command]
-pub async fn sign_message(message: Vec<u8>, secret_key: Vec<u8>) -> Result<Vec<u8>, String> {
-    let sk: [u8; 32] = secret_key
+pub async fn sign_message(message: Vec<u8>, signing_key: Vec<u8>) -> Result<Vec<u8>, String> {
+    let sk: [u8; 64] = signing_key
         .try_into()
-        .map_err(|_| "Invalid secret key length")?;
+        .map_err(|_| "Invalid signing key length (expected 64-byte ed25519 secret key)")?;
     liteseal_shared::crypto::sign(&message, &sk).map_err(|e| format!("Signing failed: {}", e))
 }
 

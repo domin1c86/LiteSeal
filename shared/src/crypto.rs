@@ -49,15 +49,13 @@ pub fn generate_keypair() -> Result<KeyPair, CryptoError> {
         }
     }
 
+    // The signing keypair is independent of the encryption keypair: never
+    // reuse one secret across primitives.
     let mut ed_pk = [0u8; 32];
     let mut ed_sk = [0u8; 64];
 
     unsafe {
-        let result = libsodium_sys::crypto_sign_seed_keypair(
-            ed_pk.as_mut_ptr(),
-            ed_sk.as_mut_ptr(),
-            sk.as_ptr(),
-        );
+        let result = libsodium_sys::crypto_sign_keypair(ed_pk.as_mut_ptr(), ed_sk.as_mut_ptr());
         if result != 0 {
             return Err(CryptoError::InitError);
         }
@@ -137,22 +135,8 @@ pub fn decrypt(
     Ok(plaintext)
 }
 
-pub fn sign(message: &[u8], secret_key: &[u8; 32]) -> Result<Vec<u8>, CryptoError> {
+pub fn sign(message: &[u8], ed25519_sk: &[u8; 64]) -> Result<Vec<u8>, CryptoError> {
     init_sodium()?;
-
-    let mut ed_sk = [0u8; 64];
-    let mut ed_pk = [0u8; 32];
-
-    unsafe {
-        let result = libsodium_sys::crypto_sign_seed_keypair(
-            ed_pk.as_mut_ptr(),
-            ed_sk.as_mut_ptr(),
-            secret_key.as_ptr(),
-        );
-        if result != 0 {
-            return Err(CryptoError::SigningError);
-        }
-    }
 
     let mut signature = [0u8; 64];
 
@@ -162,7 +146,7 @@ pub fn sign(message: &[u8], secret_key: &[u8; 32]) -> Result<Vec<u8>, CryptoErro
             std::ptr::null_mut(),
             message.as_ptr(),
             message.len() as u64,
-            ed_sk.as_ptr(),
+            ed25519_sk.as_ptr(),
         );
         if result != 0 {
             return Err(CryptoError::SigningError);
@@ -170,38 +154,6 @@ pub fn sign(message: &[u8], secret_key: &[u8; 32]) -> Result<Vec<u8>, CryptoErro
     }
 
     Ok(signature.to_vec())
-}
-
-pub fn verify(
-    message: &[u8],
-    signature: &[u8],
-    secret_key: &[u8; 32],
-) -> Result<bool, CryptoError> {
-    init_sodium()?;
-
-    let mut ed_sk = [0u8; 64];
-    let mut ed_pk = [0u8; 32];
-
-    unsafe {
-        let result = libsodium_sys::crypto_sign_seed_keypair(
-            ed_pk.as_mut_ptr(),
-            ed_sk.as_mut_ptr(),
-            secret_key.as_ptr(),
-        );
-        if result != 0 {
-            return Err(CryptoError::VerificationError);
-        }
-    }
-
-    unsafe {
-        let result = libsodium_sys::crypto_sign_verify_detached(
-            signature.as_ptr(),
-            message.as_ptr(),
-            message.len() as u64,
-            ed_pk.as_ptr(),
-        );
-        Ok(result == 0)
-    }
 }
 
 pub fn verify_with_public_key(

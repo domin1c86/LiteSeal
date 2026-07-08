@@ -10,11 +10,12 @@ interface ChatProps {
   token: string;
   serverUrl: string;
   secretKey: number[];
+  signingKey: number[];
   contacts: Contact[];
   onContactsChanged: () => void;
 }
 
-export default function Chat({ conversationId, userId, deviceId, serverUrl, secretKey, contacts, onContactsChanged }: ChatProps) {
+export default function Chat({ conversationId, userId, deviceId, serverUrl, secretKey, signingKey, contacts, onContactsChanged }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -189,12 +190,12 @@ export default function Chat({ conversationId, userId, deviceId, serverUrl, secr
 
       // Local copy encrypted to the contact's stored key so history stays readable.
       const ciphertext = await encryptMessage(plaintext, contact.public_key, secretKey);
-      const signature = await signMessage(ciphertext, secretKey);
+      const signature = await signMessage(ciphertext, signingKey);
 
       const payloads = [];
       for (const device of devices) {
         const deviceCiphertext = await encryptMessage(plaintext, device.public_key, secretKey);
-        const deviceSignature = await signMessage(deviceCiphertext, secretKey);
+        const deviceSignature = await signMessage(deviceCiphertext, signingKey);
         payloads.push({
           recipient_user_id: conversationId,
           recipient_device_id: device.id,

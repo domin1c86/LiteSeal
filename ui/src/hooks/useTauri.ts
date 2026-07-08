@@ -172,9 +172,9 @@ export function useTauri() {
 
   async function signMessage(
     message: number[],
-    secretKey: number[]
+    signingKey: number[]
   ): Promise<number[]> {
-    return invoke<number[]>("sign_message", { message, secretKey });
+    return invoke<number[]>("sign_message", { message, signingKey });
   }
 
   async function verifyMessage(

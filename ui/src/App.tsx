@@ -149,6 +149,7 @@ export default function App() {
         token={session.token}
         serverUrl={session.serverUrl}
         secretKey={session.secretKey}
+        signingKey={session.ed25519Sk}
         contacts={contacts}
         onContactsChanged={refreshContacts}
       />

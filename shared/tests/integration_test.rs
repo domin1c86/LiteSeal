@@ -133,20 +133,10 @@ fn test_large_message_encryption() {
 // [S8.1] 签名模块测试
 
 #[test]
-fn test_sign_and_verify_flow() {
-    let alice = crypto::generate_keypair().unwrap();
-
-    let signature = crypto::sign(ALICE_MSG, &alice.secret_key).unwrap();
-    let valid = crypto::verify(ALICE_MSG, &signature, &alice.secret_key).unwrap();
-
-    assert!(valid);
-}
-
-#[test]
 fn test_sign_and_verify_with_public_key() {
     let alice = crypto::generate_keypair().unwrap();
 
-    let signature = crypto::sign(ALICE_MSG, &alice.secret_key).unwrap();
+    let signature = crypto::sign(ALICE_MSG, &alice.ed25519_sk).unwrap();
     let valid = crypto::verify_with_public_key(ALICE_MSG, &signature, &alice.ed25519_pk).unwrap();
 
     assert!(valid);
@@ -156,10 +146,10 @@ fn test_sign_and_verify_with_public_key() {
 fn test_tampered_message_fails_signature_verification() {
     let alice = crypto::generate_keypair().unwrap();
 
-    let signature = crypto::sign(ALICE_MSG, &alice.secret_key).unwrap();
+    let signature = crypto::sign(ALICE_MSG, &alice.ed25519_sk).unwrap();
 
     let tampered_msg = b"This is NOT the original message";
-    let valid = crypto::verify(tampered_msg, &signature, &alice.secret_key).unwrap();
+    let valid = crypto::verify_with_public_key(tampered_msg, &signature, &alice.ed25519_pk).unwrap();
 
     assert!(!valid);
 }
@@ -168,10 +158,10 @@ fn test_tampered_message_fails_signature_verification() {
 fn test_tampered_signature_fails_verification() {
     let alice = crypto::generate_keypair().unwrap();
 
-    let mut signature = crypto::sign(ALICE_MSG, &alice.secret_key).unwrap();
+    let mut signature = crypto::sign(ALICE_MSG, &alice.ed25519_sk).unwrap();
     signature[0] ^= 0xFF;
 
-    let valid = crypto::verify(ALICE_MSG, &signature, &alice.secret_key).unwrap();
+    let valid = crypto::verify_with_public_key(ALICE_MSG, &signature, &alice.ed25519_pk).unwrap();
 
     assert!(!valid);
 }
@@ -184,7 +174,7 @@ fn test_message_serialization_roundtrip() {
     let bob = crypto::generate_keypair().unwrap();
 
     let ciphertext = crypto::encrypt(ALICE_MSG, &bob.public_key, &alice.secret_key).unwrap();
-    let signature = crypto::sign(&ciphertext, &alice.secret_key).unwrap();
+    let signature = crypto::sign(&ciphertext, &alice.ed25519_sk).unwrap();
 
     let msg = Message {
         id: "msg-001".to_string(),
@@ -213,10 +203,10 @@ fn test_message_serialization_roundtrip() {
         crypto::decrypt(&deserialized.ciphertext, &alice.public_key, &bob.secret_key).unwrap();
     assert_eq!(decrypted, ALICE_MSG);
 
-    let sig_valid = crypto::verify(
+    let sig_valid = crypto::verify_with_public_key(
         &deserialized.ciphertext,
         &deserialized.signature,
-        &alice.secret_key,
+        &alice.ed25519_pk,
     )
     .unwrap();
     assert!(sig_valid);
@@ -232,7 +222,7 @@ fn test_end_to_end_encrypted_message_delivery() {
     let plaintext = b"Top secret: meeting at 3pm";
 
     let ciphertext = crypto::encrypt(plaintext, &bob.public_key, &alice.secret_key).unwrap();
-    let signature = crypto::sign(&ciphertext, &alice.secret_key).unwrap();
+    let signature = crypto::sign(&ciphertext, &alice.ed25519_sk).unwrap();
 
     let msg = Message {
         id: "msg-e2e-001".to_string(),
@@ -269,7 +259,7 @@ fn test_relay_tampering_detected_by_signature() {
     let bob = crypto::generate_keypair().unwrap();
 
     let ciphertext = crypto::encrypt(ALICE_MSG, &bob.public_key, &alice.secret_key).unwrap();
-    let signature = crypto::sign(&ciphertext, &alice.secret_key).unwrap();
+    let signature = crypto::sign(&ciphertext, &alice.ed25519_sk).unwrap();
 
     let mut msg = Message {
         id: "msg-tamper-001".to_string(),
@@ -315,7 +305,7 @@ fn test_multiple_messages_in_conversation() {
 
     for (i, plaintext) in messages.iter().enumerate() {
         let ciphertext = crypto::encrypt(plaintext, &bob.public_key, &alice.secret_key).unwrap();
-        let signature = crypto::sign(&ciphertext, &alice.secret_key).unwrap();
+        let signature = crypto::sign(&ciphertext, &alice.ed25519_sk).unwrap();
 
         let msg = Message {
             id: format!("msg-multi-{}", i),
@@ -359,7 +349,7 @@ fn test_complete_message_lifecycle() {
 
     let ciphertext = crypto::encrypt(plaintext, &bob.public_key, &alice.secret_key).unwrap();
 
-    let signature = crypto::sign(&ciphertext, &alice.secret_key).unwrap();
+    let signature = crypto::sign(&ciphertext, &alice.ed25519_sk).unwrap();
 
     let msg = Message {
         id: "msg-lifecycle-001".to_string(),
