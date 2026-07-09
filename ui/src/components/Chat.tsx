@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useTauri } from "../hooks/useTauri";
 import { dmConversationId } from "../lib/conversation";
+import { trustLabel } from "./ContactList";
 import type { RelayBatch } from "../App";
 import type { Message, IncomingMessage, Contact, RelayEvent } from "../types";
 
@@ -239,7 +240,8 @@ export default function Chat({ conversationId, userId, deviceId, serverUrl, secr
   if (!conversationId) {
     return (
       <div style={styles.empty}>
-        <p style={styles.emptyText}>Select a conversation</p>
+        <p style={styles.emptyText}>no conversation selected</p>
+        <p style={styles.emptyHint}>messages are end-to-end encrypted</p>
       </div>
     );
   }
@@ -250,15 +252,20 @@ export default function Chat({ conversationId, userId, deviceId, serverUrl, secr
         <div style={styles.headerInner}>
           <div style={styles.headerText}>
             <span style={styles.headerTitle}>{activeContact?.username ?? "Conversation"}</span>
-            <span style={styles.headerMeta}>
+            <span
+              style={{
+                ...styles.headerMeta,
+                color: activeContact ? trustLabel(activeContact).color : "var(--text-subtle)",
+              }}
+            >
               {activeContact
-                ? `${activeContact.trust_state === "verified" ? "Verified" : activeContact.key_changed ? "Key changed" : "Unverified"}${activeContact.fingerprint ? ` · ${activeContact.fingerprint.match(/.{1,4}/g)?.join(" ")}` : ""}`
-                : "End-to-end encrypted"}
+                ? `${trustLabel(activeContact).text}${activeContact.fingerprint ? ` · ${activeContact.fingerprint.match(/.{1,4}/g)?.join(" ")}` : ""}`
+                : "end-to-end encrypted"}
             </span>
           </div>
           {activeContact && (
             <button
-              className="secondary-button"
+              className="outline-button"
               style={styles.verifyBtn}
               onClick={async () => {
                 await setContactTrust(
@@ -274,7 +281,7 @@ export default function Chat({ conversationId, userId, deviceId, serverUrl, secr
         </div>
       </div>
       <div className="chat-messages" style={styles.messages}>
-        {loading && <p style={styles.loadingText}>Loading...</p>}
+        {loading && <p style={styles.loadingText}>loading…</p>}
         {messages.map((msg) => {
           const isMine = msg.sender_id === userId;
           let text = "";
@@ -313,10 +320,11 @@ export default function Chat({ conversationId, userId, deviceId, serverUrl, secr
       </div>
       {sendError && <div style={styles.sendError}>{sendError}</div>}
       <form className="chat-composer" onSubmit={handleSend} style={styles.inputBar}>
+        <span style={styles.prompt}>›</span>
         <input
           className="composer-input"
           type="text"
-          placeholder="Type a message..."
+          placeholder="type a message…"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           style={styles.input}
@@ -345,13 +353,23 @@ const styles: Record<string, React.CSSProperties> = {
   empty: {
     flex: 1,
     display: "flex",
+    flexDirection: "column",
     alignItems: "center",
     justifyContent: "center",
+    gap: "0px",
     backgroundColor: "var(--workspace-bg)",
   },
   emptyText: {
+    fontFamily: "var(--font-mono)",
+    color: "var(--text-muted)",
+    fontSize: "15px",
+    margin: 0,
+  },
+  emptyHint: {
+    fontFamily: "var(--font-mono)",
     color: "var(--text-subtle)",
-    fontSize: "16px",
+    fontSize: "12px",
+    margin: "8px 0 0",
   },
   header: {
     minHeight: "58px",
@@ -382,19 +400,19 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 600,
   },
   headerMeta: {
-    color: "var(--accent)",
-    fontSize: "12px",
+    fontFamily: "var(--font-mono)",
+    fontSize: "11.5px",
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
   },
   verifyBtn: {
     flexShrink: 0,
-    border: "1px solid var(--border)",
-    backgroundColor: "var(--surface-muted)",
-    color: "var(--text)",
-    borderRadius: "8px",
-    padding: "6px 10px",
+    border: "1px solid var(--border-strong)",
+    backgroundColor: "transparent",
+    color: "var(--text-muted)",
+    borderRadius: "var(--radius-md)",
+    padding: "6px 12px",
     cursor: "pointer",
     fontSize: "12px",
   },
@@ -410,7 +428,9 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "12px",
   },
   loadingText: {
-    color: "var(--text-muted)",
+    fontFamily: "var(--font-mono)",
+    color: "var(--text-subtle)",
+    fontSize: "12px",
     textAlign: "center",
   },
   messageRow: {
@@ -419,7 +439,7 @@ const styles: Record<string, React.CSSProperties> = {
   bubble: {
     maxWidth: "72%",
     padding: "10px 13px",
-    borderRadius: "16px",
+    borderRadius: "12px",
     display: "flex",
     flexDirection: "column",
     gap: "4px",
@@ -427,20 +447,21 @@ const styles: Record<string, React.CSSProperties> = {
   },
   bubbleMine: {
     backgroundColor: "var(--accent)",
-    color: "white",
-    borderBottomRightRadius: "6px",
+    color: "var(--accent-contrast)",
+    borderBottomRightRadius: "4px",
   },
   bubbleTheirs: {
-    backgroundColor: "var(--surface-muted)",
+    backgroundColor: "var(--surface)",
     color: "var(--text)",
     borderColor: "var(--border)",
-    borderBottomLeftRadius: "6px",
+    borderBottomLeftRadius: "4px",
   },
   messageText: {
     fontSize: "14px",
     wordBreak: "break-word",
   },
   timestamp: {
+    fontFamily: "var(--font-mono)",
     fontSize: "10px",
     opacity: 0.7,
     alignSelf: "flex-end",
@@ -449,8 +470,9 @@ const styles: Record<string, React.CSSProperties> = {
     width: "calc(100% - 48px)",
     maxWidth: "840px",
     margin: "0 auto 8px",
+    fontFamily: "var(--font-mono)",
     color: "var(--danger)",
-    fontSize: "13px",
+    fontSize: "12px",
   },
   inputBar: {
     display: "flex",
@@ -458,12 +480,18 @@ const styles: Record<string, React.CSSProperties> = {
     width: "calc(100% - 48px)",
     maxWidth: "840px",
     margin: "0 auto 20px",
-    padding: "8px 8px 8px 16px",
+    padding: "8px 8px 8px 14px",
     border: "1px solid var(--border-strong)",
     borderRadius: "var(--composer-radius)",
     gap: "10px",
     backgroundColor: "var(--surface)",
     boxShadow: "var(--shadow-composer)",
+  },
+  prompt: {
+    fontFamily: "var(--font-mono)",
+    color: "var(--text-subtle)",
+    fontSize: "14px",
+    flexShrink: 0,
   },
   input: {
     flex: 1,
@@ -476,12 +504,12 @@ const styles: Record<string, React.CSSProperties> = {
     minWidth: 0,
   },
   sendBtn: {
-    padding: "9px 16px",
-    borderRadius: "18px",
+    padding: "8px 16px",
+    borderRadius: "var(--radius-md)",
     border: "none",
     backgroundColor: "var(--accent)",
-    color: "white",
-    fontSize: "14px",
+    color: "var(--accent-contrast)",
+    fontSize: "13px",
     cursor: "pointer",
     fontWeight: 600,
     flexShrink: 0,

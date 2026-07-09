@@ -9,6 +9,16 @@ interface ContactListProps {
   onLogout: () => void;
 }
 
+export function trustLabel(contact: Contact): { text: string; color: string } {
+  if (contact.trust_state === "verified") {
+    return { text: "✓ verified", color: "var(--ok)" };
+  }
+  if (contact.trust_state === "key_changed" || contact.key_changed) {
+    return { text: "⚠ key changed", color: "var(--warn)" };
+  }
+  return { text: "unverified", color: "var(--text-subtle)" };
+}
+
 export default function ContactList({
   contacts,
   activeConversation,
@@ -20,12 +30,14 @@ export default function ContactList({
   return (
     <div className="contact-sidebar" style={styles.container}>
       <div style={styles.header}>
-        <h3 className="contact-sidebar-title" style={styles.heading}>Contacts</h3>
+        <span className="contact-sidebar-title" style={styles.wordmark}>
+          liteseal<span style={styles.wordmarkCursor}>▌</span>
+        </span>
         <div style={styles.headerBtns}>
           <button className="icon-button" style={styles.iconBtn} onClick={onStorageClick} title="Storage">
             ⚙
           </button>
-          <button className="primary-button" style={styles.addBtn} onClick={onAddClick}>
+          <button className="primary-button" style={styles.addBtn} onClick={onAddClick} title="Add contact">
             +
           </button>
           <button className="icon-button" style={styles.iconBtn} onClick={onLogout} title="Logout">
@@ -34,10 +46,11 @@ export default function ContactList({
         </div>
       </div>
       {contacts.length === 0 && (
-        <p style={styles.empty}>No contacts yet</p>
+        <p style={styles.empty}>no contacts yet</p>
       )}
       {contacts.map((contact) => {
         const isActive = contact.user_id === activeConversation;
+        const trust = trustLabel(contact);
         return (
           <div
             className="contact-row"
@@ -48,18 +61,12 @@ export default function ContactList({
             }}
             onClick={() => onSelect(contact.user_id)}
           >
-            <div style={styles.avatar}>
+            <div style={{ ...styles.avatar, ...(isActive ? styles.avatarActive : {}) }}>
               {contact.username.charAt(0).toUpperCase()}
             </div>
             <div style={styles.info}>
               <span className="contact-name" style={styles.name}>{contact.username}</span>
-              <span style={styles.trust}>
-                {contact.trust_state === "verified"
-                  ? "Verified"
-                  : contact.trust_state === "key_changed" || contact.key_changed
-                    ? "Key changed"
-                    : "Unverified"}
-              </span>
+              <span style={{ ...styles.trust, color: trust.color }}>{trust.text}</span>
             </div>
           </div>
         );
@@ -85,24 +92,29 @@ const styles: Record<string, React.CSSProperties> = {
     minHeight: "58px",
     padding: "0 14px 0 18px",
     borderBottom: "1px solid var(--border)",
+    flexShrink: 0,
   },
-  heading: {
-    margin: 0,
-    color: "var(--text-muted)",
-    fontSize: "14px",
+  wordmark: {
+    fontFamily: "var(--font-mono)",
+    fontSize: "15px",
     fontWeight: 600,
-    letterSpacing: 0,
+    letterSpacing: "-0.01em",
+    color: "var(--text)",
+  },
+  wordmarkCursor: {
+    color: "var(--text-subtle)",
+    fontWeight: 400,
   },
   headerBtns: {
     display: "flex",
-    gap: "8px",
+    gap: "6px",
   },
   iconBtn: {
-    width: "24px",
-    height: "24px",
-    borderRadius: "50%",
-    border: "1px solid var(--border)",
-    backgroundColor: "var(--surface-muted)",
+    width: "26px",
+    height: "26px",
+    borderRadius: "var(--radius-sm)",
+    border: "none",
+    backgroundColor: "transparent",
     color: "var(--text-muted)",
     fontSize: "13px",
     cursor: "pointer",
@@ -113,13 +125,13 @@ const styles: Record<string, React.CSSProperties> = {
     padding: 0,
   },
   addBtn: {
-    width: "24px",
-    height: "24px",
-    borderRadius: "50%",
+    width: "26px",
+    height: "26px",
+    borderRadius: "var(--radius-sm)",
     border: "none",
     backgroundColor: "var(--accent)",
-    color: "white",
-    fontSize: "16px",
+    color: "var(--accent-contrast)",
+    fontSize: "15px",
     cursor: "pointer",
     display: "flex",
     alignItems: "center",
@@ -128,8 +140,9 @@ const styles: Record<string, React.CSSProperties> = {
     padding: 0,
   },
   empty: {
+    fontFamily: "var(--font-mono)",
     color: "var(--text-subtle)",
-    fontSize: "13px",
+    fontSize: "12px",
     textAlign: "center",
     marginTop: "20px",
   },
@@ -139,25 +152,33 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "9px 12px",
     margin: "6px 8px 0",
     borderRadius: "var(--radius-md)",
+    borderLeft: "2px solid transparent",
     cursor: "pointer",
     gap: "10px",
     transition: "background-color 0.15s",
   },
   itemActive: {
     backgroundColor: "var(--surface-active)",
+    borderLeftColor: "var(--text)",
   },
   avatar: {
-    width: "36px",
-    height: "36px",
-    borderRadius: "50%",
+    width: "34px",
+    height: "34px",
+    borderRadius: "var(--radius-md)",
     backgroundColor: "var(--accent-soft)",
+    border: "1px solid var(--border)",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    color: "var(--accent)",
+    color: "var(--text-muted)",
+    fontFamily: "var(--font-mono)",
     fontWeight: 600,
-    fontSize: "14px",
+    fontSize: "13px",
     flexShrink: 0,
+  },
+  avatarActive: {
+    color: "var(--text)",
+    borderColor: "var(--border-strong)",
   },
   info: {
     overflow: "hidden",
@@ -173,8 +194,8 @@ const styles: Record<string, React.CSSProperties> = {
     textOverflow: "ellipsis",
   },
   trust: {
-    color: "var(--text-subtle)",
-    fontSize: "11px",
+    fontFamily: "var(--font-mono)",
+    fontSize: "10.5px",
     whiteSpace: "nowrap",
     overflow: "hidden",
     textOverflow: "ellipsis",

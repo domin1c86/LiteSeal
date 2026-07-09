@@ -98,8 +98,10 @@ export default function Login({ onLogin }: LoginProps) {
   return (
     <div style={styles.container}>
       <div style={styles.card}>
-        <h1 style={styles.title}>LiteSeal</h1>
-        <p style={styles.subtitle}>Secure Messaging</p>
+        <h1 style={styles.title}>
+          liteseal<span style={styles.titleCursor}>▌</span>
+        </h1>
+        <p style={styles.subtitle}>end-to-end encrypted messaging</p>
         <div style={styles.segmented}>
           <button
             type="button"
@@ -169,7 +171,7 @@ const styles: Record<string, React.CSSProperties> = {
   card: {
     padding: "36px",
     borderRadius: "var(--radius-lg)",
-    backgroundColor: "var(--surface)",
+    backgroundColor: "var(--sidebar-bg)",
     border: "1px solid var(--border)",
     boxShadow: "var(--shadow-modal)",
     width: "min(380px, 100%)",
@@ -177,15 +179,22 @@ const styles: Record<string, React.CSSProperties> = {
   },
   title: {
     margin: 0,
-    fontSize: "24px",
+    fontFamily: "var(--font-mono)",
+    fontSize: "22px",
     fontWeight: 600,
+    letterSpacing: "-0.01em",
     color: "var(--text)",
   },
+  titleCursor: {
+    color: "var(--text-subtle)",
+    fontWeight: 400,
+  },
   subtitle: {
-    color: "var(--text-muted)",
-    marginTop: "4px",
+    fontFamily: "var(--font-mono)",
+    color: "var(--text-subtle)",
+    marginTop: "8px",
     marginBottom: "28px",
-    fontSize: "14px",
+    fontSize: "12px",
   },
   form: {
     display: "flex",
@@ -198,28 +207,29 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "6px",
     padding: "4px",
     borderRadius: "var(--radius-md)",
+    border: "1px solid var(--border)",
     backgroundColor: "var(--surface-muted)",
     marginBottom: "18px",
   },
   segment: {
-    border: "none",
+    border: "1px solid transparent",
     borderRadius: "var(--radius-sm)",
     padding: "8px 10px",
     backgroundColor: "transparent",
     color: "var(--text-muted)",
     cursor: "pointer",
+    fontSize: "13px",
     fontWeight: 600,
   },
   segmentActive: {
-    backgroundColor: "var(--surface)",
+    backgroundColor: "var(--surface-active)",
     color: "var(--text)",
-    border: "1px solid var(--border)",
   },
   input: {
     padding: "11px 13px",
     borderRadius: "var(--radius-md)",
     border: "1px solid var(--border-strong)",
-    backgroundColor: "var(--surface)",
+    backgroundColor: "var(--surface-muted)",
     color: "var(--text)",
     fontSize: "14px",
     outline: "none",
@@ -229,14 +239,15 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "var(--radius-md)",
     border: "none",
     backgroundColor: "var(--accent)",
-    color: "white",
+    color: "var(--accent-contrast)",
     fontSize: "14px",
     cursor: "pointer",
     fontWeight: 600,
   },
   error: {
+    fontFamily: "var(--font-mono)",
     color: "var(--danger)",
-    fontSize: "13px",
+    fontSize: "12px",
     margin: 0,
   },
 };

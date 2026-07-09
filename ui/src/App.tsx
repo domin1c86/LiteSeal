@@ -149,7 +149,9 @@ export default function App() {
   if (loading) {
     return (
       <div style={styles.loading}>
-        Loading...
+        <span style={styles.loadingWordmark}>
+          liteseal<span style={styles.loadingCursor}>▌</span>
+        </span>
       </div>
     );
   }
@@ -203,7 +205,17 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: "center",
     height: "100vh",
     backgroundColor: "var(--workspace-bg)",
+  },
+  loadingWordmark: {
+    fontFamily: "var(--font-mono)",
+    fontSize: "18px",
+    fontWeight: 600,
+    letterSpacing: "-0.01em",
     color: "var(--text-muted)",
+  },
+  loadingCursor: {
+    color: "var(--text-subtle)",
+    fontWeight: 400,
   },
   layout: {
     display: "flex",
