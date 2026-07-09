@@ -1,54 +1,63 @@
 :root {
-  color-scheme: light;
+  color-scheme: dark;
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
     "Segoe UI", sans-serif;
-  --app-bg: #ffffff;
-  --workspace-bg: #ffffff;
-  --sidebar-bg: #f7f7f8;
-  --surface: #ffffff;
-  --surface-muted: #f7f7f8;
-  --surface-hover: #f1f1f3;
-  --surface-active: #ececf1;
-  --border: #e5e5e5;
-  --border-strong: #d9d9e3;
-  --text: #0d0d0d;
-  --text-muted: #6b7280;
-  --text-subtle: #8e8ea0;
-  --accent: #10a37f;
-  --accent-hover: #0d8f6f;
-  --accent-soft: rgba(16, 163, 127, 0.12);
-  --danger: #d92d20;
-  --shadow-modal: 0 12px 36px rgba(0, 0, 0, 0.1);
-  --shadow-composer: 0 4px 20px rgba(0, 0, 0, 0.06);
-  --overlay: rgba(0, 0, 0, 0.28);
+  --app-bg: #0f0f0f;
+  --workspace-bg: #0f0f0f;
+  --sidebar-bg: #161616;
+  --surface: #1c1c1c;
+  --surface-muted: #191919;
+  --surface-hover: #222222;
+  --surface-active: #262626;
+  --border: #262626;
+  --border-strong: #363636;
+  --text: #ececec;
+  --text-muted: #a3a3a3;
+  --text-subtle: #6f6f6f;
+  --accent: #ececec;
+  --accent-hover: #ffffff;
+  --accent-soft: rgba(255, 255, 255, 0.07);
+  --accent-contrast: #0f0f0f;
+  --ok: #62b47a;
+  --warn: #d4a054;
+  --danger: #e5484d;
+  --shadow-modal: 0 16px 48px rgba(0, 0, 0, 0.55);
+  --shadow-composer: 0 4px 20px rgba(0, 0, 0, 0.25);
+  --overlay: rgba(0, 0, 0, 0.65);
   --radius-sm: 6px;
   --radius-md: 8px;
-  --radius-lg: 10px;
-  --composer-radius: 24px;
+  --radius-lg: 12px;
+  --composer-radius: 12px;
+  --font-mono: ui-monospace, "Cascadia Code", "JetBrains Mono", Consolas,
+    monospace;
 }
 
-@media (prefers-color-scheme: dark) {
+@media (prefers-color-scheme: light) {
   :root {
-    color-scheme: dark;
-    --app-bg: #212121;
-    --workspace-bg: #212121;
-    --sidebar-bg: #171717;
-    --surface: #2f2f2f;
-    --surface-muted: #262626;
-    --surface-hover: #303030;
-    --surface-active: #343541;
-    --border: #3a3a3a;
-    --border-strong: #4a4a4a;
-    --text: #ececec;
-    --text-muted: #b4b4b4;
-    --text-subtle: #8f8f8f;
-    --accent-hover: #13b88d;
-    --accent-soft: rgba(16, 163, 127, 0.18);
-    --danger: #ff6b5f;
-    --shadow-modal: 0 14px 42px rgba(0, 0, 0, 0.32);
-    --shadow-composer: 0 4px 24px rgba(0, 0, 0, 0.24);
-    --overlay: rgba(0, 0, 0, 0.54);
+    color-scheme: light;
+    --app-bg: #ffffff;
+    --workspace-bg: #ffffff;
+    --sidebar-bg: #f7f7f7;
+    --surface: #ffffff;
+    --surface-muted: #f2f2f2;
+    --surface-hover: #ededed;
+    --surface-active: #e6e6e6;
+    --border: #e5e5e5;
+    --border-strong: #d4d4d4;
+    --text: #171717;
+    --text-muted: #666666;
+    --text-subtle: #999999;
+    --accent: #171717;
+    --accent-hover: #000000;
+    --accent-soft: rgba(0, 0, 0, 0.05);
+    --accent-contrast: #ffffff;
+    --ok: #1e9e50;
+    --warn: #b07c33;
+    --danger: #d13438;
+    --shadow-modal: 0 12px 36px rgba(0, 0, 0, 0.12);
+    --shadow-composer: 0 4px 20px rgba(0, 0, 0, 0.06);
+    --overlay: rgba(0, 0, 0, 0.35);
   }
 }
 
@@ -86,8 +95,15 @@ button:disabled {
 }
 
 .icon-button:hover,
-.neutral-button:hover:not(:disabled) {
-  background-color: var(--surface-active);
+.neutral-button:hover:not(:disabled),
+.outline-button:hover:not(:disabled) {
+  background-color: var(--surface-hover);
+  color: var(--text);
+}
+
+.sidebar-tab:hover:not(:disabled) {
+  background-color: var(--surface-hover);
+  color: var(--text-muted);
 }
 
 .primary-button:hover:not(:disabled),
@@ -98,6 +114,14 @@ button:disabled {
 .form-input::placeholder,
 .composer-input::placeholder {
   color: var(--text-subtle);
+}
+
+.form-input:focus {
+  border-color: var(--text-subtle);
+}
+
+.chat-composer:focus-within {
+  border-color: var(--text-subtle);
 }
 
 @media (max-width: 720px) {
