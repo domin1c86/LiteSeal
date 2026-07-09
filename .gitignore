@@ -24,6 +24,7 @@ src-tauri/gen/
 # Project docs (managed separately)
 docs/
 plan-book.md
+deisng-preview.html
 design-architecture.html
 
 # AI
