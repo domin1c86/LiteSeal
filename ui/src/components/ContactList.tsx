@@ -1,8 +1,12 @@
 import type { Contact } from "../types";
 
+export type SidebarTab = "chats" | "contacts";
+
 interface ContactListProps {
   contacts: Contact[];
   activeConversation: string | null;
+  tab: SidebarTab;
+  onTabChange: (tab: SidebarTab) => void;
   onSelect: (contactId: string) => void;
   onAddClick: () => void;
   onStorageClick: () => void;
@@ -22,6 +26,8 @@ export function trustLabel(contact: Contact): { text: string; color: string } {
 export default function ContactList({
   contacts,
   activeConversation,
+  tab,
+  onTabChange,
   onSelect,
   onAddClick,
   onStorageClick,
@@ -44,6 +50,22 @@ export default function ContactList({
             ⏻
           </button>
         </div>
+      </div>
+      <div style={styles.tabs}>
+        <button
+          className="sidebar-tab"
+          style={{ ...styles.tab, ...(tab === "chats" ? styles.tabActive : {}) }}
+          onClick={() => onTabChange("chats")}
+        >
+          chats
+        </button>
+        <button
+          className="sidebar-tab"
+          style={{ ...styles.tab, ...(tab === "contacts" ? styles.tabActive : {}) }}
+          onClick={() => onTabChange("contacts")}
+        >
+          contacts
+        </button>
       </div>
       {contacts.length === 0 && (
         <p style={styles.empty}>no contacts yet</p>
@@ -108,6 +130,29 @@ const styles: Record<string, React.CSSProperties> = {
   headerBtns: {
     display: "flex",
     gap: "6px",
+  },
+  tabs: {
+    display: "flex",
+    gap: "4px",
+    padding: "8px 10px",
+    borderBottom: "1px solid var(--border)",
+    flexShrink: 0,
+  },
+  tab: {
+    flex: 1,
+    fontFamily: "var(--font-mono)",
+    fontSize: "11.5px",
+    padding: "6px 0",
+    border: "none",
+    borderRadius: "var(--radius-sm)",
+    backgroundColor: "transparent",
+    color: "var(--text-subtle)",
+    cursor: "pointer",
+    textTransform: "lowercase",
+  },
+  tabActive: {
+    backgroundColor: "var(--surface-active)",
+    color: "var(--text)",
   },
   iconBtn: {
     width: "26px",

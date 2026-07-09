@@ -2,9 +2,11 @@ import { useState, useEffect } from "react";
 import Login from "./components/Login";
 import Chat from "./components/Chat";
 import ContactList from "./components/ContactList";
+import ContactDetail from "./components/ContactDetail";
 import AddContact from "./components/AddContact";
 import StorageManager from "./components/StorageManager";
 import { useTauri } from "./hooks/useTauri";
+import type { SidebarTab } from "./components/ContactList";
 import type { RegisterResult, Contact, IncomingMessage, RelayEvent } from "./types";
 
 export interface RelayBatch {
@@ -31,6 +33,8 @@ export default function App() {
   const [activeConversation, setActiveConversation] = useState<string | null>(
     null
   );
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab>("chats");
+  const [selectedContact, setSelectedContact] = useState<string | null>(null);
   const [showAddContact, setShowAddContact] = useState(false);
   const [showStorage, setShowStorage] = useState(false);
   const { getContacts, loadKeypair, saveKeypair, refreshSession, connectRelay, clearKeypair, disconnect, pollMessages } = useTauri();
@@ -126,6 +130,8 @@ export default function App() {
     setSession(null);
     setContacts([]);
     setActiveConversation(null);
+    setSelectedContact(null);
+    setSidebarTab("chats");
   }
 
   function refreshContacts() {
@@ -160,28 +166,51 @@ export default function App() {
     return <Login onLogin={handleLogin} />;
   }
 
+  const detailContact = contacts.find((c) => c.user_id === selectedContact) ?? null;
+
   return (
     <div className="app-shell" style={styles.layout}>
       <ContactList
         contacts={contacts}
-        activeConversation={activeConversation}
-        onSelect={setActiveConversation}
+        activeConversation={sidebarTab === "chats" ? activeConversation : selectedContact}
+        tab={sidebarTab}
+        onTabChange={setSidebarTab}
+        onSelect={(id) =>
+          sidebarTab === "chats" ? setActiveConversation(id) : setSelectedContact(id)
+        }
         onAddClick={() => setShowAddContact(true)}
         onStorageClick={() => setShowStorage(true)}
         onLogout={handleLogout}
       />
-      <Chat
-        conversationId={activeConversation}
-        userId={session.user_id}
-        deviceId={session.deviceId}
-        token={session.token}
-        serverUrl={session.serverUrl}
-        secretKey={session.secretKey}
-        signingKey={session.ed25519Sk}
-        contacts={contacts}
-        relayBatch={relayBatch}
-        onContactsChanged={refreshContacts}
-      />
+      {sidebarTab === "contacts" ? (
+        detailContact ? (
+          <ContactDetail
+            contact={detailContact}
+            onMessage={() => {
+              setActiveConversation(detailContact.user_id);
+              setSidebarTab("chats");
+            }}
+            onContactsChanged={refreshContacts}
+          />
+        ) : (
+          <div style={styles.contactsEmpty}>
+            <p style={styles.contactsEmptyText}>no contact selected</p>
+          </div>
+        )
+      ) : (
+        <Chat
+          conversationId={activeConversation}
+          userId={session.user_id}
+          deviceId={session.deviceId}
+          token={session.token}
+          serverUrl={session.serverUrl}
+          secretKey={session.secretKey}
+          signingKey={session.ed25519Sk}
+          contacts={contacts}
+          relayBatch={relayBatch}
+          onContactsChanged={refreshContacts}
+        />
+      )}
       {showAddContact && (
         <AddContact
           serverUrl={session.serverUrl}
@@ -223,5 +252,17 @@ const styles: Record<string, React.CSSProperties> = {
     overflow: "hidden",
     backgroundColor: "var(--workspace-bg)",
     color: "var(--text)",
+  },
+  contactsEmpty: {
+    flex: 1,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "var(--workspace-bg)",
+  },
+  contactsEmptyText: {
+    fontFamily: "var(--font-mono)",
+    color: "var(--text-subtle)",
+    fontSize: "13px",
   },
 };
