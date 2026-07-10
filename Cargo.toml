@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "shared",
+    "core",
     "src-tauri",
     "server",
 ]
