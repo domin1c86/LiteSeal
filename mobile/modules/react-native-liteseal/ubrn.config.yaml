@@ -1,0 +1,22 @@
+# uniffi-bindgen-react-native configuration.
+# The Rust workspace lives at the repo root; bindings come from liteseal-core
+# built with the `ffi` feature.
+rust:
+  directory: ../../..
+  manifestPath: core/Cargo.toml
+
+bindings:
+  cpp: cpp/generated
+  ts: src/generated
+
+android:
+  directory: ./android
+  cargoExtras:
+    - --features
+    - ffi
+  # arm64 for real devices, x86_64 for the emulator; add armeabi-v7a for
+  # older phones if needed.
+  targets:
+    - arm64-v8a
+    - x86_64
+  apiLevel: 24

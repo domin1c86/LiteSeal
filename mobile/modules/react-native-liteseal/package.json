@@ -1,0 +1,52 @@
+{
+  "name": "react-native-liteseal",
+  "version": "0.1.0",
+  "description": "LiteSeal shared Rust core bindings (uniffi turbo-module, Android)",
+  "main": "./src/index.tsx",
+  "types": "./src/index.tsx",
+  "files": [
+    "src",
+    "android",
+    "cpp",
+    "react-native.config.js",
+    "!android/build",
+    "!android/local.properties"
+  ],
+  "scripts": {
+    "ubrn:android": "ubrn build android --config ubrn.config.yaml --and-generate",
+    "ubrn:clean": "rm -rf cpp/ android/CMakeLists.txt android/build.gradle android/cpp-adapter.cpp android/src src/Native* src/index.tsx src/generated/",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "react-native",
+    "android"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Domin1c/LiteSeal.git"
+  },
+  "author": "Domin1c <rgyg469k25@privaterelay.appleid.com> (https://github.com/Domin1c)",
+  "license": "MIT",
+  "private": true,
+  "dependencies": {
+    "@ubjs/core": "^0.31.0-3",
+    "uniffi-bindgen-react-native": "^0.31.0-3"
+  },
+  "peerDependencies": {
+    "react": "*",
+    "react-native": "*"
+  },
+  "codegenConfig": {
+    "name": "LitesealSpec",
+    "type": "modules",
+    "jsSrcsDir": "src",
+    "outputDir": {
+      "ios": "ios/generated",
+      "android": "android/generated"
+    },
+    "android": {
+      "javaPackageName": "com.liteseal"
+    },
+    "includesGeneratedCode": true
+  }
+}
