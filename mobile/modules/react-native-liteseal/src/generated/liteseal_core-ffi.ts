@@ -196,6 +196,10 @@ interface NativeModuleInterface {
     serverUrl: Uint8Array,
     userId: Uint8Array,
   ): bigint;
+  ubrn_uniffi_liteseal_core_fn_func_key_fingerprint(
+    key: Uint8Array,
+    uniffi_out_err: UniffiRustCallStatus,
+  ): Uint8Array;
   ubrn_uniffi_liteseal_core_fn_func_login(
     username: Uint8Array,
     password: Uint8Array,
@@ -305,6 +309,7 @@ interface NativeModuleInterface {
   ubrn_uniffi_liteseal_core_checksum_func_encrypt_message(): number;
   ubrn_uniffi_liteseal_core_checksum_func_generate_keypair(): number;
   ubrn_uniffi_liteseal_core_checksum_func_get_user_devices(): number;
+  ubrn_uniffi_liteseal_core_checksum_func_key_fingerprint(): number;
   ubrn_uniffi_liteseal_core_checksum_func_login(): number;
   ubrn_uniffi_liteseal_core_checksum_func_refresh_session(): number;
   ubrn_uniffi_liteseal_core_checksum_func_register(): number;

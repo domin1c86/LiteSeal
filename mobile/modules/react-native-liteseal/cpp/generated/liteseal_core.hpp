@@ -42,6 +42,7 @@ class NativeLitesealCore : public jsi::HostObject {
     jsi::Value cpp_uniffi_liteseal_core_fn_func_encrypt_message(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);
     jsi::Value cpp_uniffi_liteseal_core_fn_func_generate_keypair(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);
     jsi::Value cpp_uniffi_liteseal_core_fn_func_get_user_devices(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);
+    jsi::Value cpp_uniffi_liteseal_core_fn_func_key_fingerprint(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);
     jsi::Value cpp_uniffi_liteseal_core_fn_func_login(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);
     jsi::Value cpp_uniffi_liteseal_core_fn_func_refresh_session(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);
     jsi::Value cpp_uniffi_liteseal_core_fn_func_register(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);
@@ -101,6 +102,7 @@ class NativeLitesealCore : public jsi::HostObject {
     jsi::Value cpp_uniffi_liteseal_core_checksum_func_encrypt_message(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);
     jsi::Value cpp_uniffi_liteseal_core_checksum_func_generate_keypair(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);
     jsi::Value cpp_uniffi_liteseal_core_checksum_func_get_user_devices(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);
+    jsi::Value cpp_uniffi_liteseal_core_checksum_func_key_fingerprint(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);
     jsi::Value cpp_uniffi_liteseal_core_checksum_func_login(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);
     jsi::Value cpp_uniffi_liteseal_core_checksum_func_refresh_session(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);
     jsi::Value cpp_uniffi_liteseal_core_checksum_func_register(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);

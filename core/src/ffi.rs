@@ -347,6 +347,13 @@ pub fn canonical_conversation_id(a: String, b: String) -> String {
     chat::canonical_conversation_id(&a, &b)
 }
 
+/// Same fingerprint derivation contacts are stored with, for displaying the
+/// user's own key.
+#[uniffi::export]
+pub fn key_fingerprint(key: Vec<u8>) -> String {
+    crate::contacts::fingerprint(&key)
+}
+
 // ---- Stateful client object ----
 
 #[derive(uniffi::Object)]

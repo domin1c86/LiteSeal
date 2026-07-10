@@ -227,6 +227,10 @@ extern "C" {
         RustBuffer server_url, 
         RustBuffer user_id
     );
+    RustBuffer uniffi_liteseal_core_fn_func_key_fingerprint(
+        RustBuffer key, 
+        RustCallStatus *uniffi_out_err
+    );
     /*handle*/ uint64_t uniffi_liteseal_core_fn_func_login(
         RustBuffer username, 
         RustBuffer password, 
@@ -469,6 +473,8 @@ extern "C" {
     uint16_t uniffi_liteseal_core_checksum_func_generate_keypair(
     );
     uint16_t uniffi_liteseal_core_checksum_func_get_user_devices(
+    );
+    uint16_t uniffi_liteseal_core_checksum_func_key_fingerprint(
     );
     uint16_t uniffi_liteseal_core_checksum_func_login(
     );
@@ -2128,6 +2134,14 @@ NativeLitesealCore::NativeLitesealCore(
             return this->cpp_uniffi_liteseal_core_fn_func_get_user_devices(rt, thisVal, args, count);
         }
     );
+    props["ubrn_uniffi_liteseal_core_fn_func_key_fingerprint"] = jsi::Function::createFromHostFunction(
+        rt,
+        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_fn_func_key_fingerprint"),
+        1,
+        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
+            return this->cpp_uniffi_liteseal_core_fn_func_key_fingerprint(rt, thisVal, args, count);
+        }
+    );
     props["ubrn_uniffi_liteseal_core_fn_func_login"] = jsi::Function::createFromHostFunction(
         rt,
         jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_fn_func_login"),
@@ -2598,6 +2612,14 @@ NativeLitesealCore::NativeLitesealCore(
         0,
         [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
             return this->cpp_uniffi_liteseal_core_checksum_func_get_user_devices(rt, thisVal, args, count);
+        }
+    );
+    props["ubrn_uniffi_liteseal_core_checksum_func_key_fingerprint"] = jsi::Function::createFromHostFunction(
+        rt,
+        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_checksum_func_key_fingerprint"),
+        0,
+        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
+            return this->cpp_uniffi_liteseal_core_checksum_func_key_fingerprint(rt, thisVal, args, count);
         }
     );
     props["ubrn_uniffi_liteseal_core_checksum_func_login"] = jsi::Function::createFromHostFunction(
@@ -3101,6 +3123,16 @@ jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_func_get_user_devices
         
         return uniffi_jsi::Bridging</*handle*/ uint64_t>::toJs(rt, callInvoker, value);
 }
+jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_func_key_fingerprint(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
+        RustCallStatus status = uniffi::liteseal_core::Bridging<RustCallStatus>::rustSuccess(rt);
+        auto value = uniffi_liteseal_core_fn_func_key_fingerprint(uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[0]), 
+            &status
+        );
+        uniffi::liteseal_core::Bridging<RustCallStatus>::copyIntoJs(rt, callInvoker, status, args[count - 1]);
+
+        
+        return uniffi::liteseal_core::Bridging<RustBuffer>::toJs(rt, callInvoker, value);
+}
 jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_func_login(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         auto value = uniffi_liteseal_core_fn_func_login(uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[1]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[2]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[3]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[4]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[5]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[6])
         );
@@ -3551,6 +3583,13 @@ jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_checksum_func_generate_k
 }
 jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_checksum_func_get_user_devices(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         auto value = uniffi_liteseal_core_checksum_func_get_user_devices(
+        );
+
+        
+        return uniffi_jsi::Bridging<uint16_t>::toJs(rt, callInvoker, value);
+}
+jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_checksum_func_key_fingerprint(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
+        auto value = uniffi_liteseal_core_checksum_func_key_fingerprint(
         );
 
         

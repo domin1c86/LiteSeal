@@ -214,6 +214,30 @@ export async function getUserDevices(
   }
 }
 
+/**
+ * Same fingerprint derivation contacts are stored with, for displaying the
+ * user's own key.
+ */
+export function keyFingerprint(key: ArrayBuffer): string {
+  return ((__rb: Uint8Array) => {
+    try {
+      return FfiConverterString.lift(__rb);
+    } finally {
+      nativeModule().rustbuffer_free(__rb);
+    }
+  })(
+    uniffiCaller.rustCall(
+      /*caller:*/ callStatus => {
+        return nativeModule().ubrn_uniffi_liteseal_core_fn_func_key_fingerprint(
+          FfiConverterArrayBuffer.lower(key, nativeModule().rustbuffer_alloc),
+          callStatus,
+        );
+      },
+      /*liftString:*/ FfiConverterString.lift.bind(FfiConverterString),
+    ),
+  );
+}
+
 export async function login(
   username: string,
   password: string,
@@ -2123,6 +2147,14 @@ function uniffiEnsureInitialized() {
   ) {
     throw new UniffiInternalError.ApiChecksumMismatch(
       'uniffi_liteseal_core_checksum_func_get_user_devices',
+    );
+  }
+  if (
+    nativeModule().ubrn_uniffi_liteseal_core_checksum_func_key_fingerprint() !==
+    11443
+  ) {
+    throw new UniffiInternalError.ApiChecksumMismatch(
+      'uniffi_liteseal_core_checksum_func_key_fingerprint',
     );
   }
   if (
