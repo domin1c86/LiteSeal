@@ -8,8 +8,8 @@ name = "liteseal_core"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [features]
-# Reserved for the Android/React Native bindings layer.
-ffi = []
+# Android/React Native bindings layer (uniffi-bindgen-react-native).
+ffi = ["dep:uniffi"]
 
 [dependencies]
 serde = { workspace = true }
@@ -28,6 +28,7 @@ dirs = "5"
 chrono = "0.4"
 sha2 = "0.10"
 hex = "0.4"
+uniffi = { version = "0.29", features = ["tokio"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }

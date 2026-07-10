@@ -8,9 +8,14 @@ pub mod chat;
 pub mod client;
 pub mod contacts;
 pub mod db;
+#[cfg(feature = "ffi")]
+pub mod ffi;
 pub mod integrity;
 pub mod keystore;
 pub mod network;
 pub mod secret_store;
 
 pub use client::LitesealClient;
+
+#[cfg(feature = "ffi")]
+uniffi::setup_scaffolding!();
