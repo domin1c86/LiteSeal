@@ -1,0 +1,904 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LiteSeal — Android UI Design 移动端界面设计</title>
+<style>
+  :root {
+    --app-bg: #0f0f0f;
+    --workspace-bg: #0f0f0f;
+    --sidebar-bg: #161616;
+    --surface: #1c1c1c;
+    --surface-muted: #191919;
+    --surface-hover: #222222;
+    --surface-active: #262626;
+    --border: #262626;
+    --border-strong: #363636;
+    --text: #ececec;
+    --text-muted: #a3a3a3;
+    --text-subtle: #6f6f6f;
+    --accent: #ececec;
+    --accent-hover: #ffffff;
+    --accent-soft: rgba(255, 255, 255, 0.07);
+    --accent-contrast: #0f0f0f;
+    --ok: #62b47a;
+    --warn: #d4a054;
+    --danger: #e5484d;
+    --overlay: rgba(0, 0, 0, 0.65);
+    --radius-sm: 6px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --font-mono: ui-monospace, "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+    --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  html.light {
+    --app-bg: #ffffff;
+    --workspace-bg: #ffffff;
+    --sidebar-bg: #f7f7f7;
+    --surface: #ffffff;
+    --surface-muted: #f2f2f2;
+    --surface-hover: #ededed;
+    --surface-active: #e6e6e6;
+    --border: #e5e5e5;
+    --border-strong: #d4d4d4;
+    --text: #171717;
+    --text-muted: #666666;
+    --text-subtle: #999999;
+    --accent: #171717;
+    --accent-hover: #000000;
+    --accent-soft: rgba(0, 0, 0, 0.05);
+    --accent-contrast: #ffffff;
+    --ok: #1e9e50;
+    --warn: #b07c33;
+    --danger: #d13438;
+    --overlay: rgba(0, 0, 0, 0.35);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--app-bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+  }
+  .mono { font-family: var(--font-mono); }
+
+  /* ---------- page chrome ---------- */
+  .page-header {
+    padding: 40px 48px 8px;
+    display: flex;
+    align-items: baseline;
+    gap: 20px;
+    flex-wrap: wrap;
+  }
+  .page-header h1 {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  .page-header h1 .cursor { color: var(--text-subtle); font-weight: 400; }
+  .page-header .sub {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-subtle);
+  }
+  .theme-toggle {
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    padding: 8px 14px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-strong);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+  }
+  .theme-toggle:hover { background: var(--surface-hover); color: var(--text); }
+  .page-intro {
+    padding: 0 48px 12px;
+    max-width: 980px;
+    color: var(--text-muted);
+    font-size: 14px;
+    line-height: 1.6;
+  }
+  .gallery {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 40px;
+    padding: 28px 48px 64px;
+    align-items: flex-start;
+  }
+  figure.shot { margin: 0; width: 340px; }
+  figcaption {
+    margin-top: 14px;
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--text-muted);
+  }
+  figcaption .num {
+    font-family: var(--font-mono);
+    color: var(--text);
+    font-weight: 600;
+  }
+  figcaption .zh { color: var(--text-subtle); }
+  .notes {
+    padding: 8px 48px 80px;
+    max-width: 980px;
+  }
+  .notes h2 {
+    font-family: var(--font-mono);
+    font-size: 15px;
+    border-top: 1px solid var(--border);
+    padding-top: 28px;
+  }
+  .notes ul { color: var(--text-muted); font-size: 14px; line-height: 1.7; padding-left: 20px; }
+  .notes li .zh { color: var(--text-subtle); }
+  .notes code {
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    background: var(--surface-muted);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 5px;
+  }
+
+  /* ---------- phone frame ---------- */
+  .phone {
+    width: 340px;
+    height: 720px;
+    border: 1px solid var(--border-strong);
+    border-radius: 28px;
+    background: var(--workspace-bg);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+  }
+  .statusbar {
+    height: 28px;
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 18px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--text-subtle);
+  }
+  .screen { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+
+  /* app bar */
+  .appbar {
+    flex: none;
+    height: 52px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 0 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .appbar .wordmark {
+    font-family: var(--font-mono);
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  .appbar .wordmark .cursor { color: var(--text-subtle); font-weight: 400; }
+  .appbar .title {
+    font-family: var(--font-mono);
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .appbar .spacer { flex: 1; }
+  .icon-btn {
+    width: 34px;
+    height: 34px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-md);
+    color: var(--text-muted);
+    font-size: 16px;
+    line-height: 1;
+  }
+  .back { font-size: 20px; margin-left: -8px; }
+  .conn-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--ok);
+  }
+  .conn-dot.off { background: var(--warn); }
+
+  /* offline banner */
+  .banner {
+    flex: none;
+    padding: 7px 16px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--warn);
+    background: var(--surface-muted);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+  }
+  .banner .action { color: var(--text-muted); text-decoration: underline; }
+
+  /* tab bar */
+  .tabbar {
+    flex: none;
+    height: 56px;
+    border-top: 1px solid var(--border);
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    background: var(--sidebar-bg);
+  }
+  .tab {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--text-subtle);
+  }
+  .tab .glyph { font-size: 15px; line-height: 1; }
+  .tab.active { color: var(--text); }
+  .tab .badge {
+    position: absolute;
+    transform: translate(11px, -19px);
+    min-width: 15px; height: 15px;
+    border-radius: 8px;
+    background: var(--accent);
+    color: var(--accent-contrast);
+    font-size: 9px;
+    display: flex; align-items: center; justify-content: center;
+    padding: 0 4px;
+    font-weight: 700;
+  }
+
+  /* avatars */
+  .avatar {
+    flex: none;
+    width: 42px; height: 42px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-strong);
+    background: var(--surface-muted);
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--font-mono);
+    font-size: 14px;
+    color: var(--text-muted);
+  }
+  .avatar.sm { width: 32px; height: 32px; font-size: 12px; }
+  .avatar.lg { width: 72px; height: 72px; font-size: 24px; }
+
+  /* list rows */
+  .list { flex: 1; overflow: hidden; }
+  .rowitem {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    min-height: 66px;
+  }
+  .rowitem .body { flex: 1; min-width: 0; }
+  .rowitem .name { font-size: 14.5px; font-weight: 600; }
+  .rowitem .preview {
+    font-size: 12.5px;
+    color: var(--text-muted);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    margin-top: 3px;
+  }
+  .rowitem .meta {
+    display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
+    font-family: var(--font-mono); font-size: 10.5px; color: var(--text-subtle);
+  }
+  .unread {
+    min-width: 17px; height: 17px;
+    border-radius: 9px;
+    background: var(--accent);
+    color: var(--accent-contrast);
+    font-size: 10px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+    padding: 0 5px;
+  }
+  .fp { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-subtle); margin-top: 3px; }
+  .trust { font-family: var(--font-mono); font-size: 10.5px; }
+  .trust.ok { color: var(--ok); }
+  .trust.warn { color: var(--warn); }
+  .trust.danger { color: var(--danger); }
+
+  /* chat */
+  .messages {
+    flex: 1;
+    padding: 14px 14px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    overflow: hidden;
+  }
+  .daysep {
+    align-self: center;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--text-subtle);
+    padding: 2px 10px;
+  }
+  .msg { max-width: 78%; display: flex; flex-direction: column; gap: 4px; }
+  .msg.in { align-self: flex-start; }
+  .msg.out { align-self: flex-end; align-items: flex-end; }
+  .bubble {
+    padding: 9px 12px;
+    border-radius: var(--radius-lg);
+    font-size: 14px;
+    line-height: 1.45;
+  }
+  .msg.in .bubble {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-bottom-left-radius: 4px;
+  }
+  .msg.out .bubble {
+    background: var(--accent);
+    color: var(--accent-contrast);
+    border-bottom-right-radius: 4px;
+  }
+  .msg .stamp {
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    color: var(--text-subtle);
+    padding: 0 2px;
+  }
+  .msg.failed .bubble {
+    border: 1px solid var(--danger);
+    background: var(--surface-muted);
+    color: var(--text-muted);
+  }
+  .msg .flag { font-family: var(--font-mono); font-size: 9.5px; }
+  .msg .flag.danger { color: var(--danger); }
+  .msg .flag.warn { color: var(--warn); }
+
+  .composer-wrap { flex: none; padding: 10px 12px 14px; }
+  .composer {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-lg);
+    background: var(--surface-muted);
+    padding: 10px 8px 10px 14px;
+  }
+  .composer .prompt { font-family: var(--font-mono); color: var(--text-subtle); font-size: 14px; }
+  .composer .hint { flex: 1; font-size: 14px; color: var(--text-subtle); }
+  .send-btn {
+    flex: none;
+    width: 34px; height: 34px;
+    border-radius: var(--radius-md);
+    background: var(--accent);
+    color: var(--accent-contrast);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 15px;
+    font-weight: 700;
+  }
+
+  /* forms / login */
+  .login-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 0 28px 60px;
+    gap: 12px;
+  }
+  .login-wordmark {
+    font-family: var(--font-mono);
+    font-size: 24px;
+    font-weight: 600;
+    text-align: center;
+    letter-spacing: -0.01em;
+  }
+  .login-wordmark .cursor { color: var(--text-subtle); font-weight: 400; }
+  .login-sub {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--text-subtle);
+    text-align: center;
+    margin: 6px 0 22px;
+  }
+  .segmented {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    padding: 4px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface-muted);
+    margin-bottom: 8px;
+  }
+  .segment {
+    text-align: center;
+    padding: 10px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-muted);
+    border-radius: var(--radius-sm);
+  }
+  .segment.active { background: var(--surface-active); color: var(--text); }
+  .field {
+    padding: 13px 14px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-strong);
+    background: var(--surface-muted);
+    font-size: 14px;
+    color: var(--text-subtle);
+  }
+  .field.filled { color: var(--text); }
+  .primary-btn {
+    margin-top: 6px;
+    padding: 13px;
+    border-radius: var(--radius-md);
+    background: var(--accent);
+    color: var(--accent-contrast);
+    font-size: 14px;
+    font-weight: 600;
+    text-align: center;
+  }
+  .outline-btn {
+    padding: 12px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-strong);
+    color: var(--text-muted);
+    font-size: 13.5px;
+    font-weight: 600;
+    text-align: center;
+  }
+  .outline-btn.danger { color: var(--danger); border-color: var(--danger); }
+
+  /* contact detail */
+  .detail-body { flex: 1; padding: 28px 20px 0; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .detail-name { font-size: 17px; font-weight: 600; margin-top: 12px; }
+  .detail-id { font-family: var(--font-mono); font-size: 11px; color: var(--text-subtle); }
+  .fp-block {
+    margin-top: 18px;
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface-muted);
+    padding: 12px 14px;
+  }
+  .fp-block .label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-subtle);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 8px;
+  }
+  .fp-block .value {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.7;
+    word-break: break-all;
+  }
+  .detail-actions { width: 100%; display: flex; flex-direction: column; gap: 10px; margin-top: 18px; }
+
+  /* settings */
+  .section-label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-subtle);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 18px 16px 8px;
+  }
+  .kv {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 13px 16px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13.5px;
+  }
+  .kv .k { color: var(--text-muted); }
+  .kv .v { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-subtle); }
+  .settings-actions { padding: 22px 16px; display: flex; flex-direction: column; gap: 10px; }
+
+  /* modal sheet */
+  .sheet-overlay {
+    position: absolute;
+    inset: 0;
+    background: var(--overlay);
+    display: flex;
+    align-items: flex-end;
+  }
+  .sheet {
+    width: 100%;
+    background: var(--sidebar-bg);
+    border-top: 1px solid var(--border-strong);
+    border-radius: 16px 16px 0 0;
+    padding: 10px 16px 24px;
+    max-height: 72%;
+  }
+  .sheet-grip {
+    width: 36px; height: 4px;
+    border-radius: 2px;
+    background: var(--border-strong);
+    margin: 4px auto 14px;
+  }
+  .sheet-title { font-family: var(--font-mono); font-size: 13px; font-weight: 600; margin-bottom: 12px; }
+  .add-btn {
+    flex: none;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 7px 12px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-strong);
+    color: var(--text-muted);
+  }
+  .add-btn.added { border-color: transparent; color: var(--ok); }
+</style>
+</head>
+<body>
+
+<header class="page-header">
+  <h1>liteseal<span class="cursor">▌</span></h1>
+  <span class="sub">android ui design · react native · v1 full parity 移动端界面设计</span>
+  <button class="theme-toggle" onclick="document.documentElement.classList.toggle('light')">toggle light / dark 切换明暗</button>
+</header>
+<p class="page-intro">
+  Single-pane phone adaptation of the desktop "codex look": mono wordmark, hairline borders, square avatars,
+  flat bubbles, mono metadata, color-coded trust labels. Navigation: bottom tabs (chats / contacts / settings)
+  with chat &amp; contact-detail pushed on a stack.
+  <span style="color: var(--text-subtle)">桌面端「codex 风格」的单栏手机适配：等宽字体标识、细线边框、方形头像、扁平气泡、等宽元数据、彩色信任标签。导航为底部三个标签页（会话/联系人/设置），聊天与联系人详情为堆栈推入页。</span>
+</p>
+
+<main class="gallery">
+
+  <!-- ============ 01 LOGIN ============ -->
+  <figure class="shot">
+    <div class="phone">
+      <div class="statusbar"><span>21:47</span><span>lte ▂▄▆ 87%</span></div>
+      <div class="screen">
+        <div class="login-body">
+          <div class="login-wordmark">liteseal<span class="cursor">▌</span></div>
+          <div class="login-sub">end-to-end encrypted messaging</div>
+          <div class="segmented">
+            <div class="segment active">Login</div>
+            <div class="segment">Register</div>
+          </div>
+          <div class="field filled">http://192.168.1.20:3000</div>
+          <div class="field filled">alice</div>
+          <div class="field">••••••••••••</div>
+          <div class="primary-btn">Login</div>
+        </div>
+      </div>
+    </div>
+    <figcaption>
+      <span class="num">01 · Login / Register</span><br>
+      Full-bleed form, same segmented switch as desktop. Login reuses the saved keypair + device from the
+      Android-Keystore-backed store; register generates fresh keys. Content shifts up when the keyboard opens.<br>
+      <span class="zh">全屏表单，与桌面一致的登录/注册分段切换。登录复用 Android Keystore 保存的密钥与设备；注册生成新密钥。键盘弹出时表单自动上移。</span>
+    </figcaption>
+  </figure>
+
+  <!-- ============ 02 CHATS ============ -->
+  <figure class="shot">
+    <div class="phone">
+      <div class="statusbar"><span>21:47</span><span>lte ▂▄▆ 87%</span></div>
+      <div class="screen">
+        <div class="appbar">
+          <span class="wordmark">liteseal<span class="cursor">▌</span></span>
+          <span class="spacer"></span>
+          <span class="conn-dot"></span>
+        </div>
+        <div class="list">
+          <div class="rowitem">
+            <div class="avatar">BO</div>
+            <div class="body">
+              <div class="name">bob</div>
+              <div class="preview">see you at the meeting point then</div>
+            </div>
+            <div class="meta"><span>21:32</span><span class="unread">2</span></div>
+          </div>
+          <div class="rowitem">
+            <div class="avatar">CA</div>
+            <div class="body">
+              <div class="name">carol</div>
+              <div class="preview">the fingerprint matches, verified ✓</div>
+            </div>
+            <div class="meta"><span>18:04</span></div>
+          </div>
+          <div class="rowitem">
+            <div class="avatar">DA</div>
+            <div class="body">
+              <div class="name">dave</div>
+              <div class="preview">ok</div>
+            </div>
+            <div class="meta"><span>07-08</span></div>
+          </div>
+          <div class="rowitem">
+            <div class="avatar">ER</div>
+            <div class="body">
+              <div class="name">erin</div>
+              <div class="preview">did you get the new build working?</div>
+            </div>
+            <div class="meta"><span>07-06</span></div>
+          </div>
+        </div>
+        <div class="tabbar">
+          <div class="tab active"><span class="glyph">▤</span>chats<span class="badge">2</span></div>
+          <div class="tab"><span class="glyph">◫</span>contacts</div>
+          <div class="tab"><span class="glyph">⚙</span>settings</div>
+        </div>
+      </div>
+    </div>
+    <figcaption>
+      <span class="num">02 · Chats tab</span><br>
+      Conversation list with unread badges and mono timestamps; connection dot in the app bar
+      (green = relay connected). 2s poll runs app-wide so messages are acked even outside a chat.<br>
+      <span class="zh">会话列表带未读角标与等宽时间戳；标题栏圆点表示中继连接状态（绿色=已连接）。2 秒轮询在应用级运行，未打开聊天也会确认消息。</span>
+    </figcaption>
+  </figure>
+
+  <!-- ============ 03 CHAT ============ -->
+  <figure class="shot">
+    <div class="phone">
+      <div class="statusbar"><span>21:47</span><span>lte ▂▄▆ 87%</span></div>
+      <div class="screen">
+        <div class="appbar">
+          <span class="icon-btn back">‹</span>
+          <div class="avatar sm">BO</div>
+          <div>
+            <div class="title" style="font-size:13.5px">bob</div>
+            <div class="trust ok">verified</div>
+          </div>
+          <span class="spacer"></span>
+          <span class="icon-btn">⋯</span>
+        </div>
+        <div class="messages">
+          <div class="daysep">— 07-10 —</div>
+          <div class="msg in">
+            <div class="bubble">hey, are we still on for tonight?</div>
+            <div class="stamp">21:29</div>
+          </div>
+          <div class="msg out">
+            <div class="bubble">yes — same place as last time</div>
+            <div class="stamp">21:30 ✓✓</div>
+          </div>
+          <div class="msg in">
+            <div class="bubble">see you at the meeting point then</div>
+            <div class="stamp">21:32</div>
+          </div>
+          <div class="msg in failed">
+            <div class="bubble">[message withheld]</div>
+            <div class="flag danger">integrity check failed · seq gap 完整性校验失败</div>
+          </div>
+          <div class="msg out">
+            <div class="bubble">on my way</div>
+            <div class="stamp">21:46 ✓</div>
+          </div>
+        </div>
+        <div class="composer-wrap">
+          <div class="composer">
+            <span class="prompt">❯</span>
+            <span class="hint">message bob…</span>
+            <span class="send-btn">↑</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <figcaption>
+      <span class="num">03 · Chat (stack screen)</span><br>
+      Inverted list, flat bubbles (outgoing = accent with contrast text), mono timestamps with delivery
+      ticks (✓ sent · ✓✓ acked). Hash-chain failures render a withheld placeholder with a danger flag.
+      Composer keeps the desktop ❯ prompt glyph; back gesture returns to the list.<br>
+      <span class="zh">倒序消息列表，扁平气泡（发出=强调色反色文字），等宽时间戳带送达标记（✓ 已发 · ✓✓ 已确认）。哈希链校验失败的消息显示占位与红色警示。输入框保留桌面端 ❯ 提示符；返回手势回到会话列表。</span>
+    </figcaption>
+  </figure>
+
+  <!-- ============ 04 CONTACTS ============ -->
+  <figure class="shot">
+    <div class="phone">
+      <div class="statusbar"><span>21:47</span><span>lte ▂▄▆ 87%</span></div>
+      <div class="screen">
+        <div class="appbar">
+          <span class="title">contacts</span>
+          <span class="spacer"></span>
+          <span class="icon-btn">＋</span>
+        </div>
+        <div class="list">
+          <div class="rowitem">
+            <div class="avatar">BO</div>
+            <div class="body">
+              <div class="name">bob</div>
+              <div class="fp">a3f1 09bc 44d2 e871</div>
+            </div>
+            <span class="trust ok">verified</span>
+          </div>
+          <div class="rowitem">
+            <div class="avatar">CA</div>
+            <div class="body">
+              <div class="name">carol</div>
+              <div class="fp">7c02 d9e4 1f6a b530</div>
+            </div>
+            <span class="trust warn">unverified</span>
+          </div>
+          <div class="rowitem">
+            <div class="avatar">DA</div>
+            <div class="body">
+              <div class="name">dave</div>
+              <div class="fp">e58b 3a17 c0d9 62f4</div>
+            </div>
+            <span class="trust danger">key changed</span>
+          </div>
+          <div class="rowitem">
+            <div class="avatar">ER</div>
+            <div class="body">
+              <div class="name">erin</div>
+              <div class="fp">1b9d 77e0 5c3f a842</div>
+            </div>
+            <span class="trust warn">unverified</span>
+          </div>
+        </div>
+        <div class="tabbar">
+          <div class="tab"><span class="glyph">▤</span>chats</div>
+          <div class="tab active"><span class="glyph">◫</span>contacts</div>
+          <div class="tab"><span class="glyph">⚙</span>settings</div>
+        </div>
+      </div>
+    </div>
+    <figcaption>
+      <span class="num">04 · Contacts tab</span><br>
+      Directory with short fingerprint and color-coded trust state per row
+      (green verified / amber unverified / red key-changed). ＋ opens the add-contact sheet;
+      tapping a row pushes the contact detail.<br>
+      <span class="zh">联系人目录，每行显示指纹缩写与彩色信任状态（绿=已验证 / 黄=未验证 / 红=密钥已变更）。＋ 打开添加联系人面板；点击行进入联系人详情。</span>
+    </figcaption>
+  </figure>
+
+  <!-- ============ 05 CONTACT DETAIL ============ -->
+  <figure class="shot">
+    <div class="phone">
+      <div class="statusbar"><span>21:47</span><span>lte ▂▄▆ 87%</span></div>
+      <div class="screen">
+        <div class="appbar">
+          <span class="icon-btn back">‹</span>
+          <span class="title">contact</span>
+        </div>
+        <div class="detail-body">
+          <div class="avatar lg">DA</div>
+          <div class="detail-name">dave</div>
+          <div class="detail-id">u_01j9x4k7m2</div>
+          <div class="fp-block">
+            <div class="label">key fingerprint 密钥指纹</div>
+            <div class="value">e58b 3a17 c0d9 62f4<br>90ab 25c8 f7e1 4d06</div>
+          </div>
+          <div class="fp-block" style="border-color: var(--danger)">
+            <div class="label" style="color: var(--danger)">warning 警告</div>
+            <div class="value" style="color: var(--danger)">public key changed since last verification — re-verify before messaging. 公钥自上次验证后已变更，请先重新核对再发送消息。</div>
+          </div>
+          <div class="detail-actions">
+            <div class="primary-btn">message</div>
+            <div class="outline-btn">mark as verified</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <figcaption>
+      <span class="num">05 · Contact detail (stack screen)</span><br>
+      Full fingerprint for out-of-band comparison, trust toggle, and jump-to-chat. The key-change
+      warning block appears only when the server-reported key differs from the pinned one.<br>
+      <span class="zh">显示完整指纹供线下比对、信任切换按钮及跳转聊天。仅当服务器返回的公钥与本地固定的不一致时显示红色密钥变更警告。</span>
+    </figcaption>
+  </figure>
+
+  <!-- ============ 06 ADD CONTACT ============ -->
+  <figure class="shot">
+    <div class="phone">
+      <div class="statusbar"><span>21:47</span><span>lte ▂▄▆ 87%</span></div>
+      <div class="screen">
+        <div class="appbar" style="opacity:.45">
+          <span class="title">contacts</span>
+          <span class="spacer"></span>
+          <span class="icon-btn">＋</span>
+        </div>
+        <div class="list" style="opacity:.45">
+          <div class="rowitem">
+            <div class="avatar">BO</div>
+            <div class="body"><div class="name">bob</div><div class="fp">a3f1 09bc 44d2 e871</div></div>
+            <span class="trust ok">verified</span>
+          </div>
+          <div class="rowitem">
+            <div class="avatar">CA</div>
+            <div class="body"><div class="name">carol</div><div class="fp">7c02 d9e4 1f6a b530</div></div>
+            <span class="trust warn">unverified</span>
+          </div>
+        </div>
+        <div class="sheet-overlay">
+          <div class="sheet">
+            <div class="sheet-grip"></div>
+            <div class="sheet-title">add contact 添加联系人</div>
+            <div class="field filled" style="margin-bottom:12px">fra</div>
+            <div class="rowitem" style="padding-inline:0">
+              <div class="avatar">FR</div>
+              <div class="body"><div class="name">frank</div><div class="fp">44c7 e20a 9d1b 5f83</div></div>
+              <span class="add-btn">add</span>
+            </div>
+            <div class="rowitem" style="padding-inline:0; border-bottom:none">
+              <div class="avatar">FA</div>
+              <div class="body"><div class="name">franka</div><div class="fp">0d92 6b4e a751 c3f0</div></div>
+              <span class="add-btn added">added ✓</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <figcaption>
+      <span class="num">06 · Add contact (bottom sheet)</span><br>
+      Server-side username search in a modal sheet over the contacts tab; results show the fingerprint
+      before adding so the key is pinned from first sight.<br>
+      <span class="zh">在联系人页上方的底部弹层中进行服务端用户名搜索；结果先显示指纹再允许添加，首次见到即固定公钥。</span>
+    </figcaption>
+  </figure>
+
+  <!-- ============ 07 SETTINGS ============ -->
+  <figure class="shot">
+    <div class="phone">
+      <div class="statusbar"><span>21:47</span><span>lte ▂▄▆ 87%</span></div>
+      <div class="screen">
+        <div class="appbar">
+          <span class="title">settings</span>
+          <span class="spacer"></span>
+          <span class="conn-dot off"></span>
+        </div>
+        <div class="banner"><span>reconnecting to relay… 正在重连</span><span class="action">retry</span></div>
+        <div class="list" style="overflow:hidden">
+          <div class="section-label">account 账户</div>
+          <div class="kv"><span class="k">username</span><span class="v">alice</span></div>
+          <div class="kv"><span class="k">user id</span><span class="v">u_01j9wz3q8n</span></div>
+          <div class="kv"><span class="k">device</span><span class="v">dev_9f2c…a1</span></div>
+          <div class="kv"><span class="k">my fingerprint</span><span class="v">5e07 c3a9 …</span></div>
+          <div class="section-label">server 服务器</div>
+          <div class="kv"><span class="k">relay url</span><span class="v">http://192.168.1.20:3000</span></div>
+          <div class="section-label">storage 存储</div>
+          <div class="kv"><span class="k">local messages</span><span class="v">1,284 · 3.2 MB</span></div>
+          <div class="settings-actions">
+            <div class="outline-btn">clear local history</div>
+            <div class="outline-btn danger">log out</div>
+          </div>
+        </div>
+        <div class="tabbar">
+          <div class="tab"><span class="glyph">▤</span>chats</div>
+          <div class="tab"><span class="glyph">◫</span>contacts</div>
+          <div class="tab active"><span class="glyph">⚙</span>settings</div>
+        </div>
+      </div>
+    </div>
+    <figcaption>
+      <span class="num">07 · Settings tab</span><br>
+      Account/device identity, own fingerprint, relay URL, and the storage manager (stats + clear),
+      plus logout. Shown here with the amber connection dot and the reconnect banner that appears
+      on any tab while the relay is unreachable.<br>
+      <span class="zh">账户与设备信息、本机指纹、中继地址、存储管理（统计+清空）及退出登录。图中展示黄色连接点与断线重连横幅——中继不可达时任意标签页均会显示。</span>
+    </figcaption>
+  </figure>
+
+</main>
+
+<section class="notes">
+  <h2>design notes 设计说明</h2>
+  <ul>
+    <li><strong>Theme tokens</strong> are lifted 1:1 from <code>ui/src/theme.css</code> (this page uses the exact values); RN gets them as a TypeScript constants module with dark default and light via the system color scheme. <span class="zh">主题令牌与桌面端 theme.css 完全一致，RN 侧以 TS 常量模块实现，深色为默认，浅色跟随系统。</span></li>
+    <li><strong>Navigation:</strong> react-navigation — bottom tabs (chats / contacts / settings) + native stack for chat, contact detail; add-contact is a bottom sheet. Android back pops the stack, then backgrounds the app. <span class="zh">底部标签 + 原生堆栈；添加联系人为底部弹层；安卓返回键先出栈再退到后台。</span></li>
+    <li><strong>Messages:</strong> inverted FlatList; delivery ticks map to local-store delivery states (✓ sent, ✓✓ acked); integrity-failed messages are withheld with a danger flag, matching desktop behavior. <span class="zh">倒序 FlatList；✓/✓✓ 对应本地送达状态；完整性失败的消息以占位+红色警示呈现，与桌面一致。</span></li>
+    <li><strong>Touch targets</strong> ≥ 44dp everywhere (rows 66dp, tab bar 56dp, buttons 44–48dp). <span class="zh">所有可点击区域不小于 44dp。</span></li>
+    <li><strong>States covered:</strong> keyboard avoidance (01, 03), unread badges (02), offline banner + amber dot (07), trust tri-state (04), key-change warning (05). <span class="zh">已覆盖键盘避让、未读角标、离线横幅、三态信任标签与密钥变更警告等状态。</span></li>
+  </ul>
+</section>
+
+</body>
+</html>
