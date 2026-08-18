@@ -11,6 +11,7 @@ use crate::{auth::service, state::AppState};
 pub struct RegisterRequest {
     pub username: String,
     pub password: String,
+    pub invite_code: String,
     #[serde(default = "default_device_name")]
     pub device_name: String,
     pub public_key: Option<Vec<u8>>,
@@ -42,28 +43,34 @@ pub async fn register(
 
     let password_hash =
         service::hash_password(&req.password).map_err(|_| StatusCode::BAD_REQUEST)?;
-    let user = state
-        .db
-        .create_user(username, &password_hash)
-        .await
-        .map_err(|_| StatusCode::CONFLICT)?;
-    let device = state
-        .db
-        .register_device(&user.id, &req.device_name, &public_key, &ed25519_pk)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let access_token = service::generate_token();
     let refresh_token = service::generate_token();
-    state
+    let (user, device) = state
         .db
-        .create_session(
-            &user.id,
-            &device.id,
+        .register_with_invite(
+            username,
+            &password_hash,
+            &service::hash_token(req.invite_code.trim()),
+            req.device_name.trim(),
+            &public_key,
+            &ed25519_pk,
             &service::hash_token(&access_token),
             &service::hash_token(&refresh_token),
         )
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|error| {
+            if error
+                .as_database_error()
+                .and_then(|db| db.code())
+                .as_deref()
+                == Some("23505")
+            {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        })?
+        .ok_or(StatusCode::FORBIDDEN)?;
 
     tracing::info!("User registered: {} ({})", username, user.id);
     let _ = state
@@ -89,6 +96,8 @@ pub struct LoginRequest {
     pub device_id: Option<String>,
     pub device_public_key: Option<Vec<u8>>,
     pub ed25519_pk: Option<Vec<u8>>,
+    #[serde(default)]
+    pub replace_device: bool,
 }
 
 pub async fn login(
@@ -115,6 +124,10 @@ pub async fn login(
     let ed25519_pk = req.ed25519_pk.ok_or(StatusCode::BAD_REQUEST)?;
     service::validate_key_material(&public_key, &ed25519_pk)
         .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let access_token = service::generate_token();
+    let refresh_token = service::generate_token();
+    let access_token_hash = service::hash_token(&access_token);
+    let refresh_token_hash = service::hash_token(&refresh_token);
     let device = match req.device_id {
         Some(device_id) => {
             let existing = state
@@ -124,38 +137,50 @@ pub async fn login(
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             match existing {
                 Some(device) if !device.revoked => {
+                    // A login is not a key-rotation endpoint. Unexpected key
+                    // changes must be resolved explicitly to preserve pinning.
+                    if device.public_key != public_key || device.ed25519_pk != ed25519_pk {
+                        return Err(StatusCode::FORBIDDEN);
+                    }
                     state
                         .db
-                        .update_device_keys(&user.id, &device.id, &public_key, &ed25519_pk)
+                        .create_session(
+                            &user.id,
+                            &device.id,
+                            &access_token_hash,
+                            &refresh_token_hash,
+                        )
                         .await
                         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-                    crate::db::DeviceRecord {
-                        public_key: public_key.clone(),
-                        ed25519_pk: ed25519_pk.clone(),
-                        ..device
-                    }
+                    device
                 }
                 _ => return Err(StatusCode::FORBIDDEN),
             }
         }
-        None => state
-            .db
-            .register_device(&user.id, &req.device_name, &public_key, &ed25519_pk)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+        None => {
+            let has_active_device = state
+                .db
+                .has_active_device(&user.id)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            if has_active_device && !req.replace_device {
+                return Err(StatusCode::CONFLICT);
+            }
+            state
+                .db
+                .create_device_and_session(
+                    &user.id,
+                    req.device_name.trim(),
+                    &public_key,
+                    &ed25519_pk,
+                    &access_token_hash,
+                    &refresh_token_hash,
+                    has_active_device,
+                )
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        }
     };
-    let access_token = service::generate_token();
-    let refresh_token = service::generate_token();
-    state
-        .db
-        .create_session(
-            &user.id,
-            &device.id,
-            &service::hash_token(&access_token),
-            &service::hash_token(&refresh_token),
-        )
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let _ = state.db.insert_audit_event(Some(&user.id), "login").await;
 
     Ok(Json(RegisterResponse {
@@ -182,30 +207,18 @@ pub async fn refresh(
     Json(req): Json<RefreshRequest>,
 ) -> Result<Json<RegisterResponse>, StatusCode> {
     let refresh_token_hash = service::hash_token(&req.refresh_token);
-    let (user_id, device_id) = state
-        .db
-        .validate_refresh_token(&refresh_token_hash)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::UNAUTHORIZED)?;
-    state
-        .db
-        .revoke_refresh_token(&refresh_token_hash)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
     let access_token = service::generate_token();
     let refresh_token = service::generate_token();
-    state
+    let (user_id, device_id) = state
         .db
-        .create_session(
-            &user_id,
-            &device_id,
+        .rotate_refresh_session(
+            &refresh_token_hash,
             &service::hash_token(&access_token),
             &service::hash_token(&refresh_token),
         )
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::UNAUTHORIZED)?;
 
     Ok(Json(RegisterResponse {
         user_id,
@@ -265,6 +278,14 @@ pub async fn list_devices(
     headers: HeaderMap,
 ) -> Result<Json<Vec<DeviceResponse>>, StatusCode> {
     let user_id = user_from_bearer(&state, &headers).await?;
+    if state
+        .db
+        .has_active_device(&user_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    {
+        return Err(StatusCode::CONFLICT);
+    }
     let devices = state
         .db
         .list_user_devices(&user_id)

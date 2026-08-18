@@ -81,26 +81,78 @@ impl Db {
         Ok(())
     }
 
-    pub async fn create_user(
+    #[allow(clippy::too_many_arguments)]
+    pub async fn register_with_invite(
         &self,
         username: &str,
         password_hash: &str,
-    ) -> Result<UserRecord, sqlx::Error> {
-        let id = uuid::Uuid::new_v4().to_string();
+        invite_code_hash: &str,
+        device_name: &str,
+        public_key: &[u8],
+        ed25519_pk: &[u8],
+        access_token_hash: &str,
+        refresh_token_hash: &str,
+    ) -> Result<Option<(UserRecord, DeviceRecord)>, sqlx::Error> {
+        let mut transaction = self.pool.begin().await?;
+        let user_id = uuid::Uuid::new_v4().to_string();
+        let invite = sqlx::query(
+            "UPDATE invitation_codes
+             SET consumed_at = now(), consumed_by = $1
+             WHERE code_hash = $2 AND consumed_at IS NULL AND expires_at > now()
+             RETURNING id",
+        )
+        .bind(&user_id)
+        .bind(invite_code_hash)
+        .fetch_optional(&mut *transaction)
+        .await?;
+        if invite.is_none() {
+            transaction.rollback().await?;
+            return Ok(None);
+        }
+
+        let device_id = uuid::Uuid::new_v4().to_string();
         sqlx::query(
             "INSERT INTO users (id, username, password_hash, created_at)
              VALUES ($1, $2, $3, now())",
         )
-        .bind(&id)
+        .bind(&user_id)
         .bind(username)
         .bind(password_hash)
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await?;
-        Ok(UserRecord {
-            id,
-            username: username.to_string(),
-            password_hash: password_hash.to_string(),
-        })
+        insert_device(
+            &mut transaction,
+            &device_id,
+            &user_id,
+            device_name,
+            public_key,
+            ed25519_pk,
+        )
+        .await?;
+        insert_session(
+            &mut transaction,
+            &user_id,
+            &device_id,
+            access_token_hash,
+            refresh_token_hash,
+        )
+        .await?;
+        transaction.commit().await?;
+
+        Ok(Some((
+            UserRecord {
+                id: user_id,
+                username: username.to_string(),
+                password_hash: password_hash.to_string(),
+            },
+            DeviceRecord {
+                id: device_id,
+                name: device_name.to_string(),
+                public_key: public_key.to_vec(),
+                ed25519_pk: ed25519_pk.to_vec(),
+                revoked: false,
+            },
+        )))
     }
 
     pub async fn get_user_by_username(
@@ -148,6 +200,39 @@ impl Db {
         Ok(())
     }
 
+    pub async fn rotate_refresh_session(
+        &self,
+        old_refresh_token_hash: &str,
+        access_token_hash: &str,
+        refresh_token_hash: &str,
+    ) -> Result<Option<(String, String)>, sqlx::Error> {
+        let mut transaction = self.pool.begin().await?;
+        let consumed = sqlx::query(
+            "UPDATE sessions SET revoked = true
+             WHERE refresh_token_hash = $1 AND revoked = false AND refresh_expires_at > now()
+             RETURNING user_id, device_id",
+        )
+        .bind(old_refresh_token_hash)
+        .fetch_optional(&mut *transaction)
+        .await?;
+        let Some(consumed) = consumed else {
+            transaction.rollback().await?;
+            return Ok(None);
+        };
+        let user_id: String = consumed.get("user_id");
+        let device_id: String = consumed.get("device_id");
+        insert_session(
+            &mut transaction,
+            &user_id,
+            &device_id,
+            access_token_hash,
+            refresh_token_hash,
+        )
+        .await?;
+        transaction.commit().await?;
+        Ok(Some((user_id, device_id)))
+    }
+
     pub async fn validate_access_token(
         &self,
         access_token_hash: &str,
@@ -178,31 +263,9 @@ impl Db {
         Ok(row.map(|r| r.get("user_id")))
     }
 
-    pub async fn validate_refresh_token(
-        &self,
-        refresh_token_hash: &str,
-    ) -> Result<Option<(String, String)>, sqlx::Error> {
-        let row = sqlx::query(
-            "SELECT user_id, device_id FROM sessions
-             WHERE refresh_token_hash = $1 AND revoked = false AND refresh_expires_at > now()",
-        )
-        .bind(refresh_token_hash)
-        .fetch_optional(&self.pool)
-        .await?;
-        Ok(row.map(|r| (r.get("user_id"), r.get("device_id"))))
-    }
-
     pub async fn revoke_session(&self, access_token_hash: &str) -> Result<(), sqlx::Error> {
         sqlx::query("UPDATE sessions SET revoked = true WHERE access_token_hash = $1")
             .bind(access_token_hash)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
-
-    pub async fn revoke_refresh_token(&self, refresh_token_hash: &str) -> Result<(), sqlx::Error> {
-        sqlx::query("UPDATE sessions SET revoked = true WHERE refresh_token_hash = $1")
-            .bind(refresh_token_hash)
             .execute(&self.pool)
             .await?;
         Ok(())
@@ -314,6 +377,82 @@ impl Db {
                 revoked: r.get("revoked"),
             })
             .collect())
+    }
+
+    pub async fn has_active_device(&self, user_id: &str) -> Result<bool, sqlx::Error> {
+        let row = sqlx::query(
+            "SELECT EXISTS(SELECT 1 FROM devices WHERE user_id = $1 AND revoked = false) AS present",
+        )
+        .bind(user_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.get("present"))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_device_and_session(
+        &self,
+        user_id: &str,
+        device_name: &str,
+        public_key: &[u8],
+        ed25519_pk: &[u8],
+        access_token_hash: &str,
+        refresh_token_hash: &str,
+        replace_active: bool,
+    ) -> Result<DeviceRecord, sqlx::Error> {
+        let mut transaction = self.pool.begin().await?;
+        if replace_active {
+            sqlx::query("UPDATE devices SET revoked = true WHERE user_id = $1 AND revoked = false")
+                .bind(user_id)
+                .execute(&mut *transaction)
+                .await?;
+            sqlx::query(
+                "UPDATE sessions SET revoked = true WHERE user_id = $1 AND revoked = false",
+            )
+            .bind(user_id)
+            .execute(&mut *transaction)
+            .await?;
+        }
+
+        let device_id = uuid::Uuid::new_v4().to_string();
+        insert_device(
+            &mut transaction,
+            &device_id,
+            user_id,
+            device_name,
+            public_key,
+            ed25519_pk,
+        )
+        .await?;
+        insert_session(
+            &mut transaction,
+            user_id,
+            &device_id,
+            access_token_hash,
+            refresh_token_hash,
+        )
+        .await?;
+        transaction.commit().await?;
+        Ok(DeviceRecord {
+            id: device_id,
+            name: device_name.to_string(),
+            public_key: public_key.to_vec(),
+            ed25519_pk: ed25519_pk.to_vec(),
+            revoked: false,
+        })
+    }
+
+    pub async fn seed_invite_code(&self, code_hash: &str) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO invitation_codes (id, code_hash, expires_at, created_at)
+             VALUES ($1, $2, now() + interval '30 days', now())
+             ON CONFLICT (code_hash) DO NOTHING",
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(code_hash)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     pub async fn revoke_device(&self, user_id: &str, device_id: &str) -> Result<(), sqlx::Error> {
@@ -535,6 +674,52 @@ impl Db {
     }
 }
 
+async fn insert_device(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    device_id: &str,
+    user_id: &str,
+    name: &str,
+    public_key: &[u8],
+    ed25519_pk: &[u8],
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO devices (id, user_id, name, public_key, ed25519_pk, revoked, created_at, last_seen)
+         VALUES ($1, $2, $3, $4, $5, false, now(), now())",
+    )
+    .bind(device_id)
+    .bind(user_id)
+    .bind(name)
+    .bind(public_key)
+    .bind(ed25519_pk)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
+async fn insert_session(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: &str,
+    device_id: &str,
+    access_token_hash: &str,
+    refresh_token_hash: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO sessions
+         (id, user_id, device_id, access_token_hash, refresh_token_hash, expires_at,
+          refresh_expires_at, revoked, created_at)
+         VALUES ($1, $2, $3, $4, $5, now() + interval '30 minutes',
+                 now() + interval '30 days', false, now())",
+    )
+    .bind(uuid::Uuid::new_v4().to_string())
+    .bind(user_id)
+    .bind(device_id)
+    .bind(access_token_hash)
+    .bind(refresh_token_hash)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
 const MIGRATIONS: &str = r#"
 CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
@@ -621,4 +806,131 @@ CREATE TABLE IF NOT EXISTS rate_limits (
     window_start TIMESTAMPTZ NOT NULL,
     count BIGINT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS invitation_codes (
+    id TEXT PRIMARY KEY,
+    code_hash TEXT NOT NULL UNIQUE,
+    expires_at TIMESTAMPTZ NOT NULL,
+    consumed_at TIMESTAMPTZ,
+    consumed_by TEXT,
+    created_at TIMESTAMPTZ NOT NULL
+);
 "#;
+
+#[cfg(test)]
+mod integration_tests {
+    use super::*;
+
+    async fn test_db() -> Option<Db> {
+        let url = std::env::var("LITESEAL_TEST_DATABASE_URL").ok()?;
+        Some(Db::connect(&url).await.expect("connect test Postgres"))
+    }
+
+    async fn register(db: &Db, username: &str, invite_hash: &str) -> Option<(String, String)> {
+        let access = format!("access-{username}");
+        let refresh = format!("refresh-{username}");
+        let result = db
+            .register_with_invite(
+                username,
+                "password-hash",
+                invite_hash,
+                "test device",
+                &[1; 32],
+                &[2; 32],
+                &access,
+                &refresh,
+            )
+            .await
+            .expect("registration query");
+        result.map(|(user, device)| (user.id, device.id))
+    }
+
+    #[tokio::test]
+    async fn invitation_and_refresh_consumption_are_atomic_under_concurrency() {
+        let Some(db) = test_db().await else {
+            eprintln!("skipping Postgres integration test: LITESEAL_TEST_DATABASE_URL is unset");
+            return;
+        };
+        let suffix = uuid::Uuid::new_v4();
+        let invite = format!("invite-{suffix}");
+        db.seed_invite_code(&invite).await.unwrap();
+
+        let first_db = db.clone();
+        let first_invite = invite.clone();
+        let first = tokio::spawn(async move {
+            register(&first_db, &format!("first-{suffix}"), &first_invite).await
+        });
+        let second_db = db.clone();
+        let second_invite = invite.clone();
+        let second = tokio::spawn(async move {
+            register(&second_db, &format!("second-{suffix}"), &second_invite).await
+        });
+        let results = [first.await.unwrap(), second.await.unwrap()];
+        assert_eq!(results.iter().filter(|result| result.is_some()).count(), 1);
+
+        let rollback_invite = format!("rollback-{suffix}");
+        db.seed_invite_code(&rollback_invite).await.unwrap();
+        let winner_user = if results[0].is_some() {
+            format!("first-{suffix}")
+        } else {
+            format!("second-{suffix}")
+        };
+        assert!(db
+            .register_with_invite(
+                &winner_user,
+                "password-hash",
+                &rollback_invite,
+                "test device",
+                &[1; 32],
+                &[2; 32],
+                "duplicate-user-access",
+                "duplicate-user-refresh",
+            )
+            .await
+            .is_err());
+        let recovered = register(
+            &db,
+            &format!("rollback-recovered-{suffix}"),
+            &rollback_invite,
+        )
+        .await;
+        assert!(
+            recovered.is_some(),
+            "failed registration consumed its invite"
+        );
+
+        let refresh_invite = format!("refresh-{suffix}");
+        db.seed_invite_code(&refresh_invite).await.unwrap();
+        let refresh_user = format!("refresh-user-{suffix}");
+        register(&db, &refresh_user, &refresh_invite)
+            .await
+            .expect("refresh test registration");
+        let old_refresh = format!("refresh-{refresh_user}");
+        let rotate_one = {
+            let db = db.clone();
+            let old_refresh = old_refresh.clone();
+            let new_access = format!("new-access-1-{suffix}");
+            let new_refresh = format!("new-refresh-1-{suffix}");
+            tokio::spawn(async move {
+                db.rotate_refresh_session(&old_refresh, &new_access, &new_refresh)
+                    .await
+                    .unwrap()
+            })
+        };
+        let rotate_two = {
+            let db = db.clone();
+            let new_access = format!("new-access-2-{suffix}");
+            let new_refresh = format!("new-refresh-2-{suffix}");
+            tokio::spawn(async move {
+                db.rotate_refresh_session(&old_refresh, &new_access, &new_refresh)
+                    .await
+                    .unwrap()
+            })
+        };
+        let rotations = [rotate_one.await.unwrap(), rotate_two.await.unwrap()];
+        assert_eq!(
+            rotations.iter().filter(|result| result.is_some()).count(),
+            1,
+            "a refresh token must only rotate once"
+        );
+    }
+}

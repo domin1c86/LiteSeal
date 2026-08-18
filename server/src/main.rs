@@ -26,6 +26,11 @@ async fn main() {
     let db = Db::connect(&config.database_url)
         .await
         .expect("failed to connect to Postgres");
+    if let Some(invite_code) = &config.bootstrap_invite_code {
+        db.seed_invite_code(&auth::service::hash_token(invite_code))
+            .await
+            .expect("failed to seed bootstrap invitation code");
+    }
     let state = AppState::new(db);
     let cors = HeaderValue::from_str(&config.cors_allow_origin)
         .map(|origin| {
