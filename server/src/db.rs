@@ -23,17 +23,30 @@ pub struct DeviceRecord {
 
 #[derive(Debug, Clone)]
 pub struct OfflineMessageRecord {
+    pub protocol_version: i16,
     pub message_id: String,
     pub conversation_id: String,
     pub from_user_id: String,
     pub sender_device_id: String,
     pub sender_seq: i64,
     pub prev_hash: Vec<u8>,
+    pub recipient_user_id: String,
     pub recipient_device_id: String,
+    pub message_type: String,
     pub ciphertext: Vec<u8>,
     pub signature: Vec<u8>,
     pub timestamp: i64,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StoreOfflineOutcome {
+    Stored,
+    Duplicate,
+    QuotaExceeded,
+}
+
+const MAX_OFFLINE_MESSAGES_PER_DEVICE: i64 = 1_000;
+const MAX_OFFLINE_BYTES_PER_DEVICE: i64 = 10 * 1024 * 1024;
 
 impl Db {
     pub async fn connect(database_url: &str) -> Result<Self, sqlx::Error> {
@@ -323,28 +336,74 @@ impl Db {
     pub async fn store_offline_message(
         &self,
         msg: &OfflineMessageRecord,
-    ) -> Result<(), sqlx::Error> {
+    ) -> Result<StoreOfflineOutcome, sqlx::Error> {
+        let mut transaction = self.pool.begin().await?;
+        // Serialise quota checks for a recipient without locking unrelated
+        // queues. This prevents concurrent sends from racing past the cap.
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
+            .bind(&msg.recipient_device_id)
+            .execute(&mut *transaction)
+            .await?;
+
+        let existing = sqlx::query(
+            "SELECT 1 FROM offline_messages
+             WHERE message_id = $1 AND recipient_device_id = $2",
+        )
+        .bind(&msg.message_id)
+        .bind(&msg.recipient_device_id)
+        .fetch_optional(&mut *transaction)
+        .await?;
+        if existing.is_some() {
+            transaction.commit().await?;
+            return Ok(StoreOfflineOutcome::Duplicate);
+        }
+
+        let usage = sqlx::query(
+            "SELECT COUNT(*) AS message_count,
+                    COALESCE(SUM(octet_length(ciphertext) + octet_length(signature)), 0) AS byte_count
+             FROM offline_messages
+             WHERE recipient_device_id = $1 AND acked = false",
+        )
+        .bind(&msg.recipient_device_id)
+        .fetch_one(&mut *transaction)
+        .await?;
+        let message_count: i64 = usage.get("message_count");
+        let byte_count: i64 = usage.get("byte_count");
+        let new_bytes =
+            i64::try_from(msg.ciphertext.len() + msg.signature.len()).unwrap_or(i64::MAX);
+        if message_count >= MAX_OFFLINE_MESSAGES_PER_DEVICE
+            || byte_count.saturating_add(new_bytes) > MAX_OFFLINE_BYTES_PER_DEVICE
+        {
+            transaction.commit().await?;
+            return Ok(StoreOfflineOutcome::QuotaExceeded);
+        }
+
         sqlx::query(
             "INSERT INTO offline_messages
-             (id, message_id, conversation_id, from_user_id, sender_device_id, sender_seq, prev_hash,
-              recipient_device_id, ciphertext, signature, timestamp, delivered, acked, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, false, false, now())
-             ON CONFLICT (message_id, recipient_device_id) DO NOTHING",
+             (id, protocol_version, message_id, conversation_id, from_user_id, sender_device_id,
+              sender_seq, prev_hash, recipient_user_id, recipient_device_id, message_type,
+              ciphertext, signature, timestamp, delivered, acked, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+                     false, false, now())",
         )
         .bind(uuid::Uuid::new_v4().to_string())
+        .bind(msg.protocol_version)
         .bind(&msg.message_id)
         .bind(&msg.conversation_id)
         .bind(&msg.from_user_id)
         .bind(&msg.sender_device_id)
         .bind(msg.sender_seq)
         .bind(&msg.prev_hash)
+        .bind(&msg.recipient_user_id)
         .bind(&msg.recipient_device_id)
+        .bind(&msg.message_type)
         .bind(&msg.ciphertext)
         .bind(&msg.signature)
         .bind(msg.timestamp)
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await?;
-        Ok(())
+        transaction.commit().await?;
+        Ok(StoreOfflineOutcome::Stored)
     }
 
     pub async fn drain_offline_messages(
@@ -361,8 +420,9 @@ impl Db {
         .await?;
 
         let rows = sqlx::query(
-            "SELECT message_id, conversation_id, from_user_id, sender_device_id, sender_seq,
-                    prev_hash, recipient_device_id, ciphertext, signature, timestamp
+            "SELECT protocol_version, message_id, conversation_id, from_user_id, sender_device_id,
+                    sender_seq, prev_hash, recipient_user_id, recipient_device_id, message_type,
+                    ciphertext, signature, timestamp
              FROM offline_messages
              WHERE recipient_device_id = $1 AND acked = false
              ORDER BY created_at ASC",
@@ -373,13 +433,16 @@ impl Db {
         Ok(rows
             .into_iter()
             .map(|r| OfflineMessageRecord {
+                protocol_version: r.get("protocol_version"),
                 message_id: r.get("message_id"),
                 conversation_id: r.get("conversation_id"),
                 from_user_id: r.get("from_user_id"),
                 sender_device_id: r.get("sender_device_id"),
                 sender_seq: r.get("sender_seq"),
                 prev_hash: r.get("prev_hash"),
+                recipient_user_id: r.get("recipient_user_id"),
                 recipient_device_id: r.get("recipient_device_id"),
+                message_type: r.get("message_type"),
                 ciphertext: r.get("ciphertext"),
                 signature: r.get("signature"),
                 timestamp: r.get("timestamp"),
@@ -391,8 +454,8 @@ impl Db {
         &self,
         message_id: &str,
         recipient_device_id: &str,
-    ) -> Result<(), sqlx::Error> {
-        sqlx::query(
+    ) -> Result<bool, sqlx::Error> {
+        let result = sqlx::query(
             "UPDATE offline_messages SET delivered = true, acked = true
              WHERE message_id = $1 AND recipient_device_id = $2",
         )
@@ -400,7 +463,7 @@ impl Db {
         .bind(recipient_device_id)
         .execute(&self.pool)
         .await?;
-        Ok(())
+        Ok(result.rows_affected() == 1)
     }
 
     pub async fn upsert_trusted_contact(
@@ -510,13 +573,16 @@ CREATE TABLE IF NOT EXISTS device_keys (
 );
 CREATE TABLE IF NOT EXISTS offline_messages (
     id TEXT PRIMARY KEY,
+    protocol_version SMALLINT NOT NULL DEFAULT 1,
     message_id TEXT NOT NULL,
     conversation_id TEXT NOT NULL,
     from_user_id TEXT NOT NULL,
     sender_device_id TEXT NOT NULL,
     sender_seq BIGINT NOT NULL,
     prev_hash BYTEA NOT NULL,
+    recipient_user_id TEXT NOT NULL DEFAULT '',
     recipient_device_id TEXT NOT NULL,
+    message_type TEXT NOT NULL DEFAULT 'text',
     ciphertext BYTEA NOT NULL,
     signature BYTEA NOT NULL,
     timestamp BIGINT NOT NULL,
@@ -525,6 +591,9 @@ CREATE TABLE IF NOT EXISTS offline_messages (
     created_at TIMESTAMPTZ NOT NULL,
     UNIQUE(message_id, recipient_device_id)
 );
+ALTER TABLE offline_messages ADD COLUMN IF NOT EXISTS protocol_version SMALLINT NOT NULL DEFAULT 1;
+ALTER TABLE offline_messages ADD COLUMN IF NOT EXISTS recipient_user_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE offline_messages ADD COLUMN IF NOT EXISTS message_type TEXT NOT NULL DEFAULT 'text';
 CREATE TABLE IF NOT EXISTS message_deliveries (
     id TEXT PRIMARY KEY,
     message_id TEXT NOT NULL,

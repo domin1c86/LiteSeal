@@ -1,14 +1,30 @@
 use dashmap::DashMap;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
 use tokio::sync::mpsc;
 
 use crate::db::Db;
 
-pub type MessageSender = mpsc::UnboundedSender<String>;
+pub type MessageSender = mpsc::Sender<String>;
+
+#[derive(Clone)]
+pub struct Connection {
+    generation: u64,
+    sender: MessageSender,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SendOutcome {
+    Delivered,
+    Offline,
+}
 
 #[derive(Clone)]
 pub struct AppState {
-    pub connections: Arc<DashMap<String, MessageSender>>,
+    connections: Arc<DashMap<String, Connection>>,
+    next_generation: Arc<AtomicU64>,
     pub db: Db,
 }
 
@@ -16,28 +32,39 @@ impl AppState {
     pub fn new(db: Db) -> Self {
         Self {
             connections: Arc::new(DashMap::new()),
+            next_generation: Arc::new(AtomicU64::new(1)),
             db,
         }
     }
 
-    pub fn register(&self, user_id: String, sender: MessageSender) {
-        self.connections.insert(user_id, sender);
+    pub fn register(&self, device_id: String, sender: MessageSender) -> u64 {
+        let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
+        self.connections
+            .insert(device_id, Connection { generation, sender });
+        generation
     }
 
-    pub fn unregister(&self, user_id: &str) {
-        self.connections.remove(user_id);
+    pub fn unregister(&self, device_id: &str, generation: u64) {
+        self.connections.remove_if(device_id, |_, connection| {
+            connection.generation == generation
+        });
     }
 
-    pub fn send_to(&self, user_id: &str, message: String) -> bool {
-        if let Some(sender) = self.connections.get(user_id) {
-            let sent = sender.send(message).is_ok();
-            drop(sender);
-            if !sent {
-                self.connections.remove(user_id);
+    pub fn send_to(&self, device_id: &str, message: String) -> SendOutcome {
+        if let Some(connection) = self.connections.get(device_id) {
+            let generation = connection.generation;
+            let result = connection.sender.try_send(message);
+            drop(connection);
+            match result {
+                Ok(()) => SendOutcome::Delivered,
+                Err(mpsc::error::TrySendError::Full(_)) => SendOutcome::Offline,
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    self.unregister(device_id, generation);
+                    SendOutcome::Offline
+                }
             }
-            sent
         } else {
-            false
+            SendOutcome::Offline
         }
     }
 
@@ -59,10 +86,53 @@ mod tests {
     async fn send_to_removes_dead_connections() {
         let db = Db::connect_lazy("postgres://postgres:postgres@localhost/liteseal").unwrap();
         let state = AppState::new(db);
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::channel(1);
         drop(rx);
         state.register("device-1".to_string(), tx);
-        assert!(!state.send_to("device-1", "{}".to_string()));
+        assert_eq!(
+            state.send_to("device-1", "{}".to_string()),
+            SendOutcome::Offline
+        );
         assert!(!state.connections.contains_key("device-1"));
+    }
+
+    #[tokio::test]
+    async fn stale_disconnect_cannot_remove_replacement_connection() {
+        let db = Db::connect_lazy("postgres://postgres:postgres@localhost/liteseal").unwrap();
+        let state = AppState::new(db);
+        let (first_tx, _first_rx) = mpsc::channel(1);
+        let first_generation = state.register("device-1".to_string(), first_tx);
+        let (second_tx, mut second_rx) = mpsc::channel(1);
+        let second_generation = state.register("device-1".to_string(), second_tx);
+
+        state.unregister("device-1", first_generation);
+        assert_eq!(
+            state.send_to("device-1", "new".to_string()),
+            SendOutcome::Delivered
+        );
+        assert_eq!(second_rx.recv().await.as_deref(), Some("new"));
+
+        state.unregister("device-1", second_generation);
+        assert_eq!(
+            state.send_to("device-1", "gone".to_string()),
+            SendOutcome::Offline
+        );
+    }
+
+    #[tokio::test]
+    async fn full_connection_channel_falls_back_to_offline_delivery() {
+        let db = Db::connect_lazy("postgres://postgres:postgres@localhost/liteseal").unwrap();
+        let state = AppState::new(db);
+        let (tx, _rx) = mpsc::channel(1);
+        state.register("device-1".to_string(), tx);
+
+        assert_eq!(
+            state.send_to("device-1", "first".to_string()),
+            SendOutcome::Delivered
+        );
+        assert_eq!(
+            state.send_to("device-1", "second".to_string()),
+            SendOutcome::Offline
+        );
     }
 }
