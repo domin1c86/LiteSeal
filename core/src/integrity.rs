@@ -28,7 +28,7 @@ impl MessageIntegrityStore {
 
     pub fn validate_next(previous: Option<&MessageModel>, next: &MessageModel) -> IntegrityResult {
         let Some(previous) = previous else {
-            return if next.sender_seq <= 1 || next.prev_hash.is_empty() {
+            return if next.sender_seq == 1 && next.prev_hash.is_empty() {
                 IntegrityResult::Valid
             } else {
                 IntegrityResult::Gap
@@ -95,5 +95,25 @@ mod tests {
             MessageIntegrityStore::validate_next(Some(&first), &message("bad", 2, vec![7; 32])),
             IntegrityResult::PrevHashMismatch
         );
+    }
+
+    #[test]
+    fn only_accepts_exact_first_chain_entry() {
+        assert_eq!(
+            MessageIntegrityStore::validate_next(None, &message("first", 1, Vec::new())),
+            IntegrityResult::Valid
+        );
+
+        for invalid in [
+            message("zero", 0, Vec::new()),
+            message("negative", -1, Vec::new()),
+            message("gap", 2, Vec::new()),
+            message("linked", 1, vec![7; 32]),
+        ] {
+            assert_eq!(
+                MessageIntegrityStore::validate_next(None, &invalid),
+                IntegrityResult::Gap
+            );
+        }
     }
 }
