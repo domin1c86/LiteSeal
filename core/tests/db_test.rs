@@ -20,6 +20,9 @@ fn test_insert_and_get_message() {
         ciphertext: vec![1, 2, 3],
         signature: vec![4, 5, 6],
         prev_hash: vec![7, 8, 9],
+        protocol_version: 2,
+        verification_state: "verified_v2".to_string(),
+        quarantined: false,
     };
 
     repo.insert_message(&msg).unwrap();
@@ -48,6 +51,9 @@ fn test_get_messages_by_conversation() {
             ciphertext: vec![i as u8],
             signature: vec![],
             prev_hash: vec![],
+            protocol_version: 2,
+            verification_state: "verified_v2".to_string(),
+            quarantined: false,
         };
         repo.insert_message(&msg).unwrap();
     }
@@ -75,6 +81,9 @@ fn test_update_message_state() {
         ciphertext: vec![1, 2, 3],
         signature: vec![],
         prev_hash: vec![],
+        protocol_version: 2,
+        verification_state: "verified_v2".to_string(),
+        quarantined: false,
     };
 
     repo.insert_message(&msg).unwrap();
@@ -102,6 +111,9 @@ fn test_insert_message_is_idempotent_for_duplicate_ids() {
         ciphertext: vec![1],
         signature: vec![],
         prev_hash: vec![],
+        protocol_version: 2,
+        verification_state: "verified_v2".to_string(),
+        quarantined: false,
     };
 
     repo.insert_message(&msg).unwrap();
@@ -129,6 +141,9 @@ fn test_delete_message() {
         ciphertext: vec![1, 2, 3],
         signature: vec![],
         prev_hash: vec![],
+        protocol_version: 2,
+        verification_state: "verified_v2".to_string(),
+        quarantined: false,
     };
 
     repo.insert_message(&msg).unwrap();
@@ -352,6 +367,9 @@ fn test_storage_stats() {
             ciphertext: vec![0u8; 10],
             signature: vec![],
             prev_hash: vec![],
+            protocol_version: 2,
+            verification_state: "verified_v2".to_string(),
+            quarantined: false,
         };
         repo.insert_message(&msg).unwrap();
     }
@@ -392,6 +410,9 @@ fn test_clear_expired_messages() {
         ciphertext: vec![1],
         signature: vec![],
         prev_hash: vec![],
+        protocol_version: 2,
+        verification_state: "verified_v2".to_string(),
+        quarantined: false,
     };
     repo.insert_message(&msg_expired).unwrap();
 
@@ -408,6 +429,9 @@ fn test_clear_expired_messages() {
         ciphertext: vec![2],
         signature: vec![],
         prev_hash: vec![],
+        protocol_version: 2,
+        verification_state: "verified_v2".to_string(),
+        quarantined: false,
     };
     repo.insert_message(&msg_fresh).unwrap();
 
@@ -424,6 +448,9 @@ fn test_clear_expired_messages() {
         ciphertext: vec![3],
         signature: vec![],
         prev_hash: vec![],
+        protocol_version: 2,
+        verification_state: "verified_v2".to_string(),
+        quarantined: false,
     };
     repo.insert_message(&msg_no_expire).unwrap();
 
@@ -470,4 +497,42 @@ fn test_clear_unpinned_attachments() {
     assert_eq!(deleted, 1);
     assert!(repo.get_attachment("att-unpinned").unwrap().is_none());
     assert!(repo.get_attachment("att-pinned").unwrap().is_some());
+}
+
+#[test]
+fn legacy_messages_migrate_to_explicit_v1_verification_state() {
+    let unique = format!(
+        "liteseal-legacy-{}-{}.db",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    );
+    let path = std::env::temp_dir().join(unique);
+    {
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE messages (
+                    id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, sender_id TEXT NOT NULL,
+                    sender_device_id TEXT NOT NULL, sender_seq INTEGER NOT NULL,
+                    timestamp INTEGER NOT NULL, message_type TEXT NOT NULL,
+                    local_state TEXT NOT NULL, expire_at INTEGER, ciphertext BLOB NOT NULL,
+                    signature BLOB NOT NULL, prev_hash BLOB NOT NULL
+                 );
+                 INSERT INTO messages VALUES
+                    ('legacy', 'dm:a:b', 'a', 'device-a', 1, 1, 'text', 'received',
+                     NULL, x'01', x'02', x'');",
+            )
+            .unwrap();
+    }
+
+    let repository = MessageRepository::new(path.to_str().unwrap()).unwrap();
+    let migrated = repository.get_message("legacy").unwrap().unwrap();
+    assert_eq!(migrated.protocol_version, 1);
+    assert_eq!(migrated.verification_state, "legacy_unverified");
+    assert!(!migrated.quarantined);
+    drop(repository);
+    std::fs::remove_file(path).unwrap();
 }

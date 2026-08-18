@@ -1,6 +1,5 @@
 use liteseal_shared::crypto;
 use liteseal_shared::types::Message;
-use serde_json;
 
 const ALICE_MSG: &[u8] = b"Hello Bob, this is a secret message from Alice.";
 const BOB_MSG: &[u8] = b"Hi Alice, received your message loud and clear!";

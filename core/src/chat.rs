@@ -91,10 +91,15 @@ pub fn build_outgoing_message_model(
         ciphertext,
         signature,
         prev_hash,
+        protocol_version: 2,
+        verification_state: "authored_v2".to_string(),
+        quarantined: false,
     }
 }
 
 pub fn build_incoming_message_model(msg: IncomingMessage) -> MessageModel {
+    let legacy = msg.local_state.contains("v1_legacy");
+    let quarantined = msg.local_state == "quarantined";
     MessageModel {
         id: msg.message_id,
         conversation_id: msg.conversation_id,
@@ -108,6 +113,13 @@ pub fn build_incoming_message_model(msg: IncomingMessage) -> MessageModel {
         ciphertext: msg.ciphertext,
         signature: msg.signature,
         prev_hash: msg.prev_hash,
+        protocol_version: if legacy { 1 } else { 2 },
+        verification_state: if legacy {
+            "legacy_ciphertext_verified".to_string()
+        } else {
+            "verified_v2".to_string()
+        },
+        quarantined,
     }
 }
 
@@ -162,7 +174,9 @@ pub fn verify_message(
         .map_err(|e| format!("Verification failed: {}", e))
 }
 
-pub fn generate_keypair() -> Result<(Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>), String> {
+pub type ExportedKeypair = (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>);
+
+pub fn generate_keypair() -> Result<ExportedKeypair, String> {
     let kp = liteseal_shared::crypto::generate_keypair().map_err(|e| e.to_string())?;
     Ok((
         kp.public_key.to_vec(),

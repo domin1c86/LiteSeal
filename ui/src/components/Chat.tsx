@@ -1,146 +1,41 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useTauri } from "../hooks/useTauri";
-import { dmConversationId } from "../lib/conversation";
 import { trustLabel } from "./ContactList";
 import type { RelayBatch } from "../App";
-import type { Message, IncomingMessage, Contact, RelayEvent } from "../types";
+import type { DisplayMessage, Contact, RelayEvent } from "../types";
 
 interface ChatProps {
   conversationId: string | null;
   userId: string;
-  deviceId: string;
-  token: string;
-  serverUrl: string;
-  secretKey: number[];
-  signingKey: number[];
   contacts: Contact[];
   relayBatch: RelayBatch | null;
   onContactsChanged: () => void;
 }
 
-export default function Chat({ conversationId, userId, deviceId, serverUrl, secretKey, signingKey, contacts, relayBatch, onContactsChanged }: ChatProps) {
-  const [messages, setMessages] = useState<Message[]>([]);
+export default function Chat({ conversationId, userId, contacts, relayBatch, onContactsChanged }: ChatProps) {
+  const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const { sendMessage, getUserDevices, getLocalMessages, encryptMessage, decryptMessage, signMessage, verifyMessage, setContactTrust } = useTauri();
+  const { sendText, getMessages, setContactTrust } = useTauri();
   const activeContact = contacts.find((c) => c.user_id === conversationId);
-  // conversationId prop is the peer's user id; storage/relay use the canonical DM id.
-  const storageConversationId = conversationId ? dmConversationId(userId, conversationId) : null;
-
-  function incomingToMessage(m: IncomingMessage, ciphertext: number[]): Message {
-    return {
-      id: m.message_id,
-      conversation_id: m.conversation_id,
-      sender_id: m.from,
-      sender_device_id: m.sender_device_id,
-      sender_seq: m.sender_seq,
-      timestamp: m.timestamp,
-      message_type: "text",
-      ciphertext,
-      signature: m.signature,
-      prev_hash: m.prev_hash ?? [],
-      local_state: m.local_state ?? "received",
-    };
-  }
 
   useEffect(() => {
-    if (!conversationId || !storageConversationId) return;
+    if (!conversationId) return;
     setLoading(true);
     setSendError(null);
-    getLocalMessages(storageConversationId, 50, 0)
-      .then(async (msgs) => {
-        const decrypted = await Promise.all(
-          msgs.map(async (msg) => {
-            const peer = contacts.find((c) =>
-              msg.sender_id === userId
-                ? c.user_id === conversationId
-                : c.user_id === msg.sender_id
-            );
-            if (!peer) return msg;
-            try {
-              const plaintext = await decryptMessage(msg.ciphertext, peer.public_key, secretKey);
-              return { ...msg, ciphertext: plaintext };
-            } catch {
-              return { ...msg, ciphertext: Array.from(new TextEncoder().encode("[encrypted]")) };
-            }
-          })
-        );
-        setMessages(decrypted);
-      })
+    getMessages(conversationId, 50, 0)
+      .then(setMessages)
       .catch(console.error)
       .finally(() => setLoading(false));
-  }, [conversationId, contacts, secretKey, userId]);
+  }, [conversationId, getMessages]);
 
-  useEffect(() => {
-    if (!conversationId || !relayBatch) return;
-    (async () => {
-      try {
-        applyRelayEvents(relayBatch.events);
-        const incoming: IncomingMessage[] = relayBatch.messages;
-        if (incoming.length > 0) {
-          const decoded = await Promise.all(
-            incoming
-              .filter((m) => m.conversation_id === storageConversationId)
-              .map(async (m) => {
-                const sender = contacts.find((c) => c.user_id === m.from);
-                if (!sender) {
-                  return incomingToMessage(
-                    m,
-                    Array.from(new TextEncoder().encode("[sender not in contacts]"))
-                  );
-                }
-
-                try {
-                  if (!sender.ed25519_pk || sender.ed25519_pk.length === 0) {
-                    return incomingToMessage(
-                      m,
-                      Array.from(new TextEncoder().encode("[no ed25519 key, verification skipped]"))
-                    );
-                  }
-                  const valid = await verifyMessage(m.ciphertext, m.signature, sender.ed25519_pk);
-                  if (!valid) {
-                    return incomingToMessage(
-                      m,
-                      Array.from(new TextEncoder().encode("[signature invalid]"))
-                    );
-                  }
-                } catch {
-                  // verification itself failed — treat as invalid
-                  return incomingToMessage(
-                    m,
-                    Array.from(new TextEncoder().encode("[signature invalid]"))
-                  );
-                }
-
-                try {
-                  const plaintext = await decryptMessage(m.ciphertext, sender.public_key, secretKey);
-                  return incomingToMessage(m, plaintext);
-                } catch {
-                  return incomingToMessage(
-                    m,
-                    Array.from(new TextEncoder().encode("[decryption failed]"))
-                  );
-                }
-              })
-          );
-          setMessages((prev) => {
-            const seen = new Set(prev.map((msg) => msg.id));
-            return [...prev, ...decoded.filter((msg) => !seen.has(msg.id))];
-          });
-        }
-      } catch {
-        // ignore batch processing errors
-      }
-    })();
-  }, [relayBatch]);
-
-  function applyRelayEvents(events: RelayEvent[]) {
+  const applyRelayEvents = useCallback((events: RelayEvent[]) => {
     if (events.length === 0) return;
 
-    const stateByMessage = new Map<string, Message["local_state"]>();
+    const stateByMessage = new Map<string, string>();
     for (const event of events) {
       if (event.type === "delivered") {
         stateByMessage.set(event.message_id, "delivered");
@@ -157,12 +52,24 @@ export default function Chat({ conversationId, userId, deviceId, serverUrl, secr
       setMessages((prev) =>
         prev.map((msg) =>
           stateByMessage.has(msg.id)
-            ? { ...msg, local_state: stateByMessage.get(msg.id) }
+            ? { ...msg, local_state: stateByMessage.get(msg.id) ?? msg.local_state }
             : msg
         )
       );
     }
-  }
+  }, []);
+
+  useEffect(() => {
+    if (!conversationId || !relayBatch) return;
+    applyRelayEvents(relayBatch.events);
+    const incoming = relayBatch.messages.filter(
+      (message) => message.sender_id === conversationId
+    );
+    setMessages((previous) => {
+      const seen = new Set(previous.map((message) => message.id));
+      return [...previous, ...incoming.filter((message) => !seen.has(message.id))];
+    });
+  }, [relayBatch, conversationId, applyRelayEvents]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -178,55 +85,21 @@ export default function Chat({ conversationId, userId, deviceId, serverUrl, secr
     setSending(true);
 
     try {
-      const contact = contacts.find((c) => c.user_id === conversationId);
-      if (!contact) throw new Error("Recipient not found in contacts");
-
-      const devices = (await getUserDevices(serverUrl, conversationId)).filter(
-        (d) => !d.revoked && d.public_key.length === 32
-      );
-      if (devices.length === 0) throw new Error("Recipient has no active devices");
-
-      const encoder = new TextEncoder();
-      const plaintext = Array.from(encoder.encode(text));
-
-      // Local copy encrypted to the contact's stored key so history stays readable.
-      const ciphertext = await encryptMessage(plaintext, contact.public_key, secretKey);
-      const signature = await signMessage(ciphertext, signingKey);
-
-      const payloads = [];
-      for (const device of devices) {
-        const deviceCiphertext = await encryptMessage(plaintext, device.public_key, secretKey);
-        const deviceSignature = await signMessage(deviceCiphertext, signingKey);
-        payloads.push({
-          recipient_user_id: conversationId,
-          recipient_device_id: device.id,
-          ciphertext: deviceCiphertext,
-          signature: deviceSignature,
-        });
-      }
-
-      const result = await sendMessage(
-        userId,
-        ciphertext,
-        signature,
-        deviceId,
-        payloads
-      );
+      const result = await sendText(conversationId, text);
 
       setMessages((prev) => [
         ...prev,
         {
           id: result.message_id,
-          conversation_id: storageConversationId ?? conversationId,
+          conversation_id: conversationId,
           sender_id: userId,
-          sender_device_id: deviceId,
+          sender_device_id: "local",
           sender_seq: 0,
           timestamp: Date.now(),
-          message_type: "text",
-          local_state: "pending",
-          ciphertext: plaintext,
-          signature: [],
-          prev_hash: [],
+          plaintext: text,
+          local_state: "pending_v2",
+          protocol_version: 2,
+          verification_state: "authored_v2",
         },
       ]);
     } catch (err) {
@@ -284,12 +157,6 @@ export default function Chat({ conversationId, userId, deviceId, serverUrl, secr
         {loading && <p style={styles.loadingText}>loading…</p>}
         {messages.map((msg) => {
           const isMine = msg.sender_id === userId;
-          let text = "";
-          try {
-            text = new TextDecoder().decode(new Uint8Array(msg.ciphertext));
-          } catch {
-            text = "[encrypted]";
-          }
           return (
             <div
               key={msg.id}
@@ -304,7 +171,13 @@ export default function Chat({ conversationId, userId, deviceId, serverUrl, secr
                   ...(isMine ? styles.bubbleMine : styles.bubbleTheirs),
                 }}
               >
-                <span style={styles.messageText}>{text}</span>
+                <span style={styles.messageText}>{msg.plaintext}</span>
+                {msg.protocol_version === 1 && (
+                  <span style={styles.protocolLabel}>legacy v1 · ciphertext signature only</span>
+                )}
+                {msg.verification_state.includes("invalid") && (
+                  <span style={styles.protocolLabel}>{msg.verification_state}</span>
+                )}
                 <span style={styles.timestamp}>
                   {new Date(msg.timestamp).toLocaleTimeString([], {
                     hour: "2-digit",
@@ -459,6 +332,11 @@ const styles: Record<string, React.CSSProperties> = {
   messageText: {
     fontSize: "14px",
     wordBreak: "break-word",
+  },
+  protocolLabel: {
+    fontFamily: "var(--font-mono)",
+    fontSize: "9px",
+    opacity: 0.75,
   },
   timestamp: {
     fontFamily: "var(--font-mono)",

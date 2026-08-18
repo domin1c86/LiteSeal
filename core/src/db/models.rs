@@ -14,6 +14,9 @@ pub struct MessageModel {
     pub ciphertext: Vec<u8>,
     pub signature: Vec<u8>,
     pub prev_hash: Vec<u8>,
+    pub protocol_version: i64,
+    pub verification_state: String,
+    pub quarantined: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

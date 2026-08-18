@@ -1,19 +1,21 @@
 import { useState } from "react";
 import { useTauri } from "../hooks/useTauri";
-import type { RegisterResult } from "../types";
+import type { SessionView } from "../types";
 
 interface LoginProps {
-  onLogin: (result: RegisterResult & { serverUrl: string; publicKey: number[]; secretKey: number[]; ed25519Pk: number[]; ed25519Sk: number[] }) => void;
+  onLogin: (session: SessionView) => void;
 }
 
 export default function Login({ onLogin }: LoginProps) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [mode, setMode] = useState<"login" | "register">("login");
+  const [inviteCode, setInviteCode] = useState("");
+  const [replacementRequired, setReplacementRequired] = useState(false);
   const [serverUrl, setServerUrl] = useState("http://localhost:3000");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { register, login, connectRelay, generateKeypair, saveKeypair, loadKeypair } = useTauri();
+  const { register, login } = useTauri();
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -23,71 +25,18 @@ export default function Login({ onLogin }: LoginProps) {
     setError(null);
 
     try {
-      // Reuse the saved keypair + device on login so contacts keep a stable
-      // public key for us; fresh keys only for register or first login here.
-      let keys: { publicKey: number[]; secretKey: number[]; ed25519Pk: number[]; ed25519Sk: number[] } | null = null;
-      let savedDeviceId: string | undefined;
-      if (mode === "login") {
-        try {
-          const saved = await loadKeypair();
-          keys = {
-            publicKey: saved.public_key,
-            secretKey: saved.secret_key,
-            ed25519Pk: saved.ed25519_pk,
-            ed25519Sk: saved.ed25519_sk,
-          };
-          savedDeviceId = saved.device_id || undefined;
-        } catch {
-          // no keystore yet
-        }
-      }
-      if (!keys) {
-        const [publicKey, secretKey, ed25519Pk, ed25519Sk] = await generateKeypair();
-        keys = { publicKey, secretKey, ed25519Pk, ed25519Sk };
-      }
-
-      let result: RegisterResult;
       if (mode === "register") {
-        result = await register(username.trim(), password, serverUrl, keys.publicKey, keys.ed25519Pk);
+        const session = await register(username.trim(), password, inviteCode.trim(), serverUrl);
+        onLogin(session);
       } else {
-        try {
-          result = await login(username.trim(), password, serverUrl, keys.publicKey, keys.ed25519Pk, savedDeviceId);
-        } catch (err) {
-          // Saved device belongs to another account or was revoked: retry
-          // once with a fresh keypair and a new device registration.
-          if (savedDeviceId && String(err).includes("403")) {
-            const [publicKey, secretKey, ed25519Pk, ed25519Sk] = await generateKeypair();
-            keys = { publicKey, secretKey, ed25519Pk, ed25519Sk };
-            result = await login(username.trim(), password, serverUrl, keys.publicKey, keys.ed25519Pk);
-          } else {
-            throw err;
-          }
+        const outcome = await login(username.trim(), password, serverUrl, replacementRequired);
+        if (outcome.outcome === "device_replacement_required") {
+          setReplacementRequired(true);
+          setError("This account already has an active device. Confirm replacement to continue.");
+          return;
         }
+        onLogin(outcome.session);
       }
-
-      const token = result.access_token ?? result.token;
-      const deviceId = result.device_id ?? "";
-      await connectRelay(serverUrl, result.user_id, token, deviceId);
-      await saveKeypair({
-        user_id: result.user_id,
-        token,
-        refresh_token: result.refresh_token ?? "",
-        device_id: deviceId,
-        server_url: serverUrl,
-        public_key: keys.publicKey,
-        secret_key: keys.secretKey,
-        ed25519_pk: keys.ed25519Pk,
-        ed25519_sk: keys.ed25519Sk,
-      });
-      onLogin({
-        ...result,
-        token,
-        serverUrl,
-        publicKey: keys.publicKey,
-        secretKey: keys.secretKey,
-        ed25519Pk: keys.ed25519Pk,
-        ed25519Sk: keys.ed25519Sk,
-      });
     } catch (err) {
       setError(String(err));
     } finally {
@@ -106,14 +55,22 @@ export default function Login({ onLogin }: LoginProps) {
           <button
             type="button"
             style={{ ...styles.segment, ...(mode === "login" ? styles.segmentActive : {}) }}
-            onClick={() => setMode("login")}
+            onClick={() => {
+              setMode("login");
+              setReplacementRequired(false);
+              setError(null);
+            }}
           >
             Login
           </button>
           <button
             type="button"
             style={{ ...styles.segment, ...(mode === "register" ? styles.segmentActive : {}) }}
-            onClick={() => setMode("register")}
+            onClick={() => {
+              setMode("register");
+              setReplacementRequired(false);
+              setError(null);
+            }}
           >
             Register
           </button>
@@ -127,6 +84,16 @@ export default function Login({ onLogin }: LoginProps) {
             onChange={(e) => setServerUrl(e.target.value)}
             style={styles.input}
           />
+          {mode === "register" && (
+            <input
+              className="form-input"
+              type="password"
+              placeholder="Single-use invite code"
+              value={inviteCode}
+              onChange={(e) => setInviteCode(e.target.value)}
+              style={styles.input}
+            />
+          )}
           <input
             className="form-input"
             type="text"
@@ -147,10 +114,21 @@ export default function Login({ onLogin }: LoginProps) {
           <button
             className="primary-button"
             type="submit"
-            disabled={loading || !username.trim() || password.length < 8}
+            disabled={
+              loading ||
+              !username.trim() ||
+              password.length < 8 ||
+              (mode === "register" && !inviteCode.trim())
+            }
             style={styles.button}
           >
-            {loading ? "Connecting..." : mode === "register" ? "Register & Connect" : "Login"}
+            {loading
+              ? "Connecting..."
+              : mode === "register"
+                ? "Register & Connect"
+                : replacementRequired
+                  ? "Replace old device & login"
+                  : "Login"}
           </button>
           {error && <p style={styles.error}>{error}</p>}
         </form>

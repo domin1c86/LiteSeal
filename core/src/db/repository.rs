@@ -42,7 +42,10 @@ impl MessageRepository {
                 expire_at INTEGER,
                 ciphertext BLOB NOT NULL,
                 signature BLOB NOT NULL,
-                prev_hash BLOB NOT NULL
+                prev_hash BLOB NOT NULL,
+                protocol_version INTEGER NOT NULL DEFAULT 1,
+                verification_state TEXT NOT NULL DEFAULT 'legacy_unverified',
+                quarantined INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS attachments (
@@ -96,6 +99,18 @@ impl MessageRepository {
         );
         let _ = conn.execute(
             "ALTER TABLE contacts ADD COLUMN key_changed INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE messages ADD COLUMN protocol_version INTEGER NOT NULL DEFAULT 1",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE messages ADD COLUMN verification_state TEXT NOT NULL DEFAULT 'legacy_unverified'",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE messages ADD COLUMN quarantined INTEGER NOT NULL DEFAULT 0",
             [],
         );
 
@@ -161,8 +176,8 @@ impl MessageRepository {
         self.conn.execute(
             "INSERT OR IGNORE INTO messages (id, conversation_id, sender_id, sender_device_id,
              sender_seq, timestamp, message_type, local_state, expire_at,
-             ciphertext, signature, prev_hash)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+             ciphertext, signature, prev_hash, protocol_version, verification_state, quarantined)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 msg.id,
                 msg.conversation_id,
@@ -176,6 +191,9 @@ impl MessageRepository {
                 msg.ciphertext,
                 msg.signature,
                 msg.prev_hash,
+                msg.protocol_version,
+                msg.verification_state,
+                msg.quarantined as i32,
             ],
         )?;
         Ok(())
@@ -196,7 +214,7 @@ impl MessageRepository {
         let mut stmt = self.conn.prepare(
             "SELECT id, conversation_id, sender_id, sender_device_id,
              sender_seq, timestamp, message_type, local_state, expire_at,
-             ciphertext, signature, prev_hash
+             ciphertext, signature, prev_hash, protocol_version, verification_state, quarantined
              FROM messages WHERE id = ?1",
         )?;
 
@@ -214,6 +232,9 @@ impl MessageRepository {
                 ciphertext: row.get(9)?,
                 signature: row.get(10)?,
                 prev_hash: row.get(11)?,
+                protocol_version: row.get(12)?,
+                verification_state: row.get(13)?,
+                quarantined: row.get::<_, i32>(14)? != 0,
             })
         })?;
 
@@ -233,7 +254,7 @@ impl MessageRepository {
         let mut stmt = self.conn.prepare(
             "SELECT id, conversation_id, sender_id, sender_device_id,
              sender_seq, timestamp, message_type, local_state, expire_at,
-             ciphertext, signature, prev_hash
+             ciphertext, signature, prev_hash, protocol_version, verification_state, quarantined
              FROM messages WHERE conversation_id = ?1
              ORDER BY timestamp ASC LIMIT ?2 OFFSET ?3",
         )?;
@@ -252,6 +273,9 @@ impl MessageRepository {
                 ciphertext: row.get(9)?,
                 signature: row.get(10)?,
                 prev_hash: row.get(11)?,
+                protocol_version: row.get(12)?,
+                verification_state: row.get(13)?,
+                quarantined: row.get::<_, i32>(14)? != 0,
             })
         })?;
 
@@ -270,9 +294,12 @@ impl MessageRepository {
         let mut stmt = self.conn.prepare(
             "SELECT id, conversation_id, sender_id, sender_device_id,
              sender_seq, timestamp, message_type, local_state, expire_at,
-             ciphertext, signature, prev_hash
+             ciphertext, signature, prev_hash, protocol_version, verification_state, quarantined
              FROM messages
-             WHERE conversation_id = ?1 AND sender_device_id = ?2 AND local_state != 'integrity_failed'
+             WHERE conversation_id = ?1 AND sender_device_id = ?2
+               AND local_state != 'integrity_failed'
+               AND local_state != 'quarantined'
+               AND local_state NOT LIKE 'failed%'
              ORDER BY sender_seq DESC LIMIT 1",
         )?;
 
@@ -290,6 +317,9 @@ impl MessageRepository {
                 ciphertext: row.get(9)?,
                 signature: row.get(10)?,
                 prev_hash: row.get(11)?,
+                protocol_version: row.get(12)?,
+                verification_state: row.get(13)?,
+                quarantined: row.get::<_, i32>(14)? != 0,
             })
         })?;
 
