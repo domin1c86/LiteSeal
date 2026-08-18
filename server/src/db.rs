@@ -71,13 +71,38 @@ impl Db {
     }
 
     pub async fn migrate(&self) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS schema_migrations (
+                version BIGINT PRIMARY KEY,
+                applied_at TIMESTAMPTZ NOT NULL
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
+        let applied = sqlx::query("SELECT 1 FROM schema_migrations WHERE version = $1")
+            .bind(1_i64)
+            .fetch_optional(&self.pool)
+            .await?;
+        if applied.is_some() {
+            return Ok(());
+        }
+
+        let mut transaction = self.pool.begin().await?;
         for stmt in MIGRATIONS
             .split(";")
             .map(str::trim)
             .filter(|s| !s.is_empty())
         {
-            sqlx::query(stmt).execute(&self.pool).await?;
+            sqlx::query(stmt).execute(&mut *transaction).await?;
         }
+        sqlx::query(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES ($1, now())
+             ON CONFLICT (version) DO NOTHING",
+        )
+        .bind(1_i64)
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
         Ok(())
     }
 
