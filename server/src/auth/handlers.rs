@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, State},
+    extract::{ConnectInfo, Path, State},
     http::{HeaderMap, StatusCode},
     Json,
 };
@@ -29,13 +29,14 @@ pub struct RegisterResponse {
 
 pub async fn register(
     State(state): State<AppState>,
+    ConnectInfo(remote_addr): ConnectInfo<std::net::SocketAddr>,
     Json(req): Json<RegisterRequest>,
 ) -> Result<Json<RegisterResponse>, StatusCode> {
     let username = req.username.trim();
     if username.is_empty() {
         return Err(StatusCode::BAD_REQUEST);
     }
-    enforce_auth_rate_limit(&state, username).await?;
+    enforce_auth_rate_limit(&state, username, remote_addr.ip()).await?;
     let public_key = req.public_key.unwrap_or_default();
     let ed25519_pk = req.ed25519_pk.unwrap_or_default();
     service::validate_key_material(&public_key, &ed25519_pk)
@@ -102,9 +103,10 @@ pub struct LoginRequest {
 
 pub async fn login(
     State(state): State<AppState>,
+    ConnectInfo(remote_addr): ConnectInfo<std::net::SocketAddr>,
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<RegisterResponse>, StatusCode> {
-    enforce_auth_rate_limit(&state, req.username.trim()).await?;
+    enforce_auth_rate_limit(&state, req.username.trim(), remote_addr.ip()).await?;
     let user = state
         .db
         .get_user_by_username(req.username.trim())
@@ -374,7 +376,10 @@ pub async fn rotate_device_keys(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn user_from_bearer(state: &AppState, headers: &HeaderMap) -> Result<String, StatusCode> {
+pub(crate) async fn user_from_bearer(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<String, StatusCode> {
     let value = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
@@ -390,14 +395,24 @@ async fn user_from_bearer(state: &AppState, headers: &HeaderMap) -> Result<Strin
         .ok_or(StatusCode::UNAUTHORIZED)
 }
 
-async fn enforce_auth_rate_limit(state: &AppState, username: &str) -> Result<(), StatusCode> {
-    let key = format!("auth:{}", username.to_lowercase());
-    let allowed = state
+async fn enforce_auth_rate_limit(
+    state: &AppState,
+    username: &str,
+    remote_ip: std::net::IpAddr,
+) -> Result<(), StatusCode> {
+    let account_key = format!("auth:account:{}", username.to_lowercase());
+    let account_allowed = state
         .db
-        .hit_rate_limit(&key, 20, 60)
+        .hit_rate_limit(&account_key, 20, 60)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    if allowed {
+    let ip_key = format!("auth:ip:{remote_ip}");
+    let ip_allowed = state
+        .db
+        .hit_rate_limit(&ip_key, 60, 60)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if account_allowed && ip_allowed {
         Ok(())
     } else {
         Err(StatusCode::TOO_MANY_REQUESTS)

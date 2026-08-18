@@ -1,7 +1,7 @@
 use axum::{
     extract::{
         ws::{Message, WebSocket},
-        State, WebSocketUpgrade,
+        ConnectInfo, State, WebSocketUpgrade,
     },
     response::IntoResponse,
 };
@@ -23,13 +23,17 @@ const MAX_CIPHERTEXT_BYTES: usize = 16 * 1024;
 const MAX_IDENTIFIER_BYTES: usize = 128;
 const MAX_MESSAGE_TYPE_BYTES: usize = 32;
 
-pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
+pub async fn ws_handler(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+    ConnectInfo(remote_addr): ConnectInfo<std::net::SocketAddr>,
+) -> impl IntoResponse {
     ws.max_message_size(MAX_WS_MESSAGE_BYTES)
         .max_frame_size(MAX_WS_MESSAGE_BYTES)
-        .on_upgrade(move |socket| handle_socket(socket, state))
+        .on_upgrade(move |socket| handle_socket(socket, state, remote_addr.ip()))
 }
 
-async fn handle_socket(socket: WebSocket, state: AppState) {
+async fn handle_socket(socket: WebSocket, state: AppState, remote_ip: std::net::IpAddr) {
     let (mut ws_sender, mut ws_receiver) = socket.split();
     let (tx, mut rx) = mpsc::channel::<String>(CONNECTION_CHANNEL_CAPACITY);
     let mut authenticated: Option<(String, String, u64)> = None;
@@ -111,6 +115,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     &tx,
                     authenticated_user,
                     authenticated_device,
+                    remote_ip,
                     envelopes,
                 )
                 .await
@@ -165,6 +170,7 @@ async fn handle_v2_send(
     sender: &mpsc::Sender<String>,
     authenticated_user: &str,
     authenticated_device: &str,
+    remote_ip: std::net::IpAddr,
     mut envelopes: Vec<SignedEnvelopeV2>,
 ) -> Result<(), (&'static str, &'static str)> {
     if envelopes.len() != 1 {
@@ -175,6 +181,19 @@ async fn handle_v2_send(
     }
     let envelope = envelopes.pop().expect("length checked");
     validate_envelope_shape(&envelope, authenticated_user, authenticated_device)?;
+    let account_allowed = state
+        .db
+        .hit_rate_limit(&format!("message:account:{authenticated_user}"), 120, 60)
+        .await
+        .map_err(|_| ("storage_error", "Unable to apply message rate limit"))?;
+    let ip_allowed = state
+        .db
+        .hit_rate_limit(&format!("message:ip:{remote_ip}"), 300, 60)
+        .await
+        .map_err(|_| ("storage_error", "Unable to apply message rate limit"))?;
+    if !account_allowed || !ip_allowed {
+        return Err(("rate_limited", "Message rate limit exceeded"));
+    }
 
     let sender_device = state
         .db

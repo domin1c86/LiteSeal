@@ -605,31 +605,6 @@ impl Db {
         Ok(result.rows_affected() == 1)
     }
 
-    pub async fn upsert_trusted_contact(
-        &self,
-        owner_user_id: &str,
-        contact_user_id: &str,
-        fingerprint: &str,
-        state: &str,
-    ) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            "INSERT INTO trusted_contacts (id, owner_user_id, contact_user_id, fingerprint, state, updated_at)
-             VALUES ($1, $2, $3, $4, $5, now())
-             ON CONFLICT(owner_user_id, contact_user_id) DO UPDATE SET
-                fingerprint = excluded.fingerprint,
-                state = excluded.state,
-                updated_at = now()",
-        )
-        .bind(uuid::Uuid::new_v4().to_string())
-        .bind(owner_user_id)
-        .bind(contact_user_id)
-        .bind(fingerprint)
-        .bind(state)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
     pub async fn hit_rate_limit(
         &self,
         key: &str,
