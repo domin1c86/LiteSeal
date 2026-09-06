@@ -89,8 +89,8 @@ cargo run -p liteseal-server
 
 - Tauri hooks 使用 `npm run dev --prefix ui` 和 `npm run build --prefix ui`；Vite 开发地址为 `http://localhost:1420`。
 - Rust 改动按范围执行测试；涉及共享协议、跨 crate 接口或依赖时执行 workspace 检查与测试。前端改动至少执行前端构建。纯文档改动核对源码、路径、命令及 `git diff --check` 即可。
-- Postgres 并发集成测试需要 `LITESEAL_TEST_DATABASE_URL` 指向专用测试数据库。未设置时测试会跳过，不能据此声称已验证真实数据库行为。
-- `scripts/check-windows-beta.ps1` 汇集格式、Clippy、测试、前端构建、依赖审计和 Release 构建。检查各外部命令的退出码，不能仅凭脚本结束判定全部通过。
+- Postgres 集成测试需要 `LITESEAL_TEST_DATABASE_URL` 指向专用测试数据库。普通测试中这些用例显式标为 ignored；配置后用 `cargo test -p liteseal-server -- --ignored` 或 `cargo test --workspace -- --include-ignored` 执行，不能将跳过计为通过。
+- `scripts/check-windows-beta.ps1` 汇集格式、Clippy、测试、前端构建、依赖审计和 Release 构建，要求专用测试数据库且任一命令失败立即停止。`scripts/test-windows-beta-gate.ps1` 验证门禁自身的失败拦截行为。
 - 发布验证还需遵循 `SECURITY.md` 的依赖审计例外和复查期限，以及 `BETA_READINESS.md` 的验收门槛；历史通过记录不是本次验证结果。
 
 ## 环境与服务端配置

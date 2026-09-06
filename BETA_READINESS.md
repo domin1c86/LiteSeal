@@ -1,88 +1,78 @@
-# Windows beta readiness
+# Windows 小规模内测审查
 
-Last updated: 2026-08-19
+更新：2026-09-06。目标：先支持 5–10 位熟人使用 Windows；Android 不属于本轮准入范围。
 
-## Current assessment
+## 结论
 
-LiteSeal is approximately **70% ready** for a controlled Windows beta. Do not
-distribute it to real users yet. The protocol, relay authorization, desktop
-credential boundary, account isolation, dependency lock, and release build are
-implemented, but the acceptance and soak gates below are still blocking.
+**暂不发放给普通内测用户。** 可以继续由开发者在隔离环境联调。本轮已修复多项直接影响聊天和退出登录的缺陷，但断网恢复、发送失败后的连续收发、部署和两机验收尚未闭环。旧文档的“70%”和“5–8 天”没有足够证据支撑，不再用作上线判断。
 
-## Completed security work
+建议第一批采用全新账号、每账号一台 Windows 设备、纯文本聊天、双方先添加联系人并核对指纹。若采用此范围，Android、多设备同步和历史 v1 数据迁移不必阻塞首批；设备替换入口仍须明确限制或通过相应验收，不能静默丢弃旧消息。
 
-- Protocol v2 signs every identity, routing, ordering, timestamp, type, and
-  ciphertext field with deterministic domain-separated encoding.
-- New v1 sends are rejected. Existing v1 messages retain an explicit
-  `legacy_ciphertext_verified`/`legacy_unverified` state and are never promoted
-  to v2 authenticity.
-- ACKs are bound to the authenticated device and are emitted only after local
-  processing and durable insert. Invalid permanent payloads are quarantined;
-  missing contact keys remain unacknowledged for later reconciliation.
-- WebSocket authentication is first-frame-only. Sender/recipient device
-  ownership, canonical conversations, signatures, UUIDs, sequence shape, and
-  field sizes are validated before relay.
-- Connection queues are bounded at 128. Offline queues are atomically capped at
-  1,000 messages or 10 MiB per device. Connection generations prevent a stale
-  disconnect from deleting a replacement connection.
-- Invitation registration and refresh rotation are atomic Postgres
-  transactions. Invite codes are hashed, expiring, and single-use. New-device
-  login requires explicit replacement confirmation.
-- Lookup endpoints require Bearer authentication. Authentication, search, and
-  message operations use account/IP rate limits. Invalid CORS/database config
-  fails closed.
-- React/WebView no longer receives credentials or private keys and no longer
-  exposes raw encryption/signing/key-store IPC. Rust owns session restoration,
-  refresh, encryption, verification, decryption, persistence, ACK, and logout.
-- Accounts use separate `SHA-256(server origin || user id)` profile directories,
-  databases, and DPAPI stores. Legacy database migration validates a temporary
-  copy and retains a timestamped backup before atomic activation.
-- Tauri CSP denies external scripts, objects, frames, and network connections;
-  only application assets, IPC, and the current inline-style exception remain.
-- `Cargo.lock` is committed. Directly fixable `anyhow` and `event-listener`
-  advisories are upgraded; temporary target-reachability exceptions are
-  documented in `SECURITY.md` with a 2026-09-30 review date.
+## 本轮已完成
 
-## Verified gates
+| 问题 | 修复与证据 |
+| --- | --- |
+| 用户密钥、设备查询及设备操作路由返回 404 | 修正 Axum 0.7 参数路由写法。先用真实 HTTP 请求复现 404，再验证四条受保护操作进入鉴权。 |
+| 在线消息仅进入内存队列，断线后无副本 | 在线、离线消息均先提交 Postgres，再尝试发送；收件端 ACK 前保留密文。真实 WebSocket 测试验证在线收取、断线、重连重投和跨设备 ACK 拒绝。 |
+| 进入 socket 队列就标为 delivered | 服务端保存后为 stored，收件端持久化并 ACK 后才发送 delivered 更新。发送方离线时的回执补发仍待完善。 |
+| 积压消息遇到 128 条连接队列上限就停止装入 | 重投等待队列容量，并为阻塞设置超时；单元测试验证 1,000 条记录按顺序穿过有界队列。超过容量的完整真实网络验收仍在待办中。 |
+| HTTP logout 后旧 WebSocket 仍可收发 | 入站、出站及空闲连接重新验证会话与连接代次；失效或数据库校验出错时关闭。真实数据库测试先复现撤销后仍收到正文帧，再验证 logout / logout-all 失效。 |
+| 桌面退出后重启又进入离线历史 | 已退出和待撤销账号不再激活本地会话；保留 logout-all 的重试范围，撤销请求最多等待 5 秒。三个 Windows 配置存储与启动测试通过。 |
+| 并发首次建库发生系统表唯一约束冲突 | 迁移版本表与全部 DDL 放入同一事务，并用事务级 advisory lock 串行化。四个并发迁移在独立新 schema 上通过。 |
+| 内测脚本可能在外部命令失败后继续，数据库测试静默跳过 | 每个命令检查退出码；真实数据库测试默认显式 ignored，内测门禁要求配置数据库并显式运行。脚本回归覆盖缺配置、首命令失败和完整成功路径。 |
 
-- `cargo fmt --all -- --check`
-- `cargo clippy --workspace --all-targets -- -D warnings`
-- `cargo test --workspace` — 70 tests passed
-- Real Postgres concurrency test for invitation consumption, registration
-  rollback, and refresh-token replay
-- `npm exec tsc -- --noEmit`
-- `npm run build`
-- `cargo tauri build --no-bundle` — produced `target/release/liteseal-app.exe`
+## 首批内测前仍需解决
 
-## Remaining beta blockers
+以下是本轮源码审查得到的具体触发条件；未通过真实端到端复现的项标为源码证据，不能当作已经执行的验收结果。
 
-1. Implement `legacy_draining` device state. Replacement currently revokes the
-   old device immediately, so it cannot drain its already-queued v1 messages.
-2. Add client device-key history and an explicit unknown-sender message-request
-   flow. The current single pinned contact key safely blocks on change but does
-   not provide historical per-device reconciliation or a request inbox.
-3. Add black-box WebSocket/HTTP integration tests against real Postgres for
-   authenticated ACK isolation, forged recipient devices, online/offline
-   delivery, reconnect generations, slow consumers, and quota boundaries.
-4. Add automated Tauri UI coverage for restore/offline, replacement confirmation,
-   key changes, legacy labels, quarantine, and logout revocation. The local
-   in-app-browser harness could not initialize because its plugin dependency was
-   rejected outside the configured trusted path.
-5. Produce the signed installer twice in clean environments and compare inputs
-   and artifact hashes. The current check validates the Release executable, not
-   installer signing or clean-room reproducibility.
-6. Perform the two-Windows-device acceptance matrix and then a continuous
-   72-hour soak with zero message loss, cross-account leakage, unauthorized
-   delivery, or P0/P1 defects.
+### P1：断网恢复与发送队列
 
-Estimated remaining effort: **5–8 engineering days plus the 3-day soak**.
+- `core/src/network/websocket.rs` 接收任务结束后没有重连调度；`ui/src/App.tsx` 的 connected 来自登录快照，轮询错误被吞掉。断网、睡眠唤醒或服务重启后，界面可能仍显示在线且不会自动恢复。（源码证据）
+- `core/src/client.rs::send_text_v2` 先写入 pending_v2，再检查连接；连接不存在时 `?` 提前返回，没有进入 failed_v2 更新。后续消息继续使用已写入的序号，而接收端对缺号直接隔离。缺少保存原始信封、按序重发、服务端拒绝关联到具体消息的完整 outbox。（源码证据）
+- `ui/src/components/Chat.tsx` 在发送前清空输入，失败后不恢复草稿；发送者离线期间错过的 delivered 更新也没有补查路径。（源码证据）
 
-## Required acceptance sequence
+验收：断网发送、发出后立即杀进程、服务器重启、睡眠唤醒、连续失败后再发、并发点击发送，均能恢复且不重复、不永久缺号；状态明确区分待发、已保存、已送达、失败，失败正文可重试。
 
-1. Close blockers 1–4 and rerun all automated gates.
-2. Deploy with unique Postgres credentials, one-time invite codes, HTTPS/WSS,
-   private Postgres networking, readiness monitoring, and backups.
-3. Run registration, online/offline v2 messaging, v1 upgrade migration, device
-   replacement, account switching, and logout/logout-all on two Windows PCs.
-4. Build and hash the installer twice from the committed lockfile.
-5. Start the 72-hour soak only after all earlier steps pass.
+### P1：重投顺序、去重与联系人待处理消息
+
+- 服务端在加载历史积压前注册在线连接，实时发送可以与积压重投交错；客户端把非下一条序号当作 chain_invalid 并确认隔离。需区分乱序待补齐和永久无效载荷。（源码证据）
+- 客户端重复消息在链校验前没有明确的“相同已存信封”快速路径；需验证重复重投不会影响后续消息和验证标签。（源码证据）
+- 未添加联系人时消息不 ACK 是安全行为，但当前接收队列已取走该事件，添加联系人后缺少主动重新处理流程。仅保留服务端副本不等于用户能及时看到消息。（在原有联系人待办基础上补充的源码证据）
+
+验收：真实 HTTP/WebSocket 覆盖 1,000 条积压、积压与实时消息混发、重复包、缺号补齐、慢连接、离线队列条数/字节边界、陌生人先发后加联系人、指纹变化后明确恢复或拒绝。首批可以要求双方先加好友，但界面必须说明被暂停处理的消息。
+
+### P1：可以实际部署和发放的交付路径
+
+- `server/Dockerfile` 只复制 shared 与 server，但根 workspace 还引用 core 和 src-tauri，镜像构建上下文缺少成员。需要修复并实际构建、启动镜像；本轮尚未执行服务镜像构建。（源码证据）
+- `.env.example`、Compose 和 Nginx 示例还需在目标机器验收 HTTPS/WSS、重启后持久化、私有 Postgres、备份恢复、就绪探针。
+- 首批需要 5–10 个独立单次邀请码及发放/撤销流程，不能共用凭据或依赖开发用 mock 账号。
+- 需要实际 Windows 安装包及全新普通用户环境下的安装、启动、升级、卸载检查。本地 Release exe 编译成功不能替代安装验收。确定签名策略并提供版本号和 SHA-256；涉及发布或部署另行批准。
+
+### P1：两机与持续运行证据
+
+- 本轮没有操作完整 Tauri 窗口做 UI 验收，也没有两台 Windows 机器或 72 小时持续运行证据。
+- 必测注册/登录、互加与验指纹、双向消息、离线消息、两账号切换、logout/logout-all、重启不自动登录、设备替换限制，以及历史消息在重启后仍可读。
+- 在上述问题闭环后先由开发者两机验证，再邀请 2 位试用 24 小时；无丢消息、越权投递、跨账号泄漏和未解决 P1 后扩至 5–10 位，并完成连续 72 小时观察。
+
+## 本轮验证记录
+
+- `cargo fmt --all -- --check`：通过。
+- `cargo clippy --workspace --all-targets -- -D warnings`：通过。
+- 配置临时专用 Postgres 后执行 `cargo test --workspace -- --include-ignored`：79 项通过，0 失败，0 ignored。
+- 真实 Postgres 包括邀请码/刷新令牌并发、并发建库、在线消息断线重投与 ACK 隔离、已连接会话 logout/logout-all 撤销。
+- `scripts/test-windows-beta-gate.ps1`：三个门禁回归场景通过；这是门禁逻辑测试，不是签名或完整发行认证。
+- `npm run build --prefix ui`：通过。
+- `cargo tauri build --no-bundle`：通过，产物为 `target/release/liteseal-app.exe`；未生成或签名安装包。
+- 未重新获取在线依赖审计数据；`SECURITY.md` 的例外和复查期限仍适用。完整 beta 脚本包含在线审计，本轮未将它整体标为通过。
+- Rust 测试链接仍有 `LNK4098` CRT 库冲突警告，Release 链接有 libsodium PDB 缺失的 `LNK4099` 警告；测试与构建通过，但需在干净 Windows 构建环境确认依赖链接配置和调试符号。
+
+测试使用独立、仅绑定本机的临时 Postgres 容器，不连接项目已有或生产数据。
+
+## 下一阶段实施顺序
+
+1. 先实现可持久化的发送队列与重连状态机，同时修复草稿保留和发送状态。
+2. 再处理有序重投、重复消息、联系人待处理队列，并扩充真实网络故障回归。
+3. 修复并构建服务镜像，准备邀请码工具、安装包和可执行的两机验收记录。
+4. 完成两机与小批观察，再决定向 5–10 人发放。
+
+完成时间取决于网络故障测试和实际安装结果；当前不承诺日期。数据库加密、设备密钥历史等既有约束仍按 AGENTS.md 管理，不将“仅限熟人”视为消除这些限制。
