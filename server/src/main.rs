@@ -1,6 +1,8 @@
 mod auth;
 mod config;
 mod db;
+#[cfg(test)]
+mod http_tests;
 mod keys;
 mod relay;
 mod state;
@@ -32,12 +34,29 @@ async fn main() {
     let state = AppState::new(db);
     let allowed_origin = HeaderValue::from_str(&config.cors_allow_origin)
         .expect("LITESEAL_CORS_ALLOW_ORIGIN is not a valid origin");
+    let app = build_router(state, allowed_origin);
+
+    let listener = tokio::net::TcpListener::bind(&config.bind_addr)
+        .await
+        .unwrap();
+    tracing::info!("Server listening on {}", config.bind_addr);
+
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
+    .unwrap();
+}
+
+fn build_router(state: AppState, allowed_origin: HeaderValue) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(allowed_origin)
         .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::PUT])
         .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]);
 
-    let app = Router::new()
+    Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .route(
             "/readyz",
@@ -58,32 +77,19 @@ async fn main() {
             get(auth::handlers::list_devices).post(auth::handlers::register_device),
         )
         .route(
-            "/devices/{device_id}",
+            "/devices/:device_id",
             delete(auth::handlers::revoke_device).put(auth::handlers::rotate_device_keys),
         )
         .route("/users/search", get(keys::handlers::search_users))
-        .route("/users/{user_id}/key", get(keys::handlers::get_public_key))
+        .route("/users/:user_id/key", get(keys::handlers::get_public_key))
         .route(
-            "/users/{user_id}/devices",
+            "/users/:user_id/devices",
             get(keys::handlers::list_user_devices),
         )
         .route("/ws", get(relay::handlers::ws_handler))
         .layer(cors)
         .layer(TraceLayer::new_for_http())
-        .with_state(state);
-
-    let listener = tokio::net::TcpListener::bind(&config.bind_addr)
-        .await
-        .unwrap();
-    tracing::info!("Server listening on {}", config.bind_addr);
-
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-    )
-    .with_graceful_shutdown(shutdown_signal())
-    .await
-    .unwrap();
+        .with_state(state)
 }
 
 async fn shutdown_signal() {
