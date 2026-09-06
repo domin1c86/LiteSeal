@@ -50,6 +50,12 @@ impl AppState {
         });
     }
 
+    pub fn is_current(&self, device_id: &str, generation: u64) -> bool {
+        self.connections
+            .get(device_id)
+            .is_some_and(|connection| connection.generation == generation)
+    }
+
     pub fn send_to(&self, device_id: &str, message: String) -> SendOutcome {
         if let Some(connection) = self.connections.get(device_id) {
             let generation = connection.generation;

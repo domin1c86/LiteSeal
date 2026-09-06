@@ -232,3 +232,68 @@ async fn online_delivery_survives_disconnect_until_authenticated_recipient_ack()
         .unwrap()
         .is_empty());
 }
+
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn logout_prevents_existing_socket_from_sending_or_receiving() {
+    let server = TestServer::start().await;
+    let alice = server.register().await;
+    let bob = server.register().await;
+    let mut alice_socket = server.connect(&alice).await;
+    let mut bob_socket = server.connect(&bob).await;
+    let response = http_client()
+        .post(format!("{}/auth/logout", server.url))
+        .json(&serde_json::json!({ "access_token": alice.token }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::NO_CONTENT);
+
+    // Receiving must also re-check the session, not just the sender's device.
+    send(
+        &mut bob_socket,
+        ClientMessage::SendV2 {
+            envelopes: vec![envelope(&bob, &alice)],
+        },
+    )
+    .await;
+    let _ = receive(&mut bob_socket).await;
+    let incoming = tokio::time::timeout(std::time::Duration::from_secs(5), alice_socket.next())
+        .await
+        .expect("revoked socket must close");
+    assert!(
+        !matches!(incoming, Some(Ok(Message::Text(_)))),
+        "revoked session received application data"
+    );
+
+    // A second session verifies that inbound traffic is rejected immediately.
+    let carol = server.register().await;
+    let mut carol_socket = server.connect(&carol).await;
+    let response = http_client()
+        .post(format!("{}/auth/logout_all", server.url))
+        .json(&serde_json::json!({ "access_token": carol.token }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::NO_CONTENT);
+    send(
+        &mut carol_socket,
+        ClientMessage::SendV2 {
+            envelopes: vec![envelope(&carol, &bob)],
+        },
+    )
+    .await;
+    let incoming = tokio::time::timeout(std::time::Duration::from_secs(5), carol_socket.next())
+        .await
+        .expect("revoked sender must close");
+    assert!(
+        !matches!(incoming, Some(Ok(Message::Text(_)))),
+        "revoked session was allowed to send"
+    );
+    assert!(server
+        .db
+        .drain_offline_messages(&bob.device_id)
+        .await
+        .unwrap()
+        .is_empty());
+}

@@ -10,7 +10,7 @@ use liteseal_shared::{
     crypto,
     protocol::{ClientMessage, DeliveryStatus, ServerMessage, SignedEnvelopeV2, PROTOCOL_V2},
 };
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 use crate::{
     db::{OfflineMessageRecord, StoreOfflineOutcome},
@@ -22,6 +22,26 @@ const CONNECTION_CHANNEL_CAPACITY: usize = 128;
 const MAX_CIPHERTEXT_BYTES: usize = 16 * 1024;
 const MAX_IDENTIFIER_BYTES: usize = 128;
 const MAX_MESSAGE_TYPE_BYTES: usize = 32;
+
+#[derive(Clone)]
+struct AuthenticatedSession {
+    user_id: String,
+    device_id: String,
+    generation: u64,
+    token_hash: String,
+}
+
+impl AuthenticatedSession {
+    async fn is_active(&self, state: &AppState) -> bool {
+        if !state.is_current(&self.device_id, self.generation) {
+            return false;
+        }
+        matches!(
+            state.db.validate_access_token(&self.token_hash, &self.device_id).await,
+            Ok(Some(user_id)) if user_id == self.user_id
+        )
+    }
+}
 
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
@@ -36,17 +56,42 @@ pub async fn ws_handler(
 async fn handle_socket(socket: WebSocket, state: AppState, remote_ip: std::net::IpAddr) {
     let (mut ws_sender, mut ws_receiver) = socket.split();
     let (tx, mut rx) = mpsc::channel::<String>(CONNECTION_CHANNEL_CAPACITY);
-    let mut authenticated: Option<(String, String, u64)> = None;
+    let mut authenticated: Option<AuthenticatedSession> = None;
+    let (auth_tx, auth_rx) = watch::channel::<Option<AuthenticatedSession>>(None);
+    let delivery_state = state.clone();
 
-    let send_task = tokio::spawn(async move {
-        while let Some(msg) = rx.recv().await {
-            if ws_sender.send(Message::Text(msg)).await.is_err() {
-                break;
+    let mut send_task = tokio::spawn(async move {
+        let mut check_session = tokio::time::interval(std::time::Duration::from_secs(15));
+        loop {
+            let outgoing = tokio::select! {
+                msg = rx.recv() => match msg {
+                    Some(message) => Some(message),
+                    None => break,
+                },
+                _ = check_session.tick() => None,
+            };
+            let session = auth_rx.borrow().clone();
+            if let Some(session) = session {
+                // Revocation and replacement apply to existing connections,
+                // including receive-only clients. Database errors fail closed.
+                if !session.is_active(&delivery_state).await {
+                    break;
+                }
+            }
+            if let Some(message) = outgoing {
+                if ws_sender.send(Message::Text(message)).await.is_err() {
+                    break;
+                }
             }
         }
     });
 
-    while let Some(Ok(msg)) = StreamExt::next(&mut ws_receiver).await {
+    loop {
+        let incoming = tokio::select! {
+            message = StreamExt::next(&mut ws_receiver) => message,
+            _ = &mut send_task => break,
+        };
+        let Some(Ok(msg)) = incoming else { break };
         let Message::Text(text) = msg else {
             if matches!(msg, Message::Close(_)) {
                 break;
@@ -76,7 +121,14 @@ async fn handle_socket(socket: WebSocket, state: AppState, remote_ip: std::net::
             match state.validate_auth(&token, &device_id).await {
                 Some(validated_user_id) if validated_user_id == user_id => {
                     let generation = state.register(device_id.clone(), tx.clone());
-                    authenticated = Some((validated_user_id, device_id.clone(), generation));
+                    let session = AuthenticatedSession {
+                        user_id: validated_user_id,
+                        device_id: device_id.clone(),
+                        generation,
+                        token_hash: crate::auth::service::hash_token(&token),
+                    };
+                    auth_tx.send_replace(Some(session.clone()));
+                    authenticated = Some(session);
                     send_message(&tx, &ServerMessage::AuthOk);
                     deliver_offline_messages(&state, &tx, &device_id).await;
                 }
@@ -93,8 +145,12 @@ async fn handle_socket(socket: WebSocket, state: AppState, remote_ip: std::net::
             continue;
         }
 
-        let (authenticated_user, authenticated_device, _) =
-            authenticated.as_ref().expect("checked above");
+        let session = authenticated.as_ref().expect("checked above");
+        if !session.is_active(&state).await {
+            break;
+        }
+        let authenticated_user = &session.user_id;
+        let authenticated_device = &session.device_id;
         match parsed {
             ClientMessage::Auth { .. } => {
                 send_error(
@@ -167,9 +223,13 @@ async fn handle_socket(socket: WebSocket, state: AppState, remote_ip: std::net::
         }
     }
 
-    if let Some((_, device_id, generation)) = authenticated {
-        state.unregister(&device_id, generation);
-        tracing::info!(device_id, generation, "Device disconnected");
+    if let Some(session) = authenticated {
+        state.unregister(&session.device_id, session.generation);
+        tracing::info!(
+            device_id = session.device_id,
+            generation = session.generation,
+            "Device disconnected"
+        );
     }
     send_task.abort();
 }
