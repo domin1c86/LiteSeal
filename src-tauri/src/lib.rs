@@ -177,6 +177,7 @@ impl AppState {
             signing_public_key: legacy.ed25519_pk,
             signing_secret_key: legacy.ed25519_sk,
             pending_revocation: false,
+            pending_revocation_all: false,
         }))
     }
 }
@@ -195,6 +196,8 @@ pub struct StoredAccount {
     pub signing_secret_key: Vec<u8>,
     #[serde(default)]
     pub pending_revocation: bool,
+    #[serde(default)]
+    pub pending_revocation_all: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

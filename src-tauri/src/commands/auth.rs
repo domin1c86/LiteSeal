@@ -21,6 +21,10 @@ pub enum AuthOutcome {
 
 #[tauri::command]
 pub async fn bootstrap(state: State<'_, AppState>) -> Result<BootstrapState, String> {
+    bootstrap_state(&state).await
+}
+
+async fn bootstrap_state(state: &AppState) -> Result<BootstrapState, String> {
     let Some(mut account) = state.load_active_account()? else {
         return Ok(BootstrapState {
             session: None,
@@ -30,24 +34,31 @@ pub async fn bootstrap(state: State<'_, AppState>) -> Result<BootstrapState, Str
     if account.server_url.is_empty() {
         account.server_url = "http://localhost:3000".to_string();
     }
-    state.activate(account.clone(), true).await?;
-    let client = state.client()?;
-
+    // A deliberate logout must never become an offline login on restart.
+    // Retry a pending revocation without activating the account or socket.
     if account.pending_revocation
-        && api::logout(account.server_url.clone(), account.access_token.clone())
-            .await
-            .is_ok()
+        || (account.access_token.is_empty() && account.refresh_token.is_empty())
     {
-        account.pending_revocation = false;
-        account.access_token.clear();
-        account.refresh_token.clear();
-        state.update_session(account).await?;
+        if account.pending_revocation
+            && revoke_remote(&account, account.pending_revocation_all)
+                .await
+                .is_ok()
+        {
+            account.pending_revocation = false;
+            account.pending_revocation_all = false;
+            account.access_token.clear();
+            account.refresh_token.clear();
+            state.update_session(account).await?;
+        }
         state.clear_runtime_session().await;
         return Ok(BootstrapState {
             session: None,
             offline: false,
         });
     }
+
+    state.activate(account.clone(), true).await?;
+    let client = state.client()?;
 
     if !account.access_token.is_empty()
         && !account.device_id.is_empty()
@@ -129,6 +140,7 @@ pub async fn register(
         signing_public_key: keys.ed25519_pk.to_vec(),
         signing_secret_key: keys.ed25519_sk.to_vec(),
         pending_revocation: false,
+        pending_revocation_all: false,
     };
     state.activate(account.clone(), false).await?;
     state
@@ -204,6 +216,7 @@ pub async fn login(
         signing_public_key: keys.ed25519_pk.to_vec(),
         signing_secret_key: keys.ed25519_sk.to_vec(),
         pending_revocation: false,
+        pending_revocation_all: false,
     };
     state.activate(account.clone(), false).await?;
     state
@@ -232,12 +245,9 @@ pub async fn logout_all(state: State<'_, AppState>) -> Result<(), String> {
 
 async fn revoke_and_clear(state: &AppState, all: bool) -> Result<(), String> {
     let mut account = state.session().await?;
-    let result = if all {
-        api::logout_all(account.server_url.clone(), account.access_token.clone()).await
-    } else {
-        api::logout(account.server_url.clone(), account.access_token.clone()).await
-    };
+    let result = revoke_remote(&account, all).await;
     account.pending_revocation = result.is_err();
+    account.pending_revocation_all = result.is_err() && all;
     if result.is_ok() {
         account.access_token.clear();
         account.refresh_token.clear();
@@ -248,4 +258,137 @@ async fn revoke_and_clear(state: &AppState, all: bool) -> Result<(), String> {
     }
     state.clear_runtime_session().await;
     result.or(Ok(()))
+}
+
+async fn revoke_remote(account: &StoredAccount, all: bool) -> Result<(), String> {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        if all {
+            api::logout_all(account.server_url.clone(), account.access_token.clone()).await
+        } else {
+            api::logout(account.server_url.clone(), account.access_token.clone()).await
+        }
+    })
+    .await
+    .map_err(|_| "Session revocation timed out; will retry on next startup".to_string())?
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    struct Fixture {
+        state: AppState,
+        root: std::path::PathBuf,
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            // This fixture owns its unique temporary profile directory.
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    async fn fixture(server_url: String, pending: bool, all: bool) -> Fixture {
+        let root = std::env::temp_dir().join(format!(
+            "liteseal-logout-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let state = AppState::new(root.clone(), root.join("legacy")).unwrap();
+        let keys = liteseal_shared::crypto::generate_keypair().unwrap();
+        state
+            .activate(
+                StoredAccount {
+                    username: "test".to_string(),
+                    user_id: "test-user".to_string(),
+                    device_id: "test-device".to_string(),
+                    server_url,
+                    access_token: if pending {
+                        "test-access".to_string()
+                    } else {
+                        String::new()
+                    },
+                    refresh_token: if pending {
+                        "test-refresh".to_string()
+                    } else {
+                        String::new()
+                    },
+                    public_key: keys.public_key.to_vec(),
+                    secret_key: keys.secret_key.to_vec(),
+                    signing_public_key: keys.ed25519_pk.to_vec(),
+                    signing_secret_key: keys.ed25519_sk.to_vec(),
+                    pending_revocation: pending,
+                    pending_revocation_all: all,
+                },
+                false,
+            )
+            .await
+            .unwrap();
+        state.clear_runtime_session().await;
+        Fixture { state, root }
+    }
+
+    #[tokio::test]
+    async fn completed_logout_does_not_restore_offline_history_session() {
+        let fixture = fixture("http://127.0.0.1:1".to_string(), false, false).await;
+        let result = bootstrap_state(&fixture.state).await.unwrap();
+        assert!(result.session.is_none());
+        assert!(!result.offline);
+        assert!(fixture.state.client().is_err());
+        assert!(fixture.state.session().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn failed_revocation_stays_logged_out_and_preserves_retry() {
+        let fixture = fixture("http://127.0.0.1:1".to_string(), true, true).await;
+        let result = bootstrap_state(&fixture.state).await.unwrap();
+        assert!(result.session.is_none());
+        assert!(fixture.state.client().is_err());
+        let stored = fixture.state.load_active_account().unwrap().unwrap();
+        assert!(stored.pending_revocation);
+        assert!(stored.pending_revocation_all);
+        assert!(!stored.refresh_token.is_empty());
+    }
+
+    #[tokio::test]
+    async fn pending_logout_all_retries_the_original_scope_without_login() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let request = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = Vec::new();
+            let mut buffer = [0; 1024];
+            loop {
+                let count = socket.read(&mut buffer).await.unwrap();
+                assert_ne!(count, 0);
+                bytes.extend_from_slice(&buffer[..count]);
+                if bytes.windows(4).any(|part| part == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            socket
+                .write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
+            String::from_utf8(bytes)
+                .unwrap()
+                .lines()
+                .next()
+                .unwrap()
+                .to_string()
+        });
+        let fixture = fixture(format!("http://{address}"), true, true).await;
+        let result = bootstrap_state(&fixture.state).await.unwrap();
+        assert!(result.session.is_none());
+        assert!(fixture.state.client().is_err());
+        assert_eq!(request.await.unwrap(), "POST /auth/logout_all HTTP/1.1");
+        let stored = fixture.state.load_active_account().unwrap().unwrap();
+        assert!(!stored.pending_revocation);
+        assert!(stored.access_token.is_empty());
+        assert!(stored.refresh_token.is_empty());
+    }
 }
