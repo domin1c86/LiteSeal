@@ -879,9 +879,10 @@ mod integration_tests {
         admin.close().await;
     }
 
-    async fn test_db() -> Option<Db> {
-        let url = std::env::var("LITESEAL_TEST_DATABASE_URL").ok()?;
-        Some(Db::connect(&url).await.expect("connect test Postgres"))
+    async fn test_db() -> Db {
+        let url = std::env::var("LITESEAL_TEST_DATABASE_URL")
+            .expect("set LITESEAL_TEST_DATABASE_URL to a dedicated test database");
+        Db::connect(&url).await.expect("connect test Postgres")
     }
 
     async fn register(db: &Db, username: &str, invite_hash: &str) -> Option<(String, String)> {
@@ -904,11 +905,9 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
     async fn invitation_and_refresh_consumption_are_atomic_under_concurrency() {
-        let Some(db) = test_db().await else {
-            eprintln!("skipping Postgres integration test: LITESEAL_TEST_DATABASE_URL is unset");
-            return;
-        };
+        let db = test_db().await;
         let suffix = uuid::Uuid::new_v4();
         let invite = format!("invite-{suffix}");
         db.seed_invite_code(&invite).await.unwrap();
