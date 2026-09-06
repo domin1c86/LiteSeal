@@ -78,23 +78,29 @@ impl Db {
     }
 
     pub async fn migrate(&self) -> Result<(), sqlx::Error> {
+        let mut transaction = self.pool.begin().await?;
+        // CREATE TABLE IF NOT EXISTS alone does not serialize concurrent
+        // first boots. Protect the version table and all DDL in one transaction.
+        sqlx::query("SELECT pg_advisory_xact_lock(1818850405, 1)")
+            .execute(&mut *transaction)
+            .await?;
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS schema_migrations (
                 version BIGINT PRIMARY KEY,
                 applied_at TIMESTAMPTZ NOT NULL
             )",
         )
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await?;
         let applied = sqlx::query("SELECT 1 FROM schema_migrations WHERE version = $1")
             .bind(1_i64)
-            .fetch_optional(&self.pool)
+            .fetch_optional(&mut *transaction)
             .await?;
         if applied.is_some() {
+            transaction.commit().await?;
             return Ok(());
         }
 
-        let mut transaction = self.pool.begin().await?;
         for stmt in MIGRATIONS
             .split(";")
             .map(str::trim)
@@ -832,6 +838,46 @@ CREATE TABLE IF NOT EXISTS invitation_codes (
 #[cfg(test)]
 mod integration_tests {
     use super::*;
+
+    #[tokio::test]
+    #[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+    async fn concurrent_first_boot_migrations_are_atomic() {
+        let url =
+            std::env::var("LITESEAL_TEST_DATABASE_URL").expect("dedicated test database required");
+        let admin = PgPoolOptions::new().connect(&url).await.unwrap();
+        let schema = format!("migration_test_{}", uuid::Uuid::new_v4().simple());
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        let options = url
+            .parse::<sqlx::postgres::PgConnectOptions>()
+            .unwrap()
+            .options([("search_path", schema.as_str())]);
+        let pool = PgPoolOptions::new()
+            .max_connections(4)
+            .connect_with(options)
+            .await
+            .unwrap();
+        let db = Db { pool };
+        tokio::try_join!(db.migrate(), db.migrate(), db.migrate(), db.migrate()).unwrap();
+        let versions: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM schema_migrations")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(versions, 1);
+        sqlx::query("SELECT 1 FROM offline_messages LIMIT 1")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        db.pool.close().await;
+        // The UUID-named schema was created exclusively by this test.
+        sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        admin.close().await;
+    }
 
     async fn test_db() -> Option<Db> {
         let url = std::env::var("LITESEAL_TEST_DATABASE_URL").ok()?;
