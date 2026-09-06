@@ -5,6 +5,8 @@ mod db;
 mod http_tests;
 mod keys;
 mod relay;
+#[cfg(test)]
+mod relay_tests;
 mod state;
 
 use axum::{

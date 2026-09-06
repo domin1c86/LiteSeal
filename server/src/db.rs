@@ -45,6 +45,13 @@ pub enum StoreOfflineOutcome {
     QuotaExceeded,
 }
 
+pub struct AckedMessage {
+    pub message_id: String,
+    pub sender_device_id: String,
+    pub recipient_user_id: String,
+    pub recipient_device_id: String,
+}
+
 const MAX_OFFLINE_MESSAGES_PER_DEVICE: i64 = 1_000;
 const MAX_OFFLINE_BYTES_PER_DEVICE: i64 = 10 * 1024 * 1024;
 
@@ -618,16 +625,22 @@ impl Db {
         &self,
         message_id: &str,
         recipient_device_id: &str,
-    ) -> Result<bool, sqlx::Error> {
-        let result = sqlx::query(
+    ) -> Result<Option<AckedMessage>, sqlx::Error> {
+        let row = sqlx::query(
             "UPDATE offline_messages SET delivered = true, acked = true
-             WHERE message_id = $1 AND recipient_device_id = $2",
+             WHERE message_id = $1 AND recipient_device_id = $2
+             RETURNING message_id, sender_device_id, recipient_user_id, recipient_device_id",
         )
         .bind(message_id)
         .bind(recipient_device_id)
-        .execute(&self.pool)
+        .fetch_optional(&self.pool)
         .await?;
-        Ok(result.rows_affected() == 1)
+        Ok(row.map(|row| AckedMessage {
+            message_id: row.get("message_id"),
+            sender_device_id: row.get("sender_device_id"),
+            recipient_user_id: row.get("recipient_user_id"),
+            recipient_device_id: row.get("recipient_device_id"),
+        }))
     }
 
     pub async fn hit_rate_limit(

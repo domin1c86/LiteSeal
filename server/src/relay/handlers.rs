@@ -14,7 +14,7 @@ use tokio::sync::mpsc;
 
 use crate::{
     db::{OfflineMessageRecord, StoreOfflineOutcome},
-    state::{AppState, SendOutcome},
+    state::AppState,
 };
 
 const MAX_WS_MESSAGE_BYTES: usize = 64 * 1024;
@@ -139,12 +139,21 @@ async fn handle_socket(socket: WebSocket, state: AppState, remote_ip: std::net::
                     .ack_message(&message_id, authenticated_device)
                     .await
                 {
-                    Ok(true) => tracing::debug!(
-                        message_id,
-                        device_id = authenticated_device,
-                        "Acknowledged offline message"
-                    ),
-                    Ok(false) => send_error(
+                    Ok(Some(receipt)) => {
+                        // Only a durable, authenticated recipient ACK means
+                        // delivered. Enqueuing a socket write is not delivery.
+                        if let Ok(message) = serde_json::to_string(&ServerMessage::DeliveryUpdate {
+                            updates: vec![DeliveryStatus {
+                                message_id: receipt.message_id,
+                                recipient_user_id: receipt.recipient_user_id,
+                                recipient_device_id: receipt.recipient_device_id,
+                                status: "delivered".to_string(),
+                            }],
+                        }) {
+                            state.send_to(&receipt.sender_device_id, message);
+                        }
+                    }
+                    Ok(None) => send_error(
                         &tx,
                         "ack_not_found",
                         "Message is not queued for this device",
@@ -232,32 +241,34 @@ async fn handle_v2_send(
     })
     .map_err(|_| ("serialization_error", "Unable to serialize message"))?;
 
-    let status = match state.send_to(&envelope.recipient_device_id, relay_message) {
-        SendOutcome::Delivered => "delivered",
-        SendOutcome::Offline => match state
-            .db
-            .store_offline_message(&offline_record(&envelope))
-            .await
-            .map_err(|_| ("storage_error", "Unable to queue offline message"))?
-        {
-            StoreOfflineOutcome::Stored | StoreOfflineOutcome::Duplicate => "stored_offline",
-            StoreOfflineOutcome::QuotaExceeded => {
-                return Err(("offline_quota_exceeded", "Recipient offline queue is full"));
-            }
-        },
-    };
+    // Persist before attempting ANY socket delivery. A socket queue can be
+    // lost on disconnect or process exit; the durable copy survives until ACK.
+    let stored = state
+        .db
+        .store_offline_message(&offline_record(&envelope))
+        .await
+        .map_err(|_| ("storage_error", "Unable to persist message"))?;
+    if stored == StoreOfflineOutcome::QuotaExceeded {
+        return Err(("offline_quota_exceeded", "Recipient offline queue is full"));
+    }
 
     send_message(
         sender,
         &ServerMessage::DeliveryUpdate {
             updates: vec![DeliveryStatus {
-                message_id: envelope.message_id,
-                recipient_user_id: envelope.recipient_user_id,
-                recipient_device_id: envelope.recipient_device_id,
-                status: status.to_string(),
+                message_id: envelope.message_id.clone(),
+                recipient_user_id: envelope.recipient_user_id.clone(),
+                recipient_device_id: envelope.recipient_device_id.clone(),
+                status: "stored".to_string(),
             }],
         },
     );
+    // Queue the stored status before delivery so a fast recipient ACK cannot
+    // be followed by an older stored update on the sender's connection.
+    // Duplicates replay the original durable envelope on reconnection.
+    if stored == StoreOfflineOutcome::Stored {
+        state.send_to(&envelope.recipient_device_id, relay_message);
+    }
     Ok(())
 }
 
@@ -373,12 +384,19 @@ async fn deliver_offline_messages(
         let Ok(serialized) = serde_json::to_string(&server_message) else {
             continue;
         };
-        if sender.try_send(serialized).is_err() {
-            // Messages are only removed after an authenticated ACK, so a full
-            // connection queue safely leaves the remainder for retry.
+        if !enqueue_replay(sender, serialized).await {
             break;
         }
     }
+}
+
+async fn enqueue_replay(sender: &mpsc::Sender<String>, message: String) -> bool {
+    // Backpressure lets queues larger than 128 drain in one connection.
+    // Bound stalled writes; the unacknowledged rows remain durable for retry.
+    matches!(
+        tokio::time::timeout(std::time::Duration::from_secs(5), sender.send(message)).await,
+        Ok(Ok(()))
+    )
 }
 
 fn offline_record(envelope: &SignedEnvelopeV2) -> OfflineMessageRecord {
@@ -430,6 +448,34 @@ fn unix_millis() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn replay_waits_for_capacity_and_delivers_more_than_one_channelful() {
+        let (sender, mut receiver) = mpsc::channel(CONNECTION_CHANNEL_CAPACITY);
+        for index in 0..CONNECTION_CHANNEL_CAPACITY {
+            sender.try_send(index.to_string()).unwrap();
+        }
+        let producer = tokio::spawn(async move {
+            for index in CONNECTION_CHANNEL_CAPACITY..1_000 {
+                assert!(enqueue_replay(&sender, index.to_string()).await);
+            }
+        });
+        for index in 0..1_000 {
+            let message = tokio::time::timeout(std::time::Duration::from_secs(2), receiver.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(message, index.to_string());
+        }
+        producer.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn replay_stops_when_connection_is_closed() {
+        let (sender, receiver) = mpsc::channel(1);
+        drop(receiver);
+        assert!(!enqueue_replay(&sender, "message".to_string()).await);
+    }
 
     fn valid_envelope() -> SignedEnvelopeV2 {
         SignedEnvelopeV2 {
