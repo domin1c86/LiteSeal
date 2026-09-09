@@ -7,7 +7,7 @@ use rand::RngCore;
 use sha2::{Digest, Sha256};
 
 pub fn hash_password(password: &str) -> Result<String, String> {
-    if password.len() < 8 {
+    if password.chars().count() < 8 {
         return Err("Password must be at least 8 characters".to_string());
     }
     let salt = SaltString::generate(&mut OsRng);
@@ -67,6 +67,13 @@ mod tests {
         assert!(validate_key_material(&[1; 32], &[2; 31]).is_err());
         assert!(validate_key_material(&[0; 32], &[2; 32]).is_err());
         assert!(validate_key_material(&[1; 32], &[0; 32]).is_err());
+    }
+
+    #[test]
+    fn password_minimum_counts_characters_not_utf8_bytes() {
+        assert!(hash_password("1234567").is_err());
+        assert!(hash_password("中文密码").is_err());
+        assert!(hash_password("中文密码测试八字").is_ok());
     }
 
     #[test]

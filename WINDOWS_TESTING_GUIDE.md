@@ -1,6 +1,6 @@
 # Windows 界面入口、功能与完整测试指南
 
-适用范围：当前仓库 Windows 桌面客户端；移动端不在本次验收范围内。核对日期：2026-09-08。本文根据当前工作区代码编写，功能“已实现”表示有代码与界面入口，不代表已经通过 Windows 实机验收。旧 README / TESTING_GUIDE 中的版本、启动依赖和双实例测试步骤请以本文为准。
+适用范围：当前仓库 Windows 桌面客户端；移动端不在本次验收范围内。核对日期：2026-09-09。本文根据当前工作区代码编写，功能“已实现”表示有代码与界面入口，不代表已经通过 Windows 实机验收。旧 README / TESTING_GUIDE 中的版本、启动依赖和双实例测试步骤请以本文为准。
 
 ## 1. 怎么进入前端
 
@@ -52,6 +52,7 @@ docker compose exec postgres pg_isready -U liteseal -d liteseal
 $env:DATABASE_URL = 'postgres://liteseal:liteseal@localhost:5432/liteseal'
 $env:LITESEAL_BIND = '0.0.0.0:3000'
 $env:LITESEAL_CORS_ALLOW_ORIGIN = 'http://localhost:1420'
+$env:LITESEAL_INVITE_CODES = 'LITESEAL-WIN-ALPHA,LITESEAL-WIN-BRAVO,LITESEAL-WIN-CHARLIE'
 $env:RUST_LOG = 'info'
 cargo run -p liteseal-server
 ```
@@ -75,12 +76,32 @@ cargo tauri dev
 
 - Server URL：`http://localhost:3000`（不是 1420，不要填写 `/ws`）。
 - 首次使用选择 **Register**，输入独立测试用户名，例如 `alice_win_01`。
-- 密码至少 8 个字符，点击 **Register & Connect**。
+- Invite code：填写下节任一已配置的测试邀请码。
+- 密码至少 8 个字符，在 Confirm password 再输入一次相同密码；所有输入校验通过后点击 **Register & Connect**。
 - 已注册账号选择 **Login**，输入原用户名和密码。
 
 成功标志是进入含 `chats` / `contacts` 的主界面。未添加联系人时显示 `no contacts yet`，聊天区显示 `no conversation selected`，属于正常空状态。
 
 关闭测试环境：客户端和服务端终端各按 Ctrl+C；需要停止数据库时在根目录执行 `docker compose stop postgres`。保留数据库卷可以继续使用测试账号。
+
+### 可重复使用的测试邀请码
+
+本轮提供三个测试码：`LITESEAL-WIN-ALPHA`、`LITESEAL-WIN-BRAVO`、`LITESEAL-WIN-CHARLIE`。区分大小写，输入首尾空格会去除；没有使用次数限制，可供不同用户名重复注册。
+
+本机 `cargo run`：务必在启动服务端的 PowerShell 先设置上面的 `LITESEAL_INVITE_CODES` 环境变量，然后启动/重启服务端。仅复制 `.env.example` 不会自动生效。`docker compose up -d --build server` 使用 Compose 中的这三个默认测试码，也可通过同名变量覆盖。测试码不是客户端硬编码白名单；由服务端配置决定是否有效。
+
+未配置或配置为空时，新注册关闭；已有账号仍可登录。移除某个码并重启服务端可停用它。测试码仅用于开发测试，正式部署时替换为你自己的邀请码。
+
+注册每行右侧显示提示灯，同时显示说明文字：灰色表示未填写，黄色表示邀请码正在向服务器验证，绿色表示通过对应检查，红色表示不符合要求或验证失败。邀请码输入停止约 400 毫秒后发起验证，网络失败可以点击“重新验证邀请码”。修改地址/邀请码后旧验证结果立即失效。用户名绿灯只表示非空，重名仍在注册时判断；服务器地址绿灯只表示 HTTP(S) 格式有效。密码按 Unicode 字符数量检查至少 8 个字符；确认密码必须与原密码完全相同。确认密码只在本地比较，不发送给服务端。
+
+客户端通过 `validate_invite` IPC 调用 `POST /auth/invite/validate`，提交注册时还会由 `POST /auth/register` 强制再次验证 `invite_code`；省略、错误或停用的邀请码返回 403。不能通过跳过前端绕过邀请码限制。本次仅接通 Windows 注册界面，旧移动端尚无邀请码输入，不能在开启此限制的服务端注册新账号。
+
+新增手动检查（本次按要求不执行界面交互测试）：
+
+- 用同一个测试码分别注册两个不同用户名，应均成功；重复用户名仍不允许。
+- 空码、错误码、停用码应无法注册；断网时显示验证失败，可重试。
+- 输入 7 个字符、8 个字符和中文密码，观察密码灯；确认密码不一致时禁用注册，修改原密码后确认灯同步更新。
+- 修改服务器地址后旧邀请码绿灯应失效；切换 Login 时不要求邀请码和确认密码。
 
 ## 4. 当前界面和功能清单
 
@@ -231,7 +252,7 @@ Remove-Item Env:SODIUM_USE_PKG_CONFIG -ErrorAction SilentlyContinue
 
 ## 10. 本次核查记录与问题报告模板
 
-本次仅修改文档，未修改应用功能。已完成代码入口、界面操作、配置和数据路径核对；前端 TypeScript 检查和 Vite 生产构建通过。`cargo test --offline -p liteseal-shared -p liteseal-core` 通过，共 54 项测试（core 单元 12、数据库 16、shared 加密 3、集成 22、协议 1）。未执行全 workspace 检查与测试。当前运行环境为 Linux，未执行 Windows 桌面、DPAPI、安装包及真实双人联调；上表均保留“未执行”，需要 Windows 实测填写。
+2026-09-08 文档任务仅修改文档，未修改应用功能。已完成代码入口、界面操作、配置和数据路径核对；前端 TypeScript 检查和 Vite 生产构建通过。`cargo test --offline -p liteseal-shared -p liteseal-core` 通过，共 54 项测试（core 单元 12、数据库 16、shared 加密 3、集成 22、协议 1）。未执行全 workspace 检查与测试。当前运行环境为 Linux，未执行 Windows 桌面、DPAPI、安装包及真实双人联调；上表均保留“未执行”，需要 Windows 实测填写。
 
 问题报告建议复制：
 
@@ -251,3 +272,5 @@ Node / Rust / Tauri CLI 版本：
 ```
 
 代码定位：界面在 `ui/src/components/`，会话恢复在 `ui/src/App.tsx`，原生桥接在 `ui/src/hooks/useTauri.ts` 与 `src-tauri/src/commands/`，客户端核心在 `core/src/`，服务端启动配置在 `server/src/main.rs`、`server/src/config.rs`。后续完成一个任务后，先记录验证结果，再单独提交该任务涉及的文件，避免把其他未完成改动混入提交。
+
+2026-09-09 注册增强：新增可重复邀请码的服务端校验、Windows 表单确认密码和逐行提示灯。`npm run build --prefix ui`、`cargo check --offline --workspace` 均通过；`cargo test --offline -p liteseal-server -p liteseal-core -p liteseal-shared` 共 60 项测试通过，含 HTTP 邀请码校验与拒绝绕过测试。按用户要求未执行界面交互测试；未执行 Windows 实机注册或真实 PostgreSQL 的多账号注册联调。

@@ -26,7 +26,8 @@ async fn main() {
     let db = Db::connect(&config.database_url)
         .await
         .expect("failed to connect to Postgres");
-    let state = AppState::new(db);
+    let mut state = AppState::new(db);
+    state.invite_codes = std::sync::Arc::new(config.invite_codes);
     let cors = HeaderValue::from_str(&config.cors_allow_origin)
         .map(|origin| {
             CorsLayer::new()
@@ -39,6 +40,10 @@ async fn main() {
     let app = Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .route("/auth/register", post(auth::handlers::register))
+        .route(
+            "/auth/invite/validate",
+            post(auth::handlers::validate_invite),
+        )
         .route("/auth/login", post(auth::handlers::login))
         .route("/auth/refresh", post(auth::handlers::refresh))
         .route("/auth/logout", post(auth::handlers::logout))

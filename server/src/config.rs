@@ -3,11 +3,19 @@ pub struct ServerConfig {
     pub database_url: String,
     pub bind_addr: String,
     pub cors_allow_origin: String,
+    pub invite_codes: Vec<String>,
 }
 
 impl ServerConfig {
     pub fn from_env() -> Self {
         Self {
+            invite_codes: std::env::var("LITESEAL_INVITE_CODES")
+                .unwrap_or_default()
+                .split(',')
+                .map(str::trim)
+                .filter(|code| !code.is_empty())
+                .map(str::to_owned)
+                .collect(),
             database_url: std::env::var("DATABASE_URL").unwrap_or_else(|_| {
                 "postgres://postgres:postgres@localhost:5432/liteseal".to_string()
             }),

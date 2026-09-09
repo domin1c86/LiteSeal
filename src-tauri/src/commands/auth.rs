@@ -12,6 +12,7 @@ pub struct ConnectResult {
 
 #[tauri::command]
 pub async fn register(
+    invite_code: String,
     username: String,
     password: String,
     server_url: String,
@@ -19,6 +20,7 @@ pub async fn register(
     ed25519_pk: Vec<u8>,
 ) -> Result<RegisterResult, String> {
     api::register(
+        invite_code,
         username,
         password,
         server_url,
@@ -77,4 +79,9 @@ pub async fn connect_relay(
 pub async fn disconnect(state: State<'_, AppState>) -> Result<(), String> {
     state.client.disconnect().await;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn validate_invite(server_url: String, invite_code: String) -> Result<bool, String> {
+    api::validate_invite(server_url, invite_code).await
 }

@@ -21,6 +21,7 @@ fn main() {
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             commands::auth::register,
+            commands::auth::validate_invite,
             commands::auth::login,
             commands::auth::refresh_session,
             commands::auth::connect_relay,

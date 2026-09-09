@@ -19,9 +19,11 @@ export function useTauri() {
     password: string,
     serverUrl: string,
     publicKey: number[] = [],
-    ed25519Pk: number[] = []
+    ed25519Pk: number[] = [],
+    inviteCode: string = ""
   ): Promise<RegisterResult> {
     return invoke<RegisterResult>("register", {
+      inviteCode,
       username,
       password,
       serverUrl,
@@ -248,4 +250,8 @@ export function useTauri() {
     loadKeypair,
     clearKeypair,
   };
+}
+
+export function validateInvite(serverUrl: string, inviteCode: string): Promise<boolean> {
+  return invoke<boolean>("validate_invite", { serverUrl, inviteCode });
 }

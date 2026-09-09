@@ -217,6 +217,7 @@ pub async fn register(
     ed25519_pk: Vec<u8>,
 ) -> FfiResult<FfiAuthResult> {
     api::register(
+        String::new(), // Mobile registration needs an invite field before it can use this server.
         username,
         password,
         server_url,

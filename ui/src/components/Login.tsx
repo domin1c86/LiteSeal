@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { useTauri } from "../hooks/useTauri";
+import { useEffect, useState } from "react";
+import { useTauri, validateInvite } from "../hooks/useTauri";
 import type { RegisterResult } from "../types";
 
 interface LoginProps {
@@ -9,15 +9,52 @@ interface LoginProps {
 export default function Login({ onLogin }: LoginProps) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [inviteCode, setInviteCode] = useState("");
+  const [inviteCheck, setInviteCheck] = useState<{ key: string; valid: boolean; error?: string } | null>(null);
+  const [inviteRetry, setInviteRetry] = useState(0);
   const [mode, setMode] = useState<"login" | "register">("login");
   const [serverUrl, setServerUrl] = useState("http://localhost:3000");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { register, login, connectRelay, generateKeypair, saveKeypair, loadKeypair } = useTauri();
 
+  const registering = mode === "register";
+  const validUrl = isServerUrl(serverUrl);
+  const validPassword = Array.from(password).length >= 8;
+  const inviteKey = JSON.stringify([serverUrl.trim(), inviteCode.trim()]);
+  const currentInvite = inviteCheck?.key === inviteKey ? inviteCheck : null;
+  const inviteState: FieldState = !inviteCode.trim() ? "empty"
+    : !validUrl ? "invalid"
+    : !currentInvite ? "checking"
+    : currentInvite.valid ? "valid" : "invalid";
+  const canSubmit = validUrl && !!username.trim() && (registering
+    ? validPassword && confirmPassword === password && inviteState === "valid"
+    : password.length > 0);
+
+  useEffect(() => {
+    if (!registering || !validUrl || !inviteCode.trim()) return;
+    let active = true;
+    const timer = setTimeout(() => {
+      validateInvite(serverUrl.trim(), inviteCode.trim()).then(
+        (valid) => { if (active) setInviteCheck({ key: inviteKey, valid }); },
+        (err) => { if (active) setInviteCheck({ key: inviteKey, valid: false, error: String(err) }); }
+      );
+    }, 400);
+    return () => { active = false; clearTimeout(timer); };
+  }, [registering, validUrl, serverUrl, inviteCode, inviteKey, inviteRetry]);
+
+  function switchMode(next: "login" | "register") {
+    if (next === mode) return;
+    setMode(next);
+    setError(null);
+    setConfirmPassword("");
+    setInviteCheck(null);
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!username.trim() || password.length < 8) return;
+    if (loading || !canSubmit) return;
 
     setLoading(true);
     setError(null);
@@ -48,7 +85,7 @@ export default function Login({ onLogin }: LoginProps) {
 
       let result: RegisterResult;
       if (mode === "register") {
-        result = await register(username.trim(), password, serverUrl, keys.publicKey, keys.ed25519Pk);
+        result = await register(username.trim(), password, serverUrl, keys.publicKey, keys.ed25519Pk, inviteCode.trim());
       } else {
         try {
           result = await login(username.trim(), password, serverUrl, keys.publicKey, keys.ed25519Pk, savedDeviceId);
@@ -106,75 +143,128 @@ export default function Login({ onLogin }: LoginProps) {
           <button
             type="button"
             style={{ ...styles.segment, ...(mode === "login" ? styles.segmentActive : {}) }}
-            onClick={() => setMode("login")}
+            disabled={loading}
+            onClick={() => switchMode("login")}
           >
             Login
           </button>
           <button
             type="button"
             style={{ ...styles.segment, ...(mode === "register" ? styles.segmentActive : {}) }}
-            onClick={() => setMode("register")}
+            disabled={loading}
+            onClick={() => switchMode("register")}
           >
             Register
           </button>
         </div>
         <form onSubmit={handleSubmit} style={styles.form}>
-          <input
-            className="form-input"
-            type="text"
-            placeholder="Server URL"
-            value={serverUrl}
-            onChange={(e) => setServerUrl(e.target.value)}
-            style={styles.input}
-          />
-          <input
-            className="form-input"
-            type="text"
-            placeholder="Username"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            style={styles.input}
-            autoFocus
-          />
-          <input
-            className="form-input"
-            type="password"
-            placeholder="Password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            style={styles.input}
-          />
+          <ValidationField label="Server URL" value={serverUrl} onChange={(value) => { setServerUrl(value); setInviteCheck(null); }}
+            disabled={loading} showStatus={registering}
+            state={fieldState(serverUrl, validUrl)}
+            hint={validUrl ? "地址格式有效（不代表已连接）" : "请输入 http:// 或 https:// 开头的服务器地址"} />
+          <ValidationField label="Username" value={username} onChange={setUsername}
+            disabled={loading} showStatus={registering} autoComplete="username"
+            state={fieldState(username, !!username.trim())}
+            hint={username.trim() ? "格式有效，注册时检查用户名是否已占用" : "请输入非空用户名"} />
+          {registering && <ValidationField label="Invite code" value={inviteCode} onChange={(value) => { setInviteCode(value); setInviteCheck(null); }}
+            disabled={loading} showStatus state={inviteState}
+            hint={inviteState === "valid" ? "邀请码有效"
+              : inviteState === "checking" ? "正在向服务器验证…"
+              : currentInvite?.error ?? (inviteState === "invalid"
+                ? validUrl ? "邀请码无效，请检查后重试" : "请先填写有效的服务器地址"
+                : "请输入管理员提供的邀请码（区分大小写）")} />}
+          {registering && currentInvite?.error && <button type="button" disabled={loading}
+            style={styles.segment} onClick={() => { setInviteCheck(null); setInviteRetry((n) => n + 1); }}>
+            重新验证邀请码
+          </button>}
+          <ValidationField label="Password" type="password" value={password} onChange={setPassword}
+            disabled={loading} showStatus={registering}
+            autoComplete={registering ? "new-password" : "current-password"}
+            state={fieldState(password, validPassword)}
+            hint={validPassword ? "密码符合要求：至少 8 个字符" : "密码至少需要 8 个字符"} />
+          {registering && <ValidationField label="Confirm password" type="password"
+            value={confirmPassword} onChange={setConfirmPassword} disabled={loading} showStatus
+            autoComplete="new-password"
+            state={fieldState(confirmPassword, validPassword && confirmPassword === password)}
+            hint={!confirmPassword ? "请再次输入密码"
+              : confirmPassword !== password ? "两次输入的密码不一致"
+              : !validPassword ? "请先让密码满足至少 8 个字符的要求" : "两次输入的密码一致"} />}
           <button
             className="primary-button"
             type="submit"
-            disabled={loading || !username.trim() || password.length < 8}
+            disabled={loading || !canSubmit}
             style={styles.button}
           >
             {loading ? "Connecting..." : mode === "register" ? "Register & Connect" : "Login"}
           </button>
-          {error && <p style={styles.error}>{error}</p>}
+          {error && <p role="alert" style={styles.error}>{error}</p>}
         </form>
       </div>
     </div>
   );
 }
 
+type FieldState = "empty" | "checking" | "valid" | "invalid";
+
+function fieldState(value: string, valid: boolean): FieldState {
+  return !value ? "empty" : valid ? "valid" : "invalid";
+}
+
+function isServerUrl(value: string): boolean {
+  try {
+    const url = new URL(value.trim());
+    return ["http:", "https:"].includes(url.protocol) && !!url.hostname;
+  } catch { return false; }
+}
+
+function ValidationField({ label, value, onChange, state, hint, showStatus, disabled,
+  type = "text", autoComplete }: {
+  label: string; value: string; onChange: (value: string) => void;
+  state: FieldState; hint: string; showStatus: boolean; disabled: boolean;
+  type?: string; autoComplete?: string;
+}) {
+  const id = `auth-${label.toLowerCase().replace(/ /g, "-")}`;
+  const color = state === "valid" ? "var(--ok)" : state === "invalid"
+    ? "var(--danger)" : state === "checking" ? "var(--warn)" : "var(--text-subtle)";
+  return <div style={{ textAlign: "left" }}>
+    <label htmlFor={id} style={styles.label}>{label}</label>
+    <div style={styles.fieldRow}>
+      <input id={id} className="form-input" type={type} placeholder={label} value={value}
+        onChange={(e) => onChange(e.target.value)} disabled={disabled} autoComplete={autoComplete}
+        aria-invalid={showStatus && state === "invalid"}
+        aria-describedby={showStatus ? `${id}-hint` : undefined}
+        style={{ ...styles.input, width: "100%", minWidth: 0 }} />
+      {showStatus && <span data-status={state} aria-hidden="true" style={{
+        ...styles.lamp, backgroundColor: color,
+      }} />}
+    </div>
+    {showStatus && <p id={`${id}-hint`} aria-live="polite" style={{ ...styles.hint, color }}>
+      {state === "valid" ? "✓ " : state === "invalid" ? "! " : ""}{hint}
+    </p>}
+  </div>;
+}
+
 const styles: Record<string, React.CSSProperties> = {
+  label: { display: "block", fontSize: "12px", color: "var(--text-muted)", marginBottom: "6px" },
+  fieldRow: { display: "flex", alignItems: "center", gap: "10px" },
+  lamp: { width: "9px", height: "9px", borderRadius: "50%", flexShrink: 0 },
+  hint: { fontSize: "11px", lineHeight: 1.5, margin: "5px 0 0", overflowWrap: "anywhere" },
   container: {
     display: "flex",
-    alignItems: "center",
+    alignItems: "flex-start",
     justifyContent: "center",
-    height: "100vh",
+    minHeight: "100vh",
     padding: "24px",
     backgroundColor: "var(--workspace-bg)",
   },
   card: {
+    margin: "auto 0",
     padding: "36px",
     borderRadius: "var(--radius-lg)",
     backgroundColor: "var(--sidebar-bg)",
     border: "1px solid var(--border)",
     boxShadow: "var(--shadow-modal)",
-    width: "min(380px, 100%)",
+    width: "min(440px, 100%)",
     textAlign: "center",
   },
   title: {

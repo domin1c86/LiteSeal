@@ -10,6 +10,7 @@ pub type MessageSender = mpsc::UnboundedSender<String>;
 pub struct AppState {
     pub connections: Arc<DashMap<String, MessageSender>>,
     pub db: Db,
+    pub invite_codes: Arc<Vec<String>>,
 }
 
 impl AppState {
@@ -17,7 +18,13 @@ impl AppState {
         Self {
             connections: Arc::new(DashMap::new()),
             db,
+            invite_codes: Arc::new(Vec::new()),
         }
+    }
+
+    pub fn accepts_invite(&self, code: &str) -> bool {
+        let code = code.trim();
+        !code.is_empty() && self.invite_codes.iter().any(|allowed| allowed == code)
     }
 
     pub fn register(&self, user_id: String, sender: MessageSender) {
