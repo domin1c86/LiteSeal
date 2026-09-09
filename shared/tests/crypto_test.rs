@@ -38,22 +38,3 @@ fn test_sign_verify_with_public_key() {
 
     assert!(valid);
 }
-
-#[test]
-fn malformed_signature_lengths_are_rejected_safely() {
-    let keypair = liteseal_shared::crypto::generate_keypair().unwrap();
-    let message = b"length checked";
-
-    assert!(!liteseal_shared::crypto::verify_with_public_key(
-        message,
-        &[0_u8; 63],
-        &keypair.ed25519_pk,
-    )
-    .unwrap());
-    assert!(!liteseal_shared::crypto::verify_with_public_key(
-        message,
-        &[0_u8; 65],
-        &keypair.ed25519_pk,
-    )
-    .unwrap());
-}

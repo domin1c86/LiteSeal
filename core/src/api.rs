@@ -25,7 +25,6 @@ pub struct RemoteDevice {
 pub async fn register(
     username: String,
     password: String,
-    invite_code: String,
     server_url: String,
     device_name: &str,
     public_key: Vec<u8>,
@@ -47,7 +46,6 @@ pub async fn register(
         .json(&serde_json::json!({
             "username": username,
             "password": password,
-            "invite_code": invite_code,
             "device_name": device_name,
             "public_key": public_key,
             "ed25519_pk": ed25519_pk,
@@ -68,7 +66,6 @@ pub async fn register(
         .map_err(|e| format!("Failed to parse registration response: {}", e))
 }
 
-#[allow(clippy::too_many_arguments)]
 pub async fn login(
     username: String,
     password: String,
@@ -77,7 +74,6 @@ pub async fn login(
     public_key: Vec<u8>,
     ed25519_pk: Vec<u8>,
     device_id: Option<String>,
-    replace_device: bool,
 ) -> Result<RegisterResult, String> {
     let username = username.trim().to_string();
     if username.is_empty() {
@@ -98,15 +94,11 @@ pub async fn login(
             "device_id": device_id,
             "device_public_key": public_key,
             "ed25519_pk": ed25519_pk,
-            "replace_device": replace_device,
         }))
         .send()
         .await
         .map_err(|e| format!("Login request failed: {}", e))?;
 
-    if resp.status() == reqwest::StatusCode::CONFLICT && device_id.is_none() {
-        return Err("device_replacement_required".to_string());
-    }
     if !resp.status().is_success() {
         return Err(format!("Login failed with status: {}", resp.status()));
     }
@@ -146,7 +138,6 @@ pub async fn refresh_session(
 pub async fn get_user_devices(
     server_url: String,
     user_id: String,
-    access_token: String,
 ) -> Result<Vec<RemoteDevice>, String> {
     let user_id = user_id.trim().to_string();
     if user_id.is_empty() {
@@ -159,7 +150,6 @@ pub async fn get_user_devices(
 
     let resp = client
         .get(&url)
-        .bearer_auth(access_token)
         .send()
         .await
         .map_err(|e| format!("Device lookup failed: {}", e))?;
@@ -176,11 +166,7 @@ pub async fn get_user_devices(
         .map_err(|e| format!("Failed to parse device list: {}", e))
 }
 
-pub async fn search_users(
-    server_url: String,
-    query: String,
-    access_token: String,
-) -> Result<Vec<PublicKeyInfo>, String> {
+pub async fn search_users(server_url: String, query: String) -> Result<Vec<PublicKeyInfo>, String> {
     let query = query.trim().to_string();
     if query.is_empty() {
         return Err("Search query cannot be empty".to_string());
@@ -194,7 +180,6 @@ pub async fn search_users(
 
     let resp = client
         .get(url.as_str())
-        .bearer_auth(access_token)
         .send()
         .await
         .map_err(|e| format!("Search request failed: {}", e))?;
@@ -219,47 +204,8 @@ pub fn normalize_server_url(server_url: &str) -> Result<String, String> {
     let trimmed = server_url.trim().trim_end_matches('/');
     let parsed = url::Url::parse(trimmed).map_err(|e| format!("Invalid server URL: {}", e))?;
     match parsed.scheme() {
-        "https" => Ok(trimmed.to_string()),
-        "http" if is_loopback_host(&parsed) => Ok(trimmed.to_string()),
-        "http" => Err("Remote servers must use HTTPS".to_string()),
-        _ => {
-            Err("Server URL must start with https:// (HTTP is local development only)".to_string())
-        }
-    }
-}
-
-pub async fn logout(server_url: String, access_token: String) -> Result<(), String> {
-    revoke(server_url, access_token, "/auth/logout").await
-}
-
-pub async fn logout_all(server_url: String, access_token: String) -> Result<(), String> {
-    revoke(server_url, access_token, "/auth/logout_all").await
-}
-
-async fn revoke(server_url: String, access_token: String, path: &str) -> Result<(), String> {
-    let server_url = normalize_server_url(&server_url)?;
-    let response = reqwest::Client::new()
-        .post(format!("{server_url}{path}"))
-        .json(&serde_json::json!({ "access_token": access_token }))
-        .send()
-        .await
-        .map_err(|e| format!("Session revocation failed: {e}"))?;
-    if response.status().is_success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "Session revocation failed with status: {}",
-            response.status()
-        ))
-    }
-}
-
-fn is_loopback_host(url: &url::Url) -> bool {
-    match url.host() {
-        Some(url::Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
-        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
-        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
-        None => false,
+        "http" | "https" => Ok(trimmed.to_string()),
+        _ => Err("Server URL must start with http:// or https://".to_string()),
     }
 }
 
@@ -274,9 +220,6 @@ mod tests {
             "http://localhost:3000"
         );
         assert!(normalize_server_url("ftp://localhost:3000").is_err());
-        assert!(normalize_server_url("http://example.com:3000").is_err());
-        assert!(normalize_server_url("http://127.0.0.1:3000").is_ok());
-        assert!(normalize_server_url("https://example.com").is_ok());
         assert!(validate_public_key("Public key", &[1; 32]).is_ok());
         assert!(validate_public_key("Public key", &[1; 31]).is_err());
     }

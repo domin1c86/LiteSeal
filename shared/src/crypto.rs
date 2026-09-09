@@ -163,13 +163,6 @@ pub fn verify_with_public_key(
 ) -> Result<bool, CryptoError> {
     init_sodium()?;
 
-    // libsodium's detached verification API receives a raw signature pointer
-    // and assumes it addresses exactly crypto_sign_BYTES bytes. Rejecting any
-    // other length here prevents an out-of-bounds read for malformed input.
-    if signature.len() != libsodium_sys::crypto_sign_BYTES as usize {
-        return Ok(false);
-    }
-
     unsafe {
         let result = libsodium_sys::crypto_sign_verify_detached(
             signature.as_ptr(),

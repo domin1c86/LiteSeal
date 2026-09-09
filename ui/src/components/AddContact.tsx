@@ -3,6 +3,7 @@ import { useTauri } from "../hooks/useTauri";
 import type { Contact, UserSearchResult } from "../types";
 
 interface AddContactProps {
+  serverUrl: string;
   userId: string;
   contacts: Contact[];
   onClose: () => void;
@@ -10,6 +11,7 @@ interface AddContactProps {
 }
 
 export default function AddContact({
+  serverUrl,
   userId,
   contacts,
   onClose,
@@ -30,7 +32,7 @@ export default function AddContact({
     setSearching(true);
     setError(null);
     try {
-      const res = await searchUsers(query.trim());
+      const res = await searchUsers(query.trim(), serverUrl);
       setResults(res);
       setSearched(true);
     } catch (err) {

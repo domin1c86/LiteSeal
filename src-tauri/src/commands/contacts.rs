@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::AppState;
-use liteseal_core::api;
+use liteseal_core::api::{self, RemoteDevice};
 use liteseal_core::db::models::ContactModel;
 use liteseal_shared::types::PublicKeyInfo;
 
@@ -30,14 +30,14 @@ pub async fn add_contact(
     state: State<'_, AppState>,
 ) -> Result<AddContactResult, String> {
     state
-        .client()?
+        .client
         .add_contact(user_id, username, public_key, ed25519_pk)?;
     Ok(AddContactResult { success: true })
 }
 
 #[tauri::command]
 pub async fn get_contacts(state: State<'_, AppState>) -> Result<Vec<ContactModel>, String> {
-    state.client()?.get_contacts()
+    state.client.get_contacts()
 }
 
 #[tauri::command]
@@ -45,7 +45,7 @@ pub async fn remove_contact(
     user_id: String,
     state: State<'_, AppState>,
 ) -> Result<RemoveContactResult, String> {
-    state.client()?.remove_contact(&user_id)?;
+    state.client.remove_contact(&user_id)?;
     Ok(RemoveContactResult { success: true })
 }
 
@@ -55,20 +55,19 @@ pub async fn set_contact_trust(
     trust_state: String,
     state: State<'_, AppState>,
 ) -> Result<SetContactTrustResult, String> {
-    state.client()?.set_contact_trust(&user_id, &trust_state)?;
+    state.client.set_contact_trust(&user_id, &trust_state)?;
     Ok(SetContactTrustResult { success: true })
 }
 
 #[tauri::command]
-pub async fn search_users(
-    query: String,
-    state: State<'_, AppState>,
-) -> Result<Vec<PublicKeyInfo>, String> {
-    let account = state.session().await?;
-    api::search_users(
-        account.server_url.clone(),
-        query,
-        account.access_token.clone(),
-    )
-    .await
+pub async fn get_user_devices(
+    server_url: String,
+    user_id: String,
+) -> Result<Vec<RemoteDevice>, String> {
+    api::get_user_devices(server_url, user_id).await
+}
+
+#[tauri::command]
+pub async fn search_users(server_url: String, query: String) -> Result<Vec<PublicKeyInfo>, String> {
+    api::search_users(server_url, query).await
 }

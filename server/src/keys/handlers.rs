@@ -37,6 +37,12 @@ pub struct DeviceResponse {
     pub revoked: bool,
 }
 
+#[derive(Deserialize)]
+pub struct TrustContactRequest {
+    pub fingerprint: String,
+    pub state: String,
+}
+
 fn escape_like_pattern(query: &str) -> String {
     query
         .replace('\\', "\\\\")
@@ -46,23 +52,13 @@ fn escape_like_pattern(query: &str) -> String {
 
 pub async fn search_users(
     State(state): State<AppState>,
-    headers: HeaderMap,
     Query(params): Query<SearchQuery>,
-) -> Result<Json<Vec<UserSearchResult>>, StatusCode> {
-    let requester = crate::auth::handlers::user_from_bearer(&state, &headers).await?;
+) -> Json<Vec<UserSearchResult>> {
     let query = params.q.trim().to_lowercase();
     let mut results = Vec::new();
 
     if query.is_empty() {
-        return Ok(Json(results));
-    }
-    if !state
-        .db
-        .hit_rate_limit(&format!("search:account:{requester}"), 30, 60)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    {
-        return Err(StatusCode::TOO_MANY_REQUESTS);
+        return Json(results);
     }
 
     // One row per user (their newest active device), wildcards escaped.
@@ -93,15 +89,13 @@ pub async fn search_users(
     }
 
     results.sort_by(|a, b| a.username.cmp(&b.username));
-    Ok(Json(results))
+    Json(results)
 }
 
 pub async fn get_public_key(
     State(state): State<AppState>,
-    headers: HeaderMap,
     Path(user_id): Path<String>,
 ) -> Result<Json<PublicKeyResponse>, StatusCode> {
-    crate::auth::handlers::user_from_bearer(&state, &headers).await?;
     let username = state
         .db
         .get_username(&user_id)
@@ -126,10 +120,8 @@ pub async fn get_public_key(
 
 pub async fn list_user_devices(
     State(state): State<AppState>,
-    headers: HeaderMap,
     Path(user_id): Path<String>,
 ) -> Result<Json<Vec<DeviceResponse>>, StatusCode> {
-    crate::auth::handlers::user_from_bearer(&state, &headers).await?;
     let devices = state
         .db
         .list_user_devices(&user_id)
@@ -147,4 +139,44 @@ pub async fn list_user_devices(
             })
             .collect(),
     ))
+}
+
+pub async fn trust_contact(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(contact_user_id): Path<String>,
+    Json(req): Json<TrustContactRequest>,
+) -> Result<StatusCode, StatusCode> {
+    match req.state.as_str() {
+        "unverified" | "verified" | "key_changed" => {}
+        _ => return Err(StatusCode::BAD_REQUEST),
+    }
+    let owner_user_id = user_from_bearer(&state, &headers).await?;
+    state
+        .db
+        .upsert_trusted_contact(
+            &owner_user_id,
+            &contact_user_id,
+            req.fingerprint.trim(),
+            &req.state,
+        )
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn user_from_bearer(state: &AppState, headers: &HeaderMap) -> Result<String, StatusCode> {
+    let value = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+    let token = value
+        .strip_prefix("Bearer ")
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+    state
+        .db
+        .user_for_access_token(&crate::auth::service::hash_token(token))
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::UNAUTHORIZED)
 }

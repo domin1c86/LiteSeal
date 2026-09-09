@@ -1,105 +1,173 @@
-# Windows 开发与内测验证指南
+# LiteSeal 开发测试指南
 
-本指南对应当前 Tauri 2、React 桌面端和 Postgres 服务端。内测范围与准入结论见 [BETA_READINESS.md](BETA_READINESS.md)。
+## 快速启动（3步）
 
-## 环境
-
-需要 Rust/MSVC、WebView2、Tauri CLI、满足 ui 依赖要求的 Node/npm，以及独立的 Postgres。libsodium 链接环境按 [AGENTS.md](AGENTS.md) 检查。
-
-以下命令在仓库根目录执行。不要对生产数据库运行集成测试；测试会创建账号、消息、邀请码和临时 schema。
+### 第 1 步：安装前端依赖（仅首次）
 
 ```powershell
-npm ci --prefix ui
-cargo check --workspace
-cargo test --workspace
+cd ui
+npm install
 ```
 
-普通测试中的 Postgres 用例明确显示 ignored，不能把 ignored 计作已验证。运行真实数据库测试：
+### 第 2 步：启动服务器
+
+打开终端 A：
 
 ```powershell
-# 在当前终端配置专用测试库，值由本地环境提供，切勿提交真实连接凭据。
-$env:LITESEAL_TEST_DATABASE_URL = 'postgres://<test-user>:<test-password>@127.0.0.1:<port>/<test-db>'
-cargo test -p liteseal-server -- --ignored
-
-# 包括真实数据库测试在内的整个 workspace
-cargo test --workspace -- --include-ignored
+cd server
+cargo run
 ```
 
-本地 Docker 可用于测试数据库。选择不冲突的本机端口、独立容器名和随机密码，使用已有 Postgres 镜像；不要复用现有业务容器或数据库。结束后删除自己创建的临时容器和连接文件。
+看到 `Server listening on 0.0.0.0:3000` 表示成功。**保持这个终端运行。**
 
-## 开发启动
+### 第 3 步：启动客户端
 
-终端 A：准备独立开发数据库，并配置服务端变量。
-
-```powershell
-$env:DATABASE_URL = 'postgres://<dev-user>:<dev-password>@127.0.0.1:<port>/<dev-db>'
-$env:LITESEAL_CORS_ALLOW_ORIGIN = 'http://localhost:1420'
-$env:LITESEAL_BOOTSTRAP_INVITE_CODE = '<one-time-random-invite>'
-cargo run -p liteseal-server
-```
-
-直接 cargo run 不自动读取 `.env`。Compose 内的数据库主机名 `postgres` 不能直接用于宿主机；当前 Compose 未默认发布数据库端口。
-
-终端 B：
+打开终端 B：
 
 ```powershell
-Push-Location src-tauri
+cd src-tauri
 cargo tauri dev
-Pop-Location
 ```
 
-开发服务地址为 `http://localhost:3000`，远程服务必须使用 HTTPS。账号注册需要用户名、密码和未使用的邀请码。每个注册账号需要独立邀请码；勿使用 mock 用户作为真实内测账号。
+首次会编译几分钟，之后会自动打开 LiteSeal 窗口。
 
-双人验收使用两台 Windows 或两个独立 Windows 用户环境，避免同一用户的活动配置文件互相覆盖。不要把启动两个 cargo tauri dev 窗口当作账户隔离验收。
+---
 
-## 自动化门禁
+## 验证功能
+
+### 验证注册
+
+1. 在登录界面输入用户名（如 `alice`）
+2. 服务器地址填 `http://localhost:3000`
+3. 点击注册
+4. **成功标志**：跳转到聊天界面，终端 A 显示注册日志
+
+### 验证发送消息
+
+1. 在聊天界面输入任意消息，点击发送
+2. **成功标志**：消息出现在聊天记录中，终端 A 显示 `Relaying message` 日志
+
+### 验证双人聊天（端到端加密）
+
+需要同时运行两个客户端实例：
 
 ```powershell
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-npm run build --prefix ui
+# 终端 B - 用户 Alice
+cd src-tauri; cargo tauri dev
 
-# 验证检查脚本自身能拦截失败；无需数据库或网络。
-./scripts/test-windows-beta-gate.ps1
-
-# 完整 Windows beta 门禁；必须先配置专用 LITESEAL_TEST_DATABASE_URL。
-# 包含真实数据库用例、在线依赖审计和 Release exe 构建。
-./scripts/check-windows-beta.ps1
+# 终端 C - 用户 Bob（新终端窗口）
+cd src-tauri; cargo tauri dev
 ```
 
-脚本任一外部命令非零退出就中止。依赖审计例外以 [SECURITY.md](SECURITY.md) 为准，不能通过新增 ignore 项掩盖新问题。
+两个窗口分别注册 `alice` 和 `bob`，然后互相发消息。
+
+**成功标志**：双方都能收到对方的消息，服务器终端只显示密文中继。
+
+---
+
+## 运行单元测试
 
 ```powershell
-# 只构建本地 Release 可执行文件
-Push-Location src-tauri
-cargo tauri build --no-bundle
-Pop-Location
+# 全部测试
+cargo test --workspace
+
+# 只测加密模块
+cargo test -p liteseal-shared
+
+# 只测数据库
+cargo test -p liteseal-app
 ```
 
-`--no-bundle` 不生成安装包。安装、签名、升级和卸载需要单独验收。
+全部 `ok` 即通过。
 
-## 两机验收记录
+---
 
-每次记录版本/commit、Windows 版本、场景、预期、实际结果、脱敏日志和是否通过。不要记录密码、令牌、私钥、邀请码或聊天正文。
+## 常见问题
 
-| 场景 | 通过条件 |
-| --- | --- |
-| 注册与登录 | 邀请码单次使用；无效密码和邀请码有明确错误；普通账号可正常进入。 |
-| 添加联系人 | 双方搜索、添加、比对指纹后可发送；未验证或密钥变化时有明确处理提示。 |
-| 双向消息与重启 | 两端正文一致、顺序正确，重启后历史可读，无重复、丢失或跨会话显示。 |
-| 断网、睡眠、服务重启 | 恢复联网后自动重连；待发消息按原顺序重试；状态如实变化。当前仍是待完成门槛。 |
-| 离线积压与慢连接 | 超过 128 条积压可持续排空；实时混发不导致合法消息被隔离；配额边界明确。 |
-| 退出登录 | logout/logout-all 后旧连接不能收发；无网退出后重启也不自动显示历史会话。 |
-| 账号切换 | 联系人、历史和凭据分离，不残留上一账号的 UI 数据。 |
-| 设备替换 | 按首批策略限制或明确确认；不能隐瞒历史与待收消息的可用性影响。 |
-| 安装包 | 干净 Windows 普通用户可安装启动；升级和卸载符合约定的数据保留策略。 |
+### 编译报错：找不到 libsodium
 
-观察顺序见 BETA_READINESS.md。测试不通过时保留脱敏复现步骤，不直接发给更多人。
+Windows 需要安装 libsodium：
 
-## 故障定位
+```powershell
+# 方法1：用 vcpkg
+vcpkg install libsodium
 
-- 服务端不启动：先检查 DATABASE_URL、Postgres 就绪情况、非默认凭据、非通配 CORS；检查 `/healthz` 和 `/readyz`。
-- 网络恢复后不收消息：目前缺少完整自动重连/outbox，是已确认待办，不应靠刷新窗口认定问题已解决。
-- 前端构建失败：保留准确命令和错误；区分依赖/类型错误、原生库链接错误和运行环境权限限制。
-- 历史数据在账号隔离目录 `profiles/<hash>/data.db` 中，位置由桌面 AppState 的 base_dir 决定；不要继续依赖旧文档中的单一全局数据库路径。
-- 调试时不要加密钥、令牌或消息正文日志；仅看密文字节也不能证明端到端安全，必须依靠验证测试与明确的安全边界。
+# 方法2：手动下载
+# 从 https://download.libsodium.org/libsodium/releases/ 下载
+# 解压后设置环境变量：
+$env:SODIUM_LIB_DIR = "C:\path\to\libsodium\lib"
+$env:SODIUM_INCLUDE_DIR = "C:\path\to\libsodium\include"
+```
+
+### Tauri 启动失败：WebView2 错误
+
+下载安装：https://developer.microsoft.com/en-us/microsoft-edge/webview2/
+
+### 端口 3000 被占用
+
+```powershell
+# 找到占用进程
+netstat -ano | findstr :3000
+
+# 杀掉进程
+taskkill /PID <进程ID> /F
+```
+
+### 前端白屏或报错
+
+```powershell
+cd ui
+Remove-Item -Recurse -Force node_modules
+npm install
+```
+
+### cargo tauri dev 卡住不动
+
+检查终端 A 的服务器是否在运行。如果没启动，客户端无法连接。
+
+---
+
+## 调试技巧
+
+### 查看详细日志
+
+```powershell
+# 服务器
+$env:RUST_LOG = "debug"; cargo run -p liteseal-server
+
+# 客户端
+$env:RUST_LOG = "debug"; cargo tauri dev
+```
+
+### 检查数据库内容
+
+数据库文件位置：`$env:LOCALAPPDATA\liteseal\data.db`
+
+用 SQLite 工具打开查看：
+
+```powershell
+sqlite3 "$env:LOCALAPPDATA\liteseal\data.db" ".tables"
+```
+
+### 验证服务器只转发密文
+
+在 `server/src/relay/handlers.rs` 的消息转发处加日志：
+
+```rust
+tracing::info!("Relaying: {:?}", &msg.ciphertext[..8.min(msg.ciphertext.len())]);
+```
+
+重启服务器，发消息后在终端 A 看到的是字节数组，不是明文，说明加密生效。
+
+---
+
+## 代码改了之后怎么测
+
+| 改了什么 | 怎么验证 |
+|---------|---------|
+| `shared/src/crypto.rs` | `cargo test -p liteseal-shared` |
+| `src-tauri/src/db/` | `cargo test -p liteseal-app` |
+| `server/src/` | 重启服务器（终端 A Ctrl+C 再 `cargo run`） |
+| `src-tauri/src/commands/` | 重启客户端（终端 B Ctrl+C 再 `cargo tauri dev`） |
+| `ui/src/` | Vite 热更新，无需重启，刷新窗口即可 |
+| `Cargo.toml` 依赖变更 | 重启对应服务 |
