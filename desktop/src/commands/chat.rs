@@ -1,18 +1,15 @@
-use tauri::State;
-
 use crate::AppState;
 use liteseal_core::chat::{self, PollMessagesResult, SendMessageResult};
 use liteseal_core::db::models::MessageModel;
 use liteseal_shared::protocol::EncryptedPayload;
 
-#[tauri::command]
 pub async fn send_message(
     sender_id: String,
     ciphertext: Vec<u8>,
     signature: Vec<u8>,
     sender_device_id: String,
     payloads: Vec<EncryptedPayload>,
-    state: State<'_, AppState>,
+    state: &AppState,
 ) -> Result<SendMessageResult, String> {
     state
         .client
@@ -20,24 +17,21 @@ pub async fn send_message(
         .await
 }
 
-#[tauri::command]
-pub async fn poll_messages(state: State<'_, AppState>) -> Result<PollMessagesResult, String> {
+pub async fn poll_messages(state: &AppState) -> Result<PollMessagesResult, String> {
     state.client.poll_messages().await
 }
 
-#[tauri::command]
 pub async fn get_local_messages(
     conversation_id: String,
     limit: i64,
     offset: i64,
-    state: State<'_, AppState>,
+    state: &AppState,
 ) -> Result<Vec<MessageModel>, String> {
     state
         .client
         .get_local_messages(&conversation_id, limit, offset)
 }
 
-#[tauri::command]
 pub async fn encrypt_message(
     plaintext: Vec<u8>,
     recipient_public_key: Vec<u8>,
@@ -46,7 +40,6 @@ pub async fn encrypt_message(
     chat::encrypt_message(plaintext, recipient_public_key, sender_secret_key)
 }
 
-#[tauri::command]
 pub async fn decrypt_message(
     ciphertext: Vec<u8>,
     sender_public_key: Vec<u8>,
@@ -55,12 +48,10 @@ pub async fn decrypt_message(
     chat::decrypt_message(ciphertext, sender_public_key, recipient_secret_key)
 }
 
-#[tauri::command]
 pub async fn sign_message(message: Vec<u8>, signing_key: Vec<u8>) -> Result<Vec<u8>, String> {
     chat::sign_message(message, signing_key)
 }
 
-#[tauri::command]
 pub async fn verify_message(
     message: Vec<u8>,
     signature: Vec<u8>,
@@ -69,7 +60,6 @@ pub async fn verify_message(
     chat::verify_message(message, signature, sender_public_key)
 }
 
-#[tauri::command]
 pub async fn generate_keypair_cmd() -> Result<(Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>), String> {
     chat::generate_keypair()
 }

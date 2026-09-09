@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useTauri } from "../hooks/useTauri";
+import { useDesktop } from "../hooks/useDesktop";
 import { trustLabel } from "./ContactList";
 import type { Contact } from "../types";
 
@@ -10,7 +10,7 @@ interface ContactDetailProps {
 }
 
 export default function ContactDetail({ contact, onMessage, onContactsChanged }: ContactDetailProps) {
-  const { setContactTrust } = useTauri();
+  const { setContactTrust } = useDesktop();
   const [busy, setBusy] = useState(false);
   const trust = trustLabel(contact);
   const verified = contact.trust_state === "verified";

@@ -1,5 +1,3 @@
-use tauri::State;
-
 use crate::AppState;
 use liteseal_core::api::{self, RegisterResult};
 
@@ -10,7 +8,6 @@ pub struct ConnectResult {
     pub connected: bool,
 }
 
-#[tauri::command]
 pub async fn register(
     invite_code: String,
     username: String,
@@ -31,7 +28,6 @@ pub async fn register(
     .await
 }
 
-#[tauri::command]
 pub async fn login(
     username: String,
     password: String,
@@ -52,7 +48,6 @@ pub async fn login(
     .await
 }
 
-#[tauri::command]
 pub async fn refresh_session(
     server_url: String,
     refresh_token: String,
@@ -60,13 +55,12 @@ pub async fn refresh_session(
     api::refresh_session(server_url, refresh_token).await
 }
 
-#[tauri::command]
 pub async fn connect_relay(
     server_url: String,
     user_id: String,
     token: String,
     device_id: String,
-    state: State<'_, AppState>,
+    state: &AppState,
 ) -> Result<ConnectResult, String> {
     state
         .client
@@ -75,13 +69,11 @@ pub async fn connect_relay(
     Ok(ConnectResult { connected: true })
 }
 
-#[tauri::command]
-pub async fn disconnect(state: State<'_, AppState>) -> Result<(), String> {
+pub async fn disconnect(state: &AppState) -> Result<(), String> {
     state.client.disconnect().await;
     Ok(())
 }
 
-#[tauri::command]
 pub async fn validate_invite(server_url: String, invite_code: String) -> Result<bool, String> {
     api::validate_invite(server_url, invite_code).await
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useTauri, validateInvite } from "../hooks/useTauri";
+import { useDesktop, validateInvite } from "../hooks/useDesktop";
 import type { RegisterResult } from "../types";
 
 interface LoginProps {
@@ -17,7 +17,7 @@ export default function Login({ onLogin }: LoginProps) {
   const [serverUrl, setServerUrl] = useState("http://localhost:3000");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { register, login, connectRelay, generateKeypair, saveKeypair, loadKeypair } = useTauri();
+  const { register, login, connectRelay, generateKeypair, saveKeypair, loadKeypair } = useDesktop();
 
   const registering = mode === "register";
   const validUrl = isServerUrl(serverUrl);

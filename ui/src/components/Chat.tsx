@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { useTauri } from "../hooks/useTauri";
+import { useDesktop } from "../hooks/useDesktop";
 import { dmConversationId } from "../lib/conversation";
 import { trustLabel } from "./ContactList";
 import type { RelayBatch } from "../App";
@@ -25,7 +25,7 @@ export default function Chat({ conversationId, userId, deviceId, serverUrl, secr
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const { sendMessage, getUserDevices, getLocalMessages, encryptMessage, decryptMessage, signMessage, verifyMessage, setContactTrust } = useTauri();
+  const { sendMessage, getUserDevices, getLocalMessages, encryptMessage, decryptMessage, signMessage, verifyMessage, setContactTrust } = useDesktop();
   const activeContact = contacts.find((c) => c.user_id === conversationId);
   // conversationId prop is the peer's user id; storage/relay use the canonical DM id.
   const storageConversationId = conversationId ? dmConversationId(userId, conversationId) : null;

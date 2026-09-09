@@ -1,6 +1,6 @@
 # Windows 界面入口、功能与完整测试指南
 
-适用范围：当前仓库 Windows 桌面客户端；移动端不在本次验收范围内。核对日期：2026-09-09。本文根据当前工作区代码编写，功能“已实现”表示有代码与界面入口，不代表已经通过 Windows 实机验收。旧 README / TESTING_GUIDE 中的版本、启动依赖和双实例测试步骤请以本文为准。
+适用范围：当前仓库 Windows 桌面客户端；移动端不在本次验收范围内。核对日期：2026-09-09。本文根据当前工作区代码编写，功能“已实现”表示有代码与界面入口，不代表已经通过 Windows 实机验收。桌面端现使用 Electron + Rust 子进程，启动与打包均从仓库根目录执行。
 
 ## 1. 怎么进入前端
 
@@ -8,11 +8,11 @@
 
 | 目的 | 命令和入口 | 能测什么 |
 | --- | --- | --- |
-| 浏览器查看登录页 | 仓库根目录执行 `npm ci --prefix ui`，再执行 `npm run dev --prefix ui`；打开 `http://localhost:1420` | 登录页布局、输入框、登录/注册切换、按钮禁用状态 |
-| Windows 完整功能测试 | 按下文启动 PostgreSQL、服务端，再在 `src-tauri` 执行 `cargo tauri dev` | 桌面 IPC、账号、联系人、收发消息、本地数据 |
-| 构建后的程序 | Windows 构建后运行 `target\release\liteseal-app.exe`，或安装生成的安装包 | 脱离开发服务器的桌面使用体验 |
+| 浏览器查看登录页 | 仓库根目录执行 `npm ci`，再执行 `npm run dev --prefix ui`；打开 `http://127.0.0.1:1420` | 登录页布局、输入框、登录/注册切换、按钮禁用状态 |
+| Windows 完整功能测试 | 按下文启动 PostgreSQL、服务端，再在仓库根目录执行 `npm run dev` | 桌面 IPC、账号、联系人、收发消息、本地数据 |
+| 构建后的程序 | Windows 构建后运行 `release\win-unpacked\LiteSeal.exe`，或安装生成的安装包 | 脱离开发服务器的桌面使用体验 |
 
-浏览器中没有 Tauri 的 `invoke` 环境，点击登录/注册会在调用原生命令时失败；仅启动 Vite 不能完成聊天测试。端口 **1420 是前端**，**3000 是 API / WebSocket 服务端**，**5432 是 PostgreSQL**。根目录的 `package.json` 没有前端启动脚本，命令需要指定 `--prefix ui` 或进入 `ui`。
+浏览器没有 Electron preload 提供的 `window.desktop`，仅用于页面预览，业务操作会提示通过桌面应用使用。端口 **1420 是开发前端**，**3000 是 API / WebSocket 服务端**，**5432 是 PostgreSQL**。`npm run dev` 启动完整桌面应用；`npm run dev --prefix ui` 仅启动预览。正式安装包加载内置页面，不需要 1420 端口。
 
 ## 2. Windows 首次环境准备
 
@@ -20,9 +20,9 @@
 
 准备以下依赖：
 
-- Git、Node.js 和 npm。当前项目使用 Vite 8，要求 Node.js 20.19+ 或 22.12+，不要沿用旧文档的 Node 18；本次构建环境为 Node 24.14.1。参见 [Vite 官方要求](https://vite.dev/guide/)。
-- Rust stable 的 Windows MSVC 工具链、Visual Studio C++ Build Tools 的“使用 C++ 的桌面开发”工作负载和 Windows SDK，以及 WebView2 Runtime。安装说明见 [Tauri Windows 前置要求](https://v2.tauri.app/start/prerequisites/)。
-- Tauri CLI **2.x**，与仓库的 Tauri 2 依赖匹配。安装命令依据 [Tauri CLI 文档](https://v2.tauri.app/reference/cli/)。
+- Git、Node.js **24 或更新版本**和 npm；依赖锁定在根目录 `package-lock.json`。
+- Rust stable 的 Windows x64 MSVC 工具链、Visual Studio C++ Build Tools 的“使用 C++ 的桌面开发”工作负载和 Windows SDK。
+- Electron 由 npm 依赖管理，首次使用会下载运行时；不再需要桌面框架 CLI 或 WebView2。
 - libsodium 的 Windows MSVC 库；如编译器无法自动准备，按第 9 节配置。
 - PostgreSQL；下文使用已安装并启动的 Docker Desktop，通过仓库 Compose 启动数据库。也可以使用本机 PostgreSQL，创建对应账号和数据库后修改连接串。
 
@@ -33,12 +33,10 @@ npm --version
 rustc --version
 cargo --version
 rustup show active-toolchain
-cargo install tauri-cli --version '^2.0.0' --locked
-cargo tauri --version
-npm ci --prefix ui
+npm ci
 ```
 
-`npm ci` 使用 `ui/package-lock.json`，需要联网下载尚未缓存的依赖。首次 Cargo 构建也可能需要下载依赖；不要把编译时间误判为界面卡死。
+`npm ci` 使用根目录 `package-lock.json`，统一安装 Electron 和 ui workspace 依赖，需要联网下载尚未缓存的依赖。首次 Cargo 构建也可能需要下载依赖；不要把编译时间误判为界面卡死。
 
 ## 3. 启动完整 Windows 开发环境
 
@@ -51,7 +49,6 @@ docker compose ps postgres
 docker compose exec postgres pg_isready -U liteseal -d liteseal
 $env:DATABASE_URL = 'postgres://liteseal:liteseal@localhost:5432/liteseal'
 $env:LITESEAL_BIND = '0.0.0.0:3000'
-$env:LITESEAL_CORS_ALLOW_ORIGIN = 'http://localhost:1420'
 $env:LITESEAL_INVITE_CODES = 'LITESEAL-WIN-ALPHA,LITESEAL-WIN-BRAVO,LITESEAL-WIN-CHARLIE'
 $env:RUST_LOG = 'info'
 cargo run -p liteseal-server
@@ -66,11 +63,10 @@ cargo run -p liteseal-server
 ```powershell
 Set-Location C:\coding\LiteSeal
 Invoke-RestMethod http://localhost:3000/healthz
-Set-Location .\src-tauri
-cargo tauri dev
+npm run dev
 ```
 
-健康检查应返回 `ok`。Tauri 会执行配置里的 `npm run dev --prefix ui` 并打开 1024×768 的可调整窗口；一般不需要另开 Vite。先前预览启动的 Vite 应先用 Ctrl+C 停止，避免 1420 端口冲突。
+健康检查应返回 `ok`。开发脚本构建 Rust 子进程及 Electron 主进程/preload，启动 Vite 后打开 1024×768 的可调整窗口；一般不需要另开 Vite。React 修改支持热更新，修改 Electron 或 Rust 后重启 `npm run dev`。先前预览启动的 Vite 应先用 Ctrl+C 停止，避免 1420 端口冲突。
 
 登录页填写：
 
@@ -126,7 +122,7 @@ cargo tauri dev
 
 ## 5. 双人聊天怎么测
 
-不要在同一个 Windows 用户下开两个 `cargo tauri dev` 当作 Alice / Bob：它们会争用 Vite 端口，还会共用数据库和密钥文件。复制仓库目录也不会隔离用户数据；当前没有实现测试用 profile / 数据目录参数。
+不要在同一个 Windows 用户下开两个开发命令当作 Alice / Bob：它们会争用 Vite 端口，还会共用数据库和密钥文件。Electron 启用单实例锁，重复启动已打包程序会聚焦现有窗口。复制仓库目录不会隔离数据；Rust 的 `--db-path` 仅供桥接自动化测试隔离数据库，不改变密钥路径，不是双账号 profile。升级时先关闭旧版客户端。
 
 推荐使用两台 Windows 电脑，或一台电脑加 Windows 虚拟机，各运行一个客户端。也可以使用两个独立 Windows 用户会话运行已构建程序，必须保证数据目录独立。
 
@@ -169,7 +165,7 @@ cargo tauri dev
 
 ## 7. 数据位置、退出与重新测试
 
-当前路径来自 `src-tauri/src/main.rs` 和 `core/src/keystore.rs`：
+当前路径来自 `desktop/src/main.rs` 和 `core/src/keystore.rs`：
 
 | 数据 | Windows 路径 |
 | --- | --- |
@@ -194,9 +190,9 @@ Get-Item "$env:LOCALAPPDATA\liteseal\keystore.bin" -ErrorAction SilentlyContinue
 在仓库根目录执行：
 
 ```powershell
-npm run build --prefix ui
-cargo check --workspace
-cargo test --workspace
+npm run build
+cargo check --locked --workspace
+npm test
 ```
 
 按模块验证：
@@ -205,38 +201,43 @@ cargo test --workspace
 cargo test -p liteseal-shared
 cargo test -p liteseal-core
 cargo test -p liteseal-core --test db_test
+cargo test -p liteseal-desktop
+node --test electron/tests/*.test.cjs
 ```
 
-共享测试覆盖加解密、签名、篡改、序列化等；当前数据库集成测试在 `core/tests/db_test.rs`，不在旧文档的 `src-tauri/tests/`。通过这些检查不等于真实桌面 IPC、数据库服务、网络、DPAPI 和双人聊天均已通过。
+共享测试覆盖加解密、签名、篡改和序列化；数据库测试位于 `core/tests/`。`npm test` 构建桥接及 Rust 子进程，运行 Node 桥接测试和全部 Rust 测试。Node 测试使用真实 Rust 子进程、临时 SQLite、模拟 HTTP 服务及管道故障，既不打开界面，也不读写用户真实密钥。Windows 另执行隔离文件上的 DPAPI 兼容测试。
 
-Windows 上生成安装包：
+Windows x64 上生成安装包：
 
 ```powershell
-Set-Location C:\coding\LiteSeal\src-tauri
-cargo tauri build
+Set-Location C:\coding\LiteSeal
+npm run dist:win
 ```
 
-构建会自动执行前端 build。默认产物位于 workspace 的 `target\release\`，安装包位于 `target\release\bundle\`。若只想验证 NSIS 安装包，可执行 `cargo tauri build --bundles nsis`。具体打包环境要求参考 [Tauri Windows Installer](https://v2.tauri.app/distribute/windows-installer/)。安装后的客户端仍需要可达的 LiteSeal 服务端，安装包不会替你启动 PostgreSQL 或中继服务。
+该命令先构建所有组件，再用 electron-builder 生成 NSIS 安装包，并检查 Rust exe、前端页面和 preload 是否进入安装包。安装包位于 `release\`，免安装目录为 `release\win-unpacked\`。单独的 `target\release\liteseal-desktop.exe` 是内部 Rust 服务，没有界面，不是应用入口。安装包自带 Electron 和 Rust 程序，用户无需 Node、Rust 或 WebView2；仍需要可达的 LiteSeal 服务端。构建不签名、不发布、不内置服务端或 PostgreSQL。
+
+`.github/workflows/windows-desktop.yml` 配置 Windows 编译、自动化测试、NSIS 构建与产物上传。工作流文件已提供，但只有远端实际运行成功后才能将 Windows 构建记为通过。
 
 ## 9. 常见问题定位
 
 | 现象 | 检查与处理 |
 | --- | --- |
-| 根目录 npm run dev 报 Missing script | 使用 `npm run dev --prefix ui`，或进入 ui |
+| npm 找不到桌面依赖 | 在仓库根目录执行 `npm ci`，不要仅安装 ui 依赖 |
 | Vite 提示 Node 版本不兼容 | 检查 `node --version`，满足第 2 节版本要求后重装前端依赖 |
 | PowerShell 阻止 npm.ps1 | 可用 `npm.cmd` 执行相同命令 |
-| no such command: tauri | 安装 Tauri CLI 2.x，重新打开终端，检查 Cargo bin 是否在 PATH |
+| Electron failed to install / 下载失败 | 检查运行时下载网络，根目录执行 `npm exec -- install-electron --no` 后重试 |
 | link.exe / Windows SDK 缺失 | 检查 C++ Build Tools 工作负载和 Windows SDK，使用 MSVC 工具链 |
 | libsodium-sys 编译或链接失败 | 阅读第一条构建错误；手动库必须与 Rust 的 x64 / MSVC 和 Debug/Release 链接需求匹配，不能混用 MinGW 库 |
 | failed to connect to Postgres | 检查 Docker 已运行、postgres 服务健康、5432 可达、DATABASE_URL 已在当前终端设置 |
 | 注册失败 / 登录失败 | 先检查 healthz，再检查模式、账号密码、服务端终端错误；注册可能已成功而后续连接/保存失败，此时尝试 Login |
-| 浏览器出现 invoke / Tauri 内部对象错误 | 切换到 `cargo tauri dev` 打开的桌面窗口 |
-| 等待 frontend dev server / 1420 被占用 | 检查 Vite 输出，关闭自己先前的预览进程；tauri.conf.json 使用 strictPort 对应的 1420 |
+| 提示通过 Electron 桌面使用 | 切换到根目录 `npm run dev` 打开的桌面窗口 |
+| 等待 frontend dev server / 1420 被占用 | 检查 Vite 输出，关闭自己先前的预览进程；Vite 固定使用 127.0.0.1:1420 |
 | 3000 被占用 | `Get-NetTCPConnection -LocalPort 3000 -State Listen` 查看 OwningProcess，再用 `Get-Process -Id <PID>` 确认；不要盲目结束未知进程 |
-| WebView2 错误或白屏 | 检查 WebView2 Runtime、Tauri/Vite 终端以及开发版 Ctrl+Shift+I 中的 Console 错误 |
+| 白屏 / 无法启动桌面服务 | 检查开发终端的构建错误或启动错误框；安装版确认 resources/desktop 中存在 Rust exe，重新安装完整程序 |
+| 桌面服务异常退出 | 应用提示后退出；重新启动恢复本地会话，不自动重发结果未确定的操作 |
 | 消息未到达 | 确认双方用同一服务端、互加联系人、对方在线或正在补投递；等待数秒，记录消息状态及两端错误 |
 | [signature invalid] / [decryption failed] / [encrypted] | 记录是否曾 Logout、换用户、重置数据或新增设备；不要把该占位符当作消息正文或忽略 |
-| Storage Manager 一直 Loading | 查看开发者工具和 Rust 终端，当前读取失败主要写控制台 |
+| Storage Manager 一直 Loading | 查看开发者工具和桌面错误提示，当前读取失败主要写控制台 |
 | Linux 报 Secret store is not implemented | 当前非 Windows 的密钥保存实现不支持，Windows 功能验收需要回到 Windows |
 
 手动指定 libsodium 静态库的示例（路径替换为实际包含 MSVC `libsodium.lib` 的目录）：
@@ -259,8 +260,8 @@ Remove-Item Env:SODIUM_USE_PKG_CONFIG -ErrorAction SilentlyContinue
 ```text
 代码提交：
 Windows 版本 / 缩放比例：
-运行方式：tauri dev / release exe / 安装包
-Node / Rust / Tauri CLI 版本：
+运行方式：npm run dev / win-unpacked / 安装包
+Node / Rust / Electron 版本：
 用例编号：
 双方是否独立 Windows 数据环境：
 操作步骤：
@@ -271,6 +272,9 @@ Node / Rust / Tauri CLI 版本：
 是否能稳定复现：
 ```
 
-代码定位：界面在 `ui/src/components/`，会话恢复在 `ui/src/App.tsx`，原生桥接在 `ui/src/hooks/useTauri.ts` 与 `src-tauri/src/commands/`，客户端核心在 `core/src/`，服务端启动配置在 `server/src/main.rs`、`server/src/config.rs`。后续完成一个任务后，先记录验证结果，再单独提交该任务涉及的文件，避免把其他未完成改动混入提交。
+代码定位：界面在 `ui/src/components/`，会话恢复在 `ui/src/App.tsx`，原生桥接在 `ui/src/hooks/useDesktop.ts`、`electron/` 与 `desktop/src/commands/`，客户端核心在 `core/src/`，服务端启动配置在 `server/src/main.rs`、`server/src/config.rs`。后续完成一个任务后，先记录验证结果，再单独提交该任务涉及的文件，避免把其他未完成改动混入提交。
 
 2026-09-09 注册增强：新增可重复邀请码的服务端校验、Windows 表单确认密码和逐行提示灯。`npm run build --prefix ui`、`cargo check --offline --workspace` 均通过；`cargo test --offline -p liteseal-server -p liteseal-core -p liteseal-shared` 共 60 项测试通过，含 HTTP 邀请码校验与拒绝绕过测试。按用户要求未执行界面交互测试；未执行 Windows 实机注册或真实 PostgreSQL 的多账号注册联调。
+
+
+2026-09-09 Electron 迁移核查：已替换桌面外壳及全部 26 个命令，保留 Rust 核心和既有数据路径。`npm run build`、`cargo check --offline --workspace` 通过；Node 桥接及主进程测试 11 项、Rust workspace 测试 63 项通过，共 74 项。测试包括真实子进程的密码学和数据库调用、模拟 HTTP 端点、WebSocket 连接/发送/状态落库，以及分帧、超时、错误和 EOF 退出；主进程模拟测试验证 IPC 来源、导航限制和资源 CSP。另通过 electron-builder 在 Linux 生成未安装目录并检查 ASAR 页面/preload 与 Rust 资源，Windows 图标转换检查通过。已配置 Windows CI 的编译、DPAPI 测试及 NSIS 安装包资源验证，但尚未在 Windows 执行。按要求未进行任何界面交互测试，也未进行真实 PostgreSQL 双账号联调。

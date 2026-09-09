@@ -1,4 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
+import type { CommandMap, CommandName } from "../../../electron/contracts";
+
 import type {
   RegisterResult,
   ConnectResult,
@@ -13,7 +14,12 @@ import type {
   RemoteDevice,
 } from "../types";
 
-export function useTauri() {
+async function invoke<K extends CommandName>(name: K, args: CommandMap[K]["args"]): Promise<CommandMap[K]["result"]> {
+  if (!window.desktop) throw new Error("请通过 Electron 桌面应用使用此功能；浏览器仅支持界面预览");
+  const method = window.desktop[name] as (value: CommandMap[K]["args"]) => Promise<CommandMap[K]["result"]>;
+  return method(args);
+}
+export function useDesktop() {
   async function register(
     username: string,
     password: string,
@@ -22,7 +28,7 @@ export function useTauri() {
     ed25519Pk: number[] = [],
     inviteCode: string = ""
   ): Promise<RegisterResult> {
-    return invoke<RegisterResult>("register", {
+    return invoke("register", {
       inviteCode,
       username,
       password,
@@ -40,7 +46,7 @@ export function useTauri() {
     ed25519Pk: number[] = [],
     deviceId?: string
   ): Promise<RegisterResult> {
-    return invoke<RegisterResult>("login", {
+    return invoke("login", {
       username,
       password,
       serverUrl,
@@ -54,7 +60,7 @@ export function useTauri() {
     serverUrl: string,
     refreshToken: string
   ): Promise<RegisterResult> {
-    return invoke<RegisterResult>("refresh_session", {
+    return invoke("refresh_session", {
       serverUrl,
       refreshToken,
     });
@@ -66,7 +72,7 @@ export function useTauri() {
     token: string,
     deviceId: string
   ): Promise<ConnectResult> {
-    return invoke<ConnectResult>("connect_relay", {
+    return invoke("connect_relay", {
       serverUrl,
       userId,
       token,
@@ -75,7 +81,7 @@ export function useTauri() {
   }
 
   async function disconnect(): Promise<void> {
-    return invoke("disconnect");
+    await invoke("disconnect", {});
   }
 
   async function sendMessage(
@@ -85,7 +91,7 @@ export function useTauri() {
     senderDeviceId: string,
     payloads: EncryptedPayload[]
   ): Promise<SendMessageResult> {
-    return invoke<SendMessageResult>("send_message", {
+    return invoke("send_message", {
       senderId,
       ciphertext,
       signature,
@@ -98,11 +104,11 @@ export function useTauri() {
     serverUrl: string,
     userId: string
   ): Promise<RemoteDevice[]> {
-    return invoke<RemoteDevice[]>("get_user_devices", { serverUrl, userId });
+    return invoke("get_user_devices", { serverUrl, userId });
   }
 
   async function pollMessages(): Promise<PollMessagesResult> {
-    return invoke<PollMessagesResult>("poll_messages");
+    return invoke("poll_messages", {});
   }
 
   async function getLocalMessages(
@@ -110,7 +116,7 @@ export function useTauri() {
     limit: number,
     offset: number
   ): Promise<Message[]> {
-    return invoke<Message[]>("get_local_messages", {
+    return invoke("get_local_messages", {
       conversationId,
       limit,
       offset,
@@ -122,30 +128,30 @@ export function useTauri() {
     username: string,
     publicKey: number[],
     ed25519Pk?: number[]
-  ): Promise<Contact> {
-    return invoke<Contact>("add_contact", { userId, username, publicKey, ed25519Pk });
+  ): Promise<{ success: boolean }> {
+    return invoke("add_contact", { userId, username, publicKey, ed25519Pk });
   }
 
   async function getContacts(): Promise<Contact[]> {
-    return invoke<Contact[]>("get_contacts");
+    return invoke("get_contacts", {});
   }
 
   async function removeContact(userId: string): Promise<void> {
-    return invoke("remove_contact", { userId });
+    await invoke("remove_contact", { userId });
   }
 
   async function setContactTrust(
     userId: string,
     trustState: "unverified" | "verified" | "key_changed"
   ): Promise<void> {
-    return invoke("set_contact_trust", { userId, trustState });
+    await invoke("set_contact_trust", { userId, trustState });
   }
 
   async function searchUsers(
     query: string,
     serverUrl: string
   ): Promise<UserSearchResult[]> {
-    return invoke<UserSearchResult[]>("search_users", { query, serverUrl });
+    return invoke("search_users", { query, serverUrl });
   }
 
   async function encryptMessage(
@@ -153,7 +159,7 @@ export function useTauri() {
     recipientPublicKey: number[],
     senderSecretKey: number[]
   ): Promise<number[]> {
-    return invoke<number[]>("encrypt_message", {
+    return invoke("encrypt_message", {
       plaintext,
       recipientPublicKey,
       senderSecretKey,
@@ -165,7 +171,7 @@ export function useTauri() {
     senderPublicKey: number[],
     recipientSecretKey: number[]
   ): Promise<number[]> {
-    return invoke<number[]>("decrypt_message", {
+    return invoke("decrypt_message", {
       ciphertext,
       senderPublicKey,
       recipientSecretKey,
@@ -176,7 +182,7 @@ export function useTauri() {
     message: number[],
     signingKey: number[]
   ): Promise<number[]> {
-    return invoke<number[]>("sign_message", { message, signingKey });
+    return invoke("sign_message", { message, signingKey });
   }
 
   async function verifyMessage(
@@ -184,7 +190,7 @@ export function useTauri() {
     signature: number[],
     senderPublicKey: number[]
   ): Promise<boolean> {
-    return invoke<boolean>("verify_message", {
+    return invoke("verify_message", {
       message,
       signature,
       senderPublicKey,
@@ -194,33 +200,31 @@ export function useTauri() {
   async function generateKeypair(): Promise<
     [number[], number[], number[], number[]]
   > {
-    return invoke<[number[], number[], number[], number[]]>(
-      "generate_keypair_cmd"
-    );
+    return invoke("generate_keypair_cmd", {});
   }
 
   async function getStorageStats(): Promise<StorageStats> {
-    return invoke<StorageStats>("get_storage_stats");
+    return invoke("get_storage_stats", {});
   }
 
   async function clearExpiredMessages(): Promise<number> {
-    return invoke<number>("clear_expired_messages");
+    return invoke("clear_expired_messages", {});
   }
 
   async function clearDownloadedAttachments(): Promise<number> {
-    return invoke<number>("clear_downloaded_attachments");
+    return invoke("clear_downloaded_attachments", {});
   }
 
   async function saveKeypair(data: KeystoreData): Promise<void> {
-    return invoke("save_keypair", { data });
+    await invoke("save_keypair", { data });
   }
 
   async function loadKeypair(): Promise<KeystoreData> {
-    return invoke("load_keypair");
+    return invoke("load_keypair", {});
   }
 
   async function clearKeypair(): Promise<void> {
-    return invoke("clear_keypair");
+    await invoke("clear_keypair", {});
   }
 
   return {
@@ -253,5 +257,5 @@ export function useTauri() {
 }
 
 export function validateInvite(serverUrl: string, inviteCode: string): Promise<boolean> {
-  return invoke<boolean>("validate_invite", { serverUrl, inviteCode });
+  return invoke("validate_invite", { serverUrl, inviteCode });
 }

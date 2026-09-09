@@ -1,1 +1,70 @@
-{}
+{
+  "name": "liteseal",
+  "version": "0.1.0",
+  "private": true,
+  "description": "LiteSeal Windows encrypted messenger",
+  "author": "LiteSeal contributors",
+  "license": "MIT",
+  "main": "dist-electron/main.cjs",
+  "engines": {
+    "node": ">=24"
+  },
+  "workspaces": [
+    "ui"
+  ],
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build:electron": "tsc -p electron/tsconfig.json && node scripts/build-electron.mjs",
+    "build": "npm run build --workspace liteseal-ui && npm run build:electron && cargo build --locked --release -p liteseal-desktop",
+    "test": "npm run build:electron && cargo build --locked -p liteseal-desktop && node --test --test-timeout=30000 electron/tests/*.test.cjs && cargo test --locked --workspace",
+    "dist:win": "node scripts/dist-win.mjs"
+  },
+  "devDependencies": {
+    "electron": "44.3.0",
+    "electron-builder": "26.15.3",
+    "@types/node": "24.13.3",
+    "typescript": "^6.0.3",
+    "esbuild": "^0.28.1",
+    "@electron/asar": "3.4.1",
+    "vite": "^8.0.16"
+  },
+  "build": {
+    "appId": "com.liteseal.app",
+    "productName": "LiteSeal",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist-electron/main.cjs",
+      "dist-electron/preload.cjs",
+      "ui/dist/**/*",
+      "electron/icons/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "target/release/liteseal-desktop.exe",
+        "to": "desktop/liteseal-desktop.exe"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "electron/icons/icon.svg",
+      "signExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false
+    },
+    "npmRebuild": false
+  }
+}

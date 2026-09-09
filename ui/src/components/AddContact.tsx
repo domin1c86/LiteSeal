@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useTauri } from "../hooks/useTauri";
+import { useDesktop } from "../hooks/useDesktop";
 import type { Contact, UserSearchResult } from "../types";
 
 interface AddContactProps {
@@ -23,7 +23,7 @@ export default function AddContact({
   const [searched, setSearched] = useState(false);
   const [adding, setAdding] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const { searchUsers, addContact } = useTauri();
+  const { searchUsers, addContact } = useDesktop();
 
   async function handleSearch(e: React.FormEvent) {
     e.preventDefault();

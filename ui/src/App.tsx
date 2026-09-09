@@ -5,7 +5,7 @@ import ContactList from "./components/ContactList";
 import ContactDetail from "./components/ContactDetail";
 import AddContact from "./components/AddContact";
 import StorageManager from "./components/StorageManager";
-import { useTauri } from "./hooks/useTauri";
+import { useDesktop } from "./hooks/useDesktop";
 import type { SidebarTab } from "./components/ContactList";
 import type { RegisterResult, Contact, IncomingMessage, RelayEvent } from "./types";
 
@@ -37,7 +37,7 @@ export default function App() {
   const [selectedContact, setSelectedContact] = useState<string | null>(null);
   const [showAddContact, setShowAddContact] = useState(false);
   const [showStorage, setShowStorage] = useState(false);
-  const { getContacts, loadKeypair, saveKeypair, refreshSession, connectRelay, clearKeypair, disconnect, pollMessages } = useTauri();
+  const { getContacts, loadKeypair, saveKeypair, refreshSession, connectRelay, clearKeypair, disconnect, pollMessages } = useDesktop();
   const [loading, setLoading] = useState(true);
   const [relayBatch, setRelayBatch] = useState<RelayBatch | null>(null);
 

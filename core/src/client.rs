@@ -1,5 +1,5 @@
 //! Stateful client facade: owns the local store, the relay connection and the
-//! incoming-message channel. Platform shells (Tauri commands, the Android FFI
+//! incoming-message channel. Platform shells (Electron sidecar, the Android FFI
 //! layer) hold one instance and delegate to it.
 //!
 //! Locking rules: `db` is a blocking mutex guarding the rusqlite connection —

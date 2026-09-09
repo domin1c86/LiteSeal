@@ -1,173 +1,24 @@
-# LiteSeal 开发测试指南
+# 测试入口
 
-## 快速启动（3步）
+Windows 桌面开发、功能清单和完整手动用例统一维护在 [WINDOWS_TESTING_GUIDE.md](WINDOWS_TESTING_GUIDE.md)。Electron 桥接协议、数据兼容和进程生命周期见 [ELECTRON_ARCHITECTURE.md](ELECTRON_ARCHITECTURE.md)。
 
-### 第 1 步：安装前端依赖（仅首次）
-
-```powershell
-cd ui
-npm install
-```
-
-### 第 2 步：启动服务器
-
-打开终端 A：
+在仓库根目录执行：
 
 ```powershell
-cd server
-cargo run
+npm ci
+npm run dev
 ```
 
-看到 `Server listening on 0.0.0.0:3000` 表示成功。**保持这个终端运行。**
+完整业务测试需要另行启动服务端与 PostgreSQL，并配置测试邀请码；浏览器预览不能代替 Electron 桌面应用。
 
-### 第 3 步：启动客户端
-
-打开终端 B：
+自动化检查：
 
 ```powershell
-cd src-tauri
-cargo tauri dev
+cargo check --locked --workspace
+npm test
+npm run build
 ```
 
-首次会编译几分钟，之后会自动打开 LiteSeal 窗口。
+Windows x64 打包：`npm run dist:win`，产物在 `release/`。双人测试使用两台机器或独立 Windows 用户环境。
 
----
-
-## 验证功能
-
-### 验证注册
-
-1. 在登录界面输入用户名（如 `alice`）
-2. 服务器地址填 `http://localhost:3000`
-3. 点击注册
-4. **成功标志**：跳转到聊天界面，终端 A 显示注册日志
-
-### 验证发送消息
-
-1. 在聊天界面输入任意消息，点击发送
-2. **成功标志**：消息出现在聊天记录中，终端 A 显示 `Relaying message` 日志
-
-### 验证双人聊天（端到端加密）
-
-需要同时运行两个客户端实例：
-
-```powershell
-# 终端 B - 用户 Alice
-cd src-tauri; cargo tauri dev
-
-# 终端 C - 用户 Bob（新终端窗口）
-cd src-tauri; cargo tauri dev
-```
-
-两个窗口分别注册 `alice` 和 `bob`，然后互相发消息。
-
-**成功标志**：双方都能收到对方的消息，服务器终端只显示密文中继。
-
----
-
-## 运行单元测试
-
-```powershell
-# 全部测试
-cargo test --workspace
-
-# 只测加密模块
-cargo test -p liteseal-shared
-
-# 只测数据库
-cargo test -p liteseal-app
-```
-
-全部 `ok` 即通过。
-
----
-
-## 常见问题
-
-### 编译报错：找不到 libsodium
-
-Windows 需要安装 libsodium：
-
-```powershell
-# 方法1：用 vcpkg
-vcpkg install libsodium
-
-# 方法2：手动下载
-# 从 https://download.libsodium.org/libsodium/releases/ 下载
-# 解压后设置环境变量：
-$env:SODIUM_LIB_DIR = "C:\path\to\libsodium\lib"
-$env:SODIUM_INCLUDE_DIR = "C:\path\to\libsodium\include"
-```
-
-### Tauri 启动失败：WebView2 错误
-
-下载安装：https://developer.microsoft.com/en-us/microsoft-edge/webview2/
-
-### 端口 3000 被占用
-
-```powershell
-# 找到占用进程
-netstat -ano | findstr :3000
-
-# 杀掉进程
-taskkill /PID <进程ID> /F
-```
-
-### 前端白屏或报错
-
-```powershell
-cd ui
-Remove-Item -Recurse -Force node_modules
-npm install
-```
-
-### cargo tauri dev 卡住不动
-
-检查终端 A 的服务器是否在运行。如果没启动，客户端无法连接。
-
----
-
-## 调试技巧
-
-### 查看详细日志
-
-```powershell
-# 服务器
-$env:RUST_LOG = "debug"; cargo run -p liteseal-server
-
-# 客户端
-$env:RUST_LOG = "debug"; cargo tauri dev
-```
-
-### 检查数据库内容
-
-数据库文件位置：`$env:LOCALAPPDATA\liteseal\data.db`
-
-用 SQLite 工具打开查看：
-
-```powershell
-sqlite3 "$env:LOCALAPPDATA\liteseal\data.db" ".tables"
-```
-
-### 验证服务器只转发密文
-
-在 `server/src/relay/handlers.rs` 的消息转发处加日志：
-
-```rust
-tracing::info!("Relaying: {:?}", &msg.ciphertext[..8.min(msg.ciphertext.len())]);
-```
-
-重启服务器，发消息后在终端 A 看到的是字节数组，不是明文，说明加密生效。
-
----
-
-## 代码改了之后怎么测
-
-| 改了什么 | 怎么验证 |
-|---------|---------|
-| `shared/src/crypto.rs` | `cargo test -p liteseal-shared` |
-| `src-tauri/src/db/` | `cargo test -p liteseal-app` |
-| `server/src/` | 重启服务器（终端 A Ctrl+C 再 `cargo run`） |
-| `src-tauri/src/commands/` | 重启客户端（终端 B Ctrl+C 再 `cargo tauri dev`） |
-| `ui/src/` | Vite 热更新，无需重启，刷新窗口即可 |
-| `Cargo.toml` 依赖变更 | 重启对应服务 |
+本次迁移按用户要求不执行界面交互测试，手动用例保持“未执行”。
