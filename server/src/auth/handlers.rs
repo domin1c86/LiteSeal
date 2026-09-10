@@ -93,12 +93,14 @@ pub struct LoginRequest {
     pub username: String,
     pub password: String,
     #[serde(default = "default_device_name")]
-    pub device_name: String,
+    #[serde(rename = "device_name")]
+    pub _device_name: String,
     pub device_id: Option<String>,
     pub device_public_key: Option<Vec<u8>>,
     pub ed25519_pk: Option<Vec<u8>>,
     #[serde(default)]
-    pub replace_device: bool,
+    #[serde(rename = "replace_device")]
+    pub _replace_device: bool,
 }
 
 pub async fn login(
@@ -159,29 +161,7 @@ pub async fn login(
                 _ => return Err(StatusCode::FORBIDDEN),
             }
         }
-        None => {
-            let has_active_device = state
-                .db
-                .has_active_device(&user.id)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-            if has_active_device && !req.replace_device {
-                return Err(StatusCode::CONFLICT);
-            }
-            state
-                .db
-                .create_device_and_session(
-                    &user.id,
-                    req.device_name.trim(),
-                    &public_key,
-                    &ed25519_pk,
-                    &access_token_hash,
-                    &refresh_token_hash,
-                    has_active_device,
-                )
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        }
+        None => return Err(StatusCode::CONFLICT),
     };
     let _ = state.db.insert_audit_event(Some(&user.id), "login").await;
 
@@ -280,14 +260,6 @@ pub async fn list_devices(
     headers: HeaderMap,
 ) -> Result<Json<Vec<DeviceResponse>>, StatusCode> {
     let user_id = user_from_bearer(&state, &headers).await?;
-    if state
-        .db
-        .has_active_device(&user_id)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    {
-        return Err(StatusCode::CONFLICT);
-    }
     let devices = state
         .db
         .list_user_devices(&user_id)
@@ -321,59 +293,22 @@ pub async fn revoke_device(
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[derive(Deserialize)]
-pub struct RegisterDeviceRequest {
-    pub device_name: String,
-    pub public_key: Vec<u8>,
-    pub ed25519_pk: Vec<u8>,
-}
-
+// Device creation and key replacement are intentionally closed for this beta.
 pub async fn register_device(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(req): Json<RegisterDeviceRequest>,
-) -> Result<Json<DeviceResponse>, StatusCode> {
-    service::validate_key_material(&req.public_key, &req.ed25519_pk)
-        .map_err(|_| StatusCode::BAD_REQUEST)?;
-    let user_id = user_from_bearer(&state, &headers).await?;
-    let device = state
-        .db
-        .register_device(
-            &user_id,
-            req.device_name.trim(),
-            &req.public_key,
-            &req.ed25519_pk,
-        )
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(DeviceResponse {
-        id: device.id,
-        name: device.name,
-        public_key: device.public_key,
-        ed25519_pk: device.ed25519_pk,
-        revoked: device.revoked,
-    }))
+) -> Result<StatusCode, StatusCode> {
+    user_from_bearer(&state, &headers).await?;
+    Err(StatusCode::FORBIDDEN)
 }
 
 pub async fn rotate_device_keys(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path(device_id): Path<String>,
-    Json(req): Json<RegisterDeviceRequest>,
+    Path(_device_id): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
-    service::validate_key_material(&req.public_key, &req.ed25519_pk)
-        .map_err(|_| StatusCode::BAD_REQUEST)?;
-    let user_id = user_from_bearer(&state, &headers).await?;
-    state
-        .db
-        .update_device_keys(&user_id, &device_id, &req.public_key, &req.ed25519_pk)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let _ = state
-        .db
-        .insert_audit_event(Some(&user_id), "device_keys_rotated")
-        .await;
-    Ok(StatusCode::NO_CONTENT)
+    user_from_bearer(&state, &headers).await?;
+    Err(StatusCode::FORBIDDEN)
 }
 
 pub(crate) async fn user_from_bearer(

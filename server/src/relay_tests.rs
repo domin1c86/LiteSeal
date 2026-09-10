@@ -9,6 +9,69 @@ use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, Web
 
 type Socket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn beta_device_identity_cannot_be_replaced_or_rotated() {
+    let server = TestServer::start().await;
+    let alice = server.register().await;
+    let username = server
+        .db
+        .get_username(&alice.user_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let replacement = crypto::generate_keypair().unwrap();
+    for replace in [false, true] {
+        let response = http_client()
+            .post(format!("{}/auth/login", server.url))
+            .json(&serde_json::json!({
+                "username": username, "password": "Test-only-password-2026!",
+                "device_name": "replacement", "replace_device": replace,
+                "device_public_key": replacement.public_key.to_vec(),
+                "ed25519_pk": replacement.ed25519_pk.to_vec(),
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::CONFLICT);
+    }
+    for (method, path) in [
+        (reqwest::Method::POST, "/devices".to_string()),
+        (
+            reqwest::Method::PUT,
+            format!("/devices/{}", alice.device_id),
+        ),
+    ] {
+        let response = http_client().request(method, format!("{}{path}", server.url))
+            .bearer_auth(&alice.token)
+            .json(&serde_json::json!({ "device_name": "replacement",
+                "public_key": replacement.public_key.to_vec(), "ed25519_pk": replacement.ed25519_pk.to_vec() }))
+            .send().await.unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::FORBIDDEN);
+    }
+    let response = http_client()
+        .get(format!("{}/devices", server.url))
+        .bearer_auth(&alice.token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let devices: Vec<serde_json::Value> = response.json().await.unwrap();
+    assert_eq!(devices.len(), 1);
+    assert_eq!(devices[0]["id"], alice.device_id);
+    let response = http_client()
+        .post(format!("{}/auth/login", server.url))
+        .json(
+            &serde_json::json!({ "username": username, "password": "Test-only-password-2026!",
+            "device_id": alice.device_id, "device_public_key": alice.keys.public_key.to_vec(),
+            "ed25519_pk": alice.keys.ed25519_pk.to_vec() }),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+}
+
 struct TestServer {
     url: String,
     task: tokio::task::JoinHandle<()>,

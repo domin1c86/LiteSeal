@@ -277,8 +277,8 @@ impl Db {
         device_id: &str,
     ) -> Result<Option<String>, sqlx::Error> {
         let row = sqlx::query(
-            "SELECT user_id FROM sessions
-             WHERE access_token_hash = $1 AND device_id = $2 AND revoked = false AND expires_at > now()",
+            "SELECT s.user_id FROM sessions s JOIN devices d ON d.id = s.device_id
+             WHERE s.access_token_hash = $1 AND s.device_id = $2 AND s.revoked = false AND s.expires_at > now() AND d.revoked = false",
         )
         .bind(access_token_hash)
         .bind(device_id)
@@ -292,8 +292,8 @@ impl Db {
         access_token_hash: &str,
     ) -> Result<Option<String>, sqlx::Error> {
         let row = sqlx::query(
-            "SELECT user_id FROM sessions
-             WHERE access_token_hash = $1 AND revoked = false AND expires_at > now()",
+            "SELECT s.user_id FROM sessions s JOIN devices d ON d.id = s.device_id
+             WHERE s.access_token_hash = $1 AND s.revoked = false AND s.expires_at > now() AND d.revoked = false",
         )
         .bind(access_token_hash)
         .fetch_optional(&self.pool)
@@ -314,64 +314,6 @@ impl Db {
             .bind(user_id)
             .execute(&self.pool)
             .await?;
-        Ok(())
-    }
-
-    pub async fn register_device(
-        &self,
-        user_id: &str,
-        name: &str,
-        public_key: &[u8],
-        ed25519_pk: &[u8],
-    ) -> Result<DeviceRecord, sqlx::Error> {
-        let id = uuid::Uuid::new_v4().to_string();
-        sqlx::query(
-            "INSERT INTO devices (id, user_id, name, public_key, ed25519_pk, revoked, created_at, last_seen)
-             VALUES ($1, $2, $3, $4, $5, false, now(), now())",
-        )
-        .bind(&id)
-        .bind(user_id)
-        .bind(name)
-        .bind(public_key)
-        .bind(ed25519_pk)
-        .execute(&self.pool)
-        .await?;
-        Ok(DeviceRecord {
-            id,
-            name: name.to_string(),
-            public_key: public_key.to_vec(),
-            ed25519_pk: ed25519_pk.to_vec(),
-            revoked: false,
-        })
-    }
-
-    pub async fn update_device_keys(
-        &self,
-        user_id: &str,
-        device_id: &str,
-        public_key: &[u8],
-        ed25519_pk: &[u8],
-    ) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            "UPDATE devices SET public_key = $1, ed25519_pk = $2, last_seen = now()
-             WHERE user_id = $3 AND id = $4 AND revoked = false",
-        )
-        .bind(public_key)
-        .bind(ed25519_pk)
-        .bind(user_id)
-        .bind(device_id)
-        .execute(&self.pool)
-        .await?;
-        sqlx::query(
-            "INSERT INTO device_keys (id, device_id, public_key, ed25519_pk, active, created_at)
-             VALUES ($1, $2, $3, $4, true, now())",
-        )
-        .bind(uuid::Uuid::new_v4().to_string())
-        .bind(device_id)
-        .bind(public_key)
-        .bind(ed25519_pk)
-        .execute(&self.pool)
-        .await?;
         Ok(())
     }
 
@@ -415,69 +357,6 @@ impl Db {
                 revoked: r.get("revoked"),
             })
             .collect())
-    }
-
-    pub async fn has_active_device(&self, user_id: &str) -> Result<bool, sqlx::Error> {
-        let row = sqlx::query(
-            "SELECT EXISTS(SELECT 1 FROM devices WHERE user_id = $1 AND revoked = false) AS present",
-        )
-        .bind(user_id)
-        .fetch_one(&self.pool)
-        .await?;
-        Ok(row.get("present"))
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub async fn create_device_and_session(
-        &self,
-        user_id: &str,
-        device_name: &str,
-        public_key: &[u8],
-        ed25519_pk: &[u8],
-        access_token_hash: &str,
-        refresh_token_hash: &str,
-        replace_active: bool,
-    ) -> Result<DeviceRecord, sqlx::Error> {
-        let mut transaction = self.pool.begin().await?;
-        if replace_active {
-            sqlx::query("UPDATE devices SET revoked = true WHERE user_id = $1 AND revoked = false")
-                .bind(user_id)
-                .execute(&mut *transaction)
-                .await?;
-            sqlx::query(
-                "UPDATE sessions SET revoked = true WHERE user_id = $1 AND revoked = false",
-            )
-            .bind(user_id)
-            .execute(&mut *transaction)
-            .await?;
-        }
-
-        let device_id = uuid::Uuid::new_v4().to_string();
-        insert_device(
-            &mut transaction,
-            &device_id,
-            user_id,
-            device_name,
-            public_key,
-            ed25519_pk,
-        )
-        .await?;
-        insert_session(
-            &mut transaction,
-            user_id,
-            &device_id,
-            access_token_hash,
-            refresh_token_hash,
-        )
-        .await?;
-        transaction.commit().await?;
-        Ok(DeviceRecord {
-            id: device_id,
-            name: device_name.to_string(),
-            public_key: public_key.to_vec(),
-            ed25519_pk: ed25519_pk.to_vec(),
-            revoked: false,
-        })
     }
 
     pub async fn seed_invite_code(&self, code_hash: &str) -> Result<(), sqlx::Error> {
