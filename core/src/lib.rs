@@ -4,6 +4,7 @@
 //! platform shells only adapt it to their IPC mechanism.
 
 pub mod api;
+pub mod beta;
 pub mod chat;
 pub mod client;
 pub mod contacts;

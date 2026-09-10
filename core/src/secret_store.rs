@@ -4,6 +4,31 @@ pub trait SecretStore {
     fn clear(&self) -> Result<(), String>;
 }
 
+/// Protect local draft/message bytes without writing a separate file.
+pub fn protect_local(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    #[cfg(windows)]
+    {
+        WindowsDpapiSecretStore::protect(bytes)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = bytes;
+        Err("Local payload protection is unavailable on this platform".into())
+    }
+}
+
+pub fn unprotect_local(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    #[cfg(windows)]
+    {
+        WindowsDpapiSecretStore::unprotect(bytes)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = bytes;
+        Err("Local payload protection is unavailable on this platform".into())
+    }
+}
+
 pub fn secret_store(path: std::path::PathBuf) -> Box<dyn SecretStore + Send + Sync> {
     #[cfg(windows)]
     {
