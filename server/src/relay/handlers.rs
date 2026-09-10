@@ -10,7 +10,9 @@ use liteseal_shared::{
     crypto,
     protocol::{ClientMessage, DeliveryStatus, ServerMessage, SignedEnvelopeV2, PROTOCOL_V2},
 };
-use tokio::sync::{mpsc, watch};
+use std::{collections::HashMap, time::Duration};
+use tokio::sync::mpsc;
+use tokio::time::{timeout, Instant};
 
 use crate::{
     db::{OfflineMessageRecord, StoreOfflineOutcome},
@@ -54,184 +56,140 @@ pub async fn ws_handler(
 }
 
 async fn handle_socket(socket: WebSocket, state: AppState, remote_ip: std::net::IpAddr) {
-    let (mut ws_sender, mut ws_receiver) = socket.split();
+    let (mut writer, mut reader) = socket.split();
+    let first = timeout(Duration::from_secs(10), reader.next()).await;
+    let Ok(Some(Ok(Message::Text(text)))) = first else {
+        return;
+    };
+    let Ok(ClientMessage::Auth {
+        user_id,
+        token,
+        device_id,
+    }) = serde_json::from_str(&text)
+    else {
+        return;
+    };
+    if state.validate_auth(&token, &device_id).await.as_deref() != Some(&user_id) {
+        let _ = writer
+            .send(Message::Text(
+                serde_json::to_string(&ServerMessage::AuthFail {
+                    reason: "Invalid credentials".into(),
+                })
+                .unwrap(),
+            ))
+            .await;
+        return;
+    }
     let (tx, mut rx) = mpsc::channel::<String>(CONNECTION_CHANNEL_CAPACITY);
-    let mut authenticated: Option<AuthenticatedSession> = None;
-    let (auth_tx, auth_rx) = watch::channel::<Option<AuthenticatedSession>>(None);
-    let delivery_state = state.clone();
-
-    let mut send_task = tokio::spawn(async move {
-        let mut check_session = tokio::time::interval(std::time::Duration::from_secs(15));
-        loop {
-            let outgoing = tokio::select! {
-                msg = rx.recv() => match msg {
-                    Some(message) => Some(message),
-                    None => break,
-                },
-                _ = check_session.tick() => None,
-            };
-            let session = auth_rx.borrow().clone();
-            if let Some(session) = session {
-                // Revocation and replacement apply to existing connections,
-                // including receive-only clients. Database errors fail closed.
-                if !session.is_active(&delivery_state).await {
-                    break;
-                }
-            }
-            if let Some(message) = outgoing {
-                if ws_sender.send(Message::Text(message)).await.is_err() {
-                    break;
-                }
-            }
-        }
-    });
-
+    let generation = state.register(device_id.clone(), tx.clone());
+    let session = AuthenticatedSession {
+        user_id,
+        device_id,
+        generation,
+        token_hash: crate::auth::service::hash_token(&token),
+    };
+    send_message(&tx, &ServerMessage::AuthOk);
+    let mut pending: HashMap<String, Instant> = HashMap::new();
+    let mut tick = tokio::time::interval(Duration::from_millis(500));
+    // One writer and one durable queue: live traffic never bypasses replay.
     loop {
-        let incoming = tokio::select! {
-            message = StreamExt::next(&mut ws_receiver) => message,
-            _ = &mut send_task => break,
-        };
-        let Some(Ok(msg)) = incoming else { break };
-        let Message::Text(text) = msg else {
-            if matches!(msg, Message::Close(_)) {
-                break;
+        tokio::select! {
+            biased;
+            outgoing = rx.recv() => {
+                let Some(outgoing) = outgoing else { break };
+                if !session.is_active(&state).await { break; }
+                if !matches!(timeout(Duration::from_secs(5), writer.send(Message::Text(outgoing))).await, Ok(Ok(()))) { break; }
             }
-            continue;
-        };
-
-        let parsed = match serde_json::from_str::<ClientMessage>(&text) {
-            Ok(parsed) => parsed,
-            Err(_) => {
-                send_error(&tx, "parse_error", "Invalid message format");
-                continue;
-            }
-        };
-
-        if authenticated.is_none() {
-            let ClientMessage::Auth {
-                user_id,
-                token,
-                device_id,
-            } = parsed
-            else {
-                send_error(&tx, "unauthorized", "The first frame must authenticate");
-                break;
-            };
-
-            match state.validate_auth(&token, &device_id).await {
-                Some(validated_user_id) if validated_user_id == user_id => {
-                    let generation = state.register(device_id.clone(), tx.clone());
-                    let session = AuthenticatedSession {
-                        user_id: validated_user_id,
-                        device_id: device_id.clone(),
-                        generation,
-                        token_hash: crate::auth::service::hash_token(&token),
-                    };
-                    auth_tx.send_replace(Some(session.clone()));
-                    authenticated = Some(session);
-                    send_message(&tx, &ServerMessage::AuthOk);
-                    deliver_offline_messages(&state, &tx, &device_id).await;
-                }
-                _ => {
-                    send_message(
-                        &tx,
-                        &ServerMessage::AuthFail {
-                            reason: "Invalid credentials".into(),
-                        },
-                    );
-                    break;
-                }
-            }
-            continue;
-        }
-
-        let session = authenticated.as_ref().expect("checked above");
-        if !session.is_active(&state).await {
-            break;
-        }
-        let authenticated_user = &session.user_id;
-        let authenticated_device = &session.device_id;
-        match parsed {
-            ClientMessage::Auth { .. } => {
-                send_error(
-                    &tx,
-                    "reauth_forbidden",
-                    "Authentication is only allowed as the first frame",
-                );
-                break;
-            }
-            ClientMessage::Send { .. } => send_error(
-                &tx,
-                "legacy_send_read_only",
-                "New messages must use protocol v2",
-            ),
-            ClientMessage::SendV2 { envelopes } => {
-                if let Err((code, message)) = handle_v2_send(
-                    &state,
-                    &tx,
-                    authenticated_user,
-                    authenticated_device,
-                    remote_ip,
-                    envelopes,
-                )
-                .await
-                {
-                    send_error(&tx, code, message);
-                }
-            }
-            ClientMessage::Ack {
-                message_id,
-                recipient_device_id: _,
-            }
-            | ClientMessage::AckV2 { message_id } => {
-                // Both legacy and v2 ACKs are bound to the authenticated
-                // device. A client-supplied device id is never trusted.
-                if uuid::Uuid::parse_str(&message_id).is_err() {
-                    send_error(&tx, "invalid_message_id", "Invalid ACK message id");
-                    continue;
-                }
-                match state
-                    .db
-                    .ack_message(&message_id, authenticated_device)
-                    .await
-                {
-                    Ok(Some(receipt)) => {
-                        // Only a durable, authenticated recipient ACK means
-                        // delivered. Enqueuing a socket write is not delivery.
-                        if let Ok(message) = serde_json::to_string(&ServerMessage::DeliveryUpdate {
-                            updates: vec![DeliveryStatus {
-                                message_id: receipt.message_id,
-                                recipient_user_id: receipt.recipient_user_id,
-                                recipient_device_id: receipt.recipient_device_id,
-                                status: "delivered".to_string(),
-                            }],
-                        }) {
-                            state.send_to(&receipt.sender_device_id, message);
+            incoming = reader.next() => {
+                let Some(Ok(incoming)) = incoming else { break };
+                if !session.is_active(&state).await { break; }
+                let text = match incoming {
+                    Message::Text(text) => text,
+                    Message::Ping(bytes) => {
+                        if !matches!(timeout(Duration::from_secs(5), writer.send(Message::Pong(bytes))).await, Ok(Ok(()))) { break; }
+                        continue;
+                    }
+                    Message::Close(_) => break,
+                    _ => continue,
+                };
+                let Ok(message) = serde_json::from_str::<ClientMessage>(&text) else {
+                    send_error(&tx, "parse_error", "Invalid message format"); continue;
+                };
+                match message {
+                    ClientMessage::Auth { .. } => break,
+                    ClientMessage::Send { .. } => send_error(&tx, "legacy_send_read_only", "New messages must use protocol v2"),
+                    ClientMessage::SendV2 { envelopes } => {
+                        let id = envelopes.first().map(|e| e.message_id.clone()).unwrap_or_default();
+                        if let Err((code, message)) = handle_v2_send(&state, &tx, &session.user_id, &session.device_id, remote_ip, envelopes).await {
+                            send_message(&tx, &ServerMessage::MessageError { message_id: id, code: code.into(), message: message.into(),
+                                retryable: matches!(code, "rate_limited" | "storage_error" | "offline_quota_exceeded") });
                         }
                     }
-                    Ok(None) => send_error(
-                        &tx,
-                        "ack_not_found",
-                        "Message is not queued for this device",
-                    ),
-                    Err(error) => {
-                        tracing::error!(%error, "Failed to persist ACK");
-                        send_error(&tx, "storage_error", "Unable to persist ACK");
+                    ClientMessage::DeliveryQuery { message_ids } => {
+                        if message_ids.len() > 100 { send_error(&tx, "query_too_large", "At most 100 message ids"); continue; }
+                        match state.db.delivery_statuses(&session.device_id, &message_ids).await {
+                            Ok(updates) => send_message(&tx, &ServerMessage::DeliveryUpdate { updates }),
+                            Err(_) => send_error(&tx, "storage_error", "Unable to query delivery status"),
+                        }
+                    }
+                    ClientMessage::Ack { message_id, .. } => {
+                        apply_ack(&state, &session, &tx, &message_id, Default::default()).await;
+                        pending.remove(&message_id);
+                    }
+                    ClientMessage::AckV2 { message_id, outcome } => {
+                        apply_ack(&state, &session, &tx, &message_id, outcome).await;
+                        pending.remove(&message_id);
                     }
                 }
             }
+            _ = tick.tick() => {
+                if !session.is_active(&state).await { break; }
+                let Ok(messages) = state.db.pending_window(&session.device_id).await else { break };
+                for message in messages {
+                    if pending.get(&message.message_id).is_some_and(|sent| sent.elapsed() < Duration::from_secs(15)) { continue; }
+                    let outgoing = ServerMessage::MessageV2 { envelope: message.envelope(), server_timestamp: unix_millis() };
+                    let serialized = serde_json::to_string(&outgoing).expect("wire message serializes");
+                    if !matches!(timeout(Duration::from_secs(5), writer.send(Message::Text(serialized))).await, Ok(Ok(()))) {
+                        state.unregister(&session.device_id, session.generation); return;
+                    }
+                    pending.insert(message.message_id, Instant::now());
+                }
+                // ACKs also remove entries; cap metadata across expired/revoked queues.
+                pending.retain(|_, sent| sent.elapsed() < Duration::from_secs(60));
+            }
         }
     }
+    state.unregister(&session.device_id, session.generation);
+}
 
-    if let Some(session) = authenticated {
-        state.unregister(&session.device_id, session.generation);
-        tracing::info!(
-            device_id = session.device_id,
-            generation = session.generation,
-            "Device disconnected"
-        );
+async fn apply_ack(
+    state: &AppState,
+    session: &AuthenticatedSession,
+    tx: &mpsc::Sender<String>,
+    id: &str,
+    outcome: liteseal_shared::protocol::AckOutcome,
+) {
+    if uuid::Uuid::parse_str(id).is_err() {
+        send_error(tx, "invalid_message_id", "Invalid ACK message id");
+        return;
     }
-    send_task.abort();
+    match state.db.ack_message(id, &session.device_id, outcome).await {
+        Ok(Some(receipt)) => {
+            let message = ServerMessage::DeliveryUpdate {
+                updates: vec![DeliveryStatus {
+                    message_id: receipt.message_id,
+                    recipient_user_id: receipt.recipient_user_id,
+                    recipient_device_id: receipt.recipient_device_id,
+                    status: receipt.status,
+                }],
+            };
+            if let Ok(json) = serde_json::to_string(&message) {
+                state.send_to(&receipt.sender_device_id, json);
+            }
+        }
+        Ok(None) => send_error(tx, "ack_not_found", "Message is not queued for this device"),
+        Err(_) => send_error(tx, "storage_error", "Unable to persist ACK"),
+    }
 }
 
 async fn handle_v2_send(
@@ -295,12 +253,6 @@ async fn handle_v2_send(
             "Recipient device does not belong to the recipient or is revoked",
         ))?;
 
-    let relay_message = serde_json::to_string(&ServerMessage::MessageV2 {
-        envelope: envelope.clone(),
-        server_timestamp: unix_millis(),
-    })
-    .map_err(|_| ("serialization_error", "Unable to serialize message"))?;
-
     // Persist before attempting ANY socket delivery. A socket queue can be
     // lost on disconnect or process exit; the durable copy survives until ACK.
     let stored = state
@@ -308,27 +260,22 @@ async fn handle_v2_send(
         .store_offline_message(&offline_record(&envelope))
         .await
         .map_err(|_| ("storage_error", "Unable to persist message"))?;
+    if stored == StoreOfflineOutcome::Conflict {
+        return Err((
+            "message_conflict",
+            "Message id or sequence conflicts with a stored envelope",
+        ));
+    }
     if stored == StoreOfflineOutcome::QuotaExceeded {
         return Err(("offline_quota_exceeded", "Recipient offline queue is full"));
     }
 
-    send_message(
-        sender,
-        &ServerMessage::DeliveryUpdate {
-            updates: vec![DeliveryStatus {
-                message_id: envelope.message_id.clone(),
-                recipient_user_id: envelope.recipient_user_id.clone(),
-                recipient_device_id: envelope.recipient_device_id.clone(),
-                status: "stored".to_string(),
-            }],
-        },
-    );
-    // Queue the stored status before delivery so a fast recipient ACK cannot
-    // be followed by an older stored update on the sender's connection.
-    // Duplicates replay the original durable envelope on reconnection.
-    if stored == StoreOfflineOutcome::Stored {
-        state.send_to(&envelope.recipient_device_id, relay_message);
-    }
+    let updates = state
+        .db
+        .delivery_statuses(authenticated_device, &[envelope.message_id])
+        .await
+        .map_err(|_| ("storage_error", "Unable to query stored receipt"))?;
+    send_message(sender, &ServerMessage::DeliveryUpdate { updates });
     Ok(())
 }
 
@@ -397,69 +344,7 @@ fn validate_envelope_shape(
     Ok(())
 }
 
-async fn deliver_offline_messages(
-    state: &AppState,
-    sender: &mpsc::Sender<String>,
-    device_id: &str,
-) {
-    let Ok(messages) = state.db.drain_offline_messages(device_id).await else {
-        tracing::error!(device_id, "Failed to load offline messages");
-        return;
-    };
-
-    for message in messages {
-        let server_message = if message.protocol_version == i16::from(PROTOCOL_V2) {
-            ServerMessage::MessageV2 {
-                envelope: SignedEnvelopeV2 {
-                    protocol_version: PROTOCOL_V2,
-                    message_id: message.message_id,
-                    conversation_id: message.conversation_id,
-                    sender_user_id: message.from_user_id,
-                    sender_device_id: message.sender_device_id,
-                    recipient_user_id: message.recipient_user_id,
-                    recipient_device_id: message.recipient_device_id,
-                    sender_seq: message.sender_seq,
-                    prev_hash: message.prev_hash,
-                    sent_at: message.timestamp,
-                    message_type: message.message_type,
-                    ciphertext: message.ciphertext,
-                    signature: message.signature,
-                },
-                server_timestamp: unix_millis(),
-            }
-        } else {
-            ServerMessage::Message {
-                message_id: message.message_id,
-                from: message.from_user_id,
-                conversation_id: message.conversation_id,
-                ciphertext: message.ciphertext,
-                signature: message.signature,
-                sender_device_id: message.sender_device_id,
-                sender_seq: message.sender_seq,
-                prev_hash: message.prev_hash,
-                recipient_device_id: message.recipient_device_id,
-                timestamp: message.timestamp,
-            }
-        };
-        let Ok(serialized) = serde_json::to_string(&server_message) else {
-            continue;
-        };
-        if !enqueue_replay(sender, serialized).await {
-            break;
-        }
-    }
-}
-
-async fn enqueue_replay(sender: &mpsc::Sender<String>, message: String) -> bool {
-    // Backpressure lets queues larger than 128 drain in one connection.
-    // Bound stalled writes; the unacknowledged rows remain durable for retry.
-    matches!(
-        tokio::time::timeout(std::time::Duration::from_secs(5), sender.send(message)).await,
-        Ok(Ok(()))
-    )
-}
-
-fn offline_record(envelope: &SignedEnvelopeV2) -> OfflineMessageRecord {
+pub(crate) fn offline_record(envelope: &SignedEnvelopeV2) -> OfflineMessageRecord {
     OfflineMessageRecord {
         protocol_version: i16::from(PROTOCOL_V2),
         message_id: envelope.message_id.clone(),
@@ -508,34 +393,6 @@ fn unix_millis() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    async fn replay_waits_for_capacity_and_delivers_more_than_one_channelful() {
-        let (sender, mut receiver) = mpsc::channel(CONNECTION_CHANNEL_CAPACITY);
-        for index in 0..CONNECTION_CHANNEL_CAPACITY {
-            sender.try_send(index.to_string()).unwrap();
-        }
-        let producer = tokio::spawn(async move {
-            for index in CONNECTION_CHANNEL_CAPACITY..1_000 {
-                assert!(enqueue_replay(&sender, index.to_string()).await);
-            }
-        });
-        for index in 0..1_000 {
-            let message = tokio::time::timeout(std::time::Duration::from_secs(2), receiver.recv())
-                .await
-                .unwrap()
-                .unwrap();
-            assert_eq!(message, index.to_string());
-        }
-        producer.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn replay_stops_when_connection_is_closed() {
-        let (sender, receiver) = mpsc::channel(1);
-        drop(receiver);
-        assert!(!enqueue_replay(&sender, "message".to_string()).await);
-    }
 
     fn valid_envelope() -> SignedEnvelopeV2 {
         SignedEnvelopeV2 {

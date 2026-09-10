@@ -43,10 +43,12 @@ pub enum StoreOfflineOutcome {
     Stored,
     Duplicate,
     QuotaExceeded,
+    Conflict,
 }
 
 pub struct AckedMessage {
     pub message_id: String,
+    pub status: String,
     pub sender_device_id: String,
     pub recipient_user_id: String,
     pub recipient_device_id: String,
@@ -92,29 +94,22 @@ impl Db {
         )
         .execute(&mut *transaction)
         .await?;
-        let applied = sqlx::query("SELECT 1 FROM schema_migrations WHERE version = $1")
-            .bind(1_i64)
-            .fetch_optional(&mut *transaction)
-            .await?;
-        if applied.is_some() {
-            transaction.commit().await?;
-            return Ok(());
+        for (version, sql) in [(1_i64, MIGRATIONS), (2, BETA_MIGRATIONS)] {
+            let applied = sqlx::query("SELECT 1 FROM schema_migrations WHERE version = $1")
+                .bind(version)
+                .fetch_optional(&mut *transaction)
+                .await?;
+            if applied.is_some() {
+                continue;
+            }
+            for statement in sql.split(';').map(str::trim).filter(|s| !s.is_empty()) {
+                sqlx::query(statement).execute(&mut *transaction).await?;
+            }
+            sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES ($1, now())")
+                .bind(version)
+                .execute(&mut *transaction)
+                .await?;
         }
-
-        for stmt in MIGRATIONS
-            .split(";")
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-        {
-            sqlx::query(stmt).execute(&mut *transaction).await?;
-        }
-        sqlx::query(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES ($1, now())
-             ON CONFLICT (version) DO NOTHING",
-        )
-        .bind(1_i64)
-        .execute(&mut *transaction)
-        .await?;
         transaction.commit().await?;
         Ok(())
     }
@@ -401,19 +396,32 @@ impl Db {
             .execute(&mut *transaction)
             .await?;
 
+        let envelope = msg.envelope();
+        let digest = envelope
+            .digest()
+            .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
         let existing = sqlx::query(
-            "SELECT 1 FROM offline_messages
-             WHERE message_id = $1 AND recipient_device_id = $2",
+            "SELECT digest FROM beta_receipts WHERE message_id = $1 AND recipient_device_id = $2",
         )
         .bind(&msg.message_id)
         .bind(&msg.recipient_device_id)
         .fetch_optional(&mut *transaction)
         .await?;
-        if existing.is_some() {
+        if let Some(existing) = existing {
+            let same = existing.get::<Vec<u8>, _>("digest") == digest;
             transaction.commit().await?;
-            return Ok(StoreOfflineOutcome::Duplicate);
+            return Ok(if same {
+                StoreOfflineOutcome::Duplicate
+            } else {
+                StoreOfflineOutcome::Conflict
+            });
         }
-
+        let occupied = sqlx::query("SELECT 1 FROM beta_receipts WHERE sender_device_id = $1 AND conversation_id = $2 AND sender_seq = $3")
+            .bind(&msg.sender_device_id).bind(&msg.conversation_id).bind(msg.sender_seq)
+            .fetch_optional(&mut *transaction).await?;
+        if occupied.is_some() {
+            return Ok(StoreOfflineOutcome::Conflict);
+        }
         let usage = sqlx::query(
             "SELECT COUNT(*) AS message_count,
                     COALESCE(SUM(octet_length(ciphertext) + octet_length(signature)), 0) AS byte_count
@@ -434,6 +442,10 @@ impl Db {
             return Ok(StoreOfflineOutcome::QuotaExceeded);
         }
 
+        sqlx::query("INSERT INTO beta_receipts (message_id, recipient_device_id, sender_user_id, sender_device_id, recipient_user_id, conversation_id, sender_seq, digest, status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'stored')")
+            .bind(&msg.message_id).bind(&msg.recipient_device_id).bind(&msg.from_user_id).bind(&msg.sender_device_id)
+            .bind(&msg.recipient_user_id).bind(&msg.conversation_id).bind(msg.sender_seq).bind(digest)
+            .execute(&mut *transaction).await?;
         sqlx::query(
             "INSERT INTO offline_messages
              (id, protocol_version, message_id, conversation_id, from_user_id, sender_device_id,
@@ -462,28 +474,36 @@ impl Db {
         Ok(StoreOfflineOutcome::Stored)
     }
 
+    #[cfg(test)]
     pub async fn drain_offline_messages(
         &self,
         device_id: &str,
     ) -> Result<Vec<OfflineMessageRecord>, sqlx::Error> {
-        // Opportunistic queue hygiene: acked rows are done, unacked rows
-        // older than 30 days are considered abandoned.
-        sqlx::query(
-            "DELETE FROM offline_messages
-             WHERE acked = true OR created_at < now() - interval '30 days'",
-        )
-        .execute(&self.pool)
-        .await?;
+        self.pending_messages(device_id, 1000).await
+    }
 
+    pub async fn pending_window(
+        &self,
+        device_id: &str,
+    ) -> Result<Vec<OfflineMessageRecord>, sqlx::Error> {
+        self.pending_messages(device_id, 128).await
+    }
+
+    async fn pending_messages(
+        &self,
+        device_id: &str,
+        limit: i64,
+    ) -> Result<Vec<OfflineMessageRecord>, sqlx::Error> {
         let rows = sqlx::query(
             "SELECT protocol_version, message_id, conversation_id, from_user_id, sender_device_id,
                     sender_seq, prev_hash, recipient_user_id, recipient_device_id, message_type,
                     ciphertext, signature, timestamp
              FROM offline_messages
              WHERE recipient_device_id = $1 AND acked = false
-             ORDER BY created_at ASC",
+             ORDER BY delivery_order ASC LIMIT $2",
         )
         .bind(device_id)
+        .bind(limit)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows
@@ -509,23 +529,56 @@ impl Db {
     pub async fn ack_message(
         &self,
         message_id: &str,
-        recipient_device_id: &str,
+        device_id: &str,
+        outcome: liteseal_shared::protocol::AckOutcome,
     ) -> Result<Option<AckedMessage>, sqlx::Error> {
-        let row = sqlx::query(
-            "UPDATE offline_messages SET delivered = true, acked = true
-             WHERE message_id = $1 AND recipient_device_id = $2
-             RETURNING message_id, sender_device_id, recipient_user_id, recipient_device_id",
-        )
-        .bind(message_id)
-        .bind(recipient_device_id)
-        .fetch_optional(&self.pool)
-        .await?;
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query("UPDATE beta_receipts SET status = CASE WHEN status = 'stored' THEN $3 ELSE status END WHERE message_id = $1 AND recipient_device_id = $2 RETURNING message_id, sender_device_id, recipient_user_id, recipient_device_id, status")
+            .bind(message_id).bind(device_id).bind(outcome.status()).fetch_optional(&mut *tx).await?;
+        if row.is_some() {
+            sqlx::query(
+                "DELETE FROM offline_messages WHERE message_id = $1 AND recipient_device_id = $2",
+            )
+            .bind(message_id)
+            .bind(device_id)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
         Ok(row.map(|row| AckedMessage {
             message_id: row.get("message_id"),
+            status: row.get("status"),
             sender_device_id: row.get("sender_device_id"),
             recipient_user_id: row.get("recipient_user_id"),
             recipient_device_id: row.get("recipient_device_id"),
         }))
+    }
+
+    pub async fn delivery_statuses(
+        &self,
+        sender_device: &str,
+        ids: &[String],
+    ) -> Result<Vec<liteseal_shared::protocol::DeliveryStatus>, sqlx::Error> {
+        let rows = sqlx::query("SELECT message_id, recipient_user_id, recipient_device_id, status FROM beta_receipts WHERE sender_device_id = $1 AND message_id = ANY($2)")
+            .bind(sender_device).bind(ids).fetch_all(&self.pool).await?;
+        Ok(ids
+            .iter()
+            .map(|id| {
+                let row = rows
+                    .iter()
+                    .find(|row| row.get::<String, _>("message_id") == *id);
+                liteseal_shared::protocol::DeliveryStatus {
+                    message_id: id.clone(),
+                    recipient_user_id: row.map(|r| r.get("recipient_user_id")).unwrap_or_default(),
+                    recipient_device_id: row
+                        .map(|r| r.get("recipient_device_id"))
+                        .unwrap_or_default(),
+                    status: row
+                        .map(|r| r.get("status"))
+                        .unwrap_or_else(|| "unknown".to_string()),
+                }
+            })
+            .collect())
     }
 
     pub async fn hit_rate_limit(
@@ -714,6 +767,39 @@ CREATE TABLE IF NOT EXISTS invitation_codes (
 );
 "#;
 
+const BETA_MIGRATIONS: &str = "
+ALTER TABLE offline_messages ADD COLUMN delivery_order BIGSERIAL;
+CREATE INDEX offline_pending_device_idx ON offline_messages (recipient_device_id, delivery_order) WHERE acked = false;
+CREATE TABLE beta_receipts (
+ message_id TEXT NOT NULL, recipient_device_id TEXT NOT NULL,
+ sender_user_id TEXT NOT NULL, sender_device_id TEXT NOT NULL, recipient_user_id TEXT NOT NULL,
+ conversation_id TEXT NOT NULL, sender_seq BIGINT NOT NULL, digest BYTEA NOT NULL,
+ status TEXT NOT NULL CHECK (status IN ('stored','delivered','rejected')),
+ PRIMARY KEY (message_id, recipient_device_id), UNIQUE (sender_device_id, conversation_id, sender_seq)
+);
+CREATE INDEX beta_receipts_sender_idx ON beta_receipts (sender_device_id, message_id);
+";
+
+impl OfflineMessageRecord {
+    pub fn envelope(&self) -> liteseal_shared::protocol::SignedEnvelopeV2 {
+        liteseal_shared::protocol::SignedEnvelopeV2 {
+            protocol_version: self.protocol_version as u8,
+            message_id: self.message_id.clone(),
+            conversation_id: self.conversation_id.clone(),
+            sender_user_id: self.from_user_id.clone(),
+            sender_device_id: self.sender_device_id.clone(),
+            recipient_user_id: self.recipient_user_id.clone(),
+            recipient_device_id: self.recipient_device_id.clone(),
+            sender_seq: self.sender_seq,
+            prev_hash: self.prev_hash.clone(),
+            sent_at: self.timestamp,
+            message_type: self.message_type.clone(),
+            ciphertext: self.ciphertext.clone(),
+            signature: self.signature.clone(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod integration_tests {
     use super::*;
@@ -744,7 +830,7 @@ mod integration_tests {
             .fetch_one(db.pool())
             .await
             .unwrap();
-        assert_eq!(versions, 1);
+        assert_eq!(versions, 2);
         sqlx::query("SELECT 1 FROM offline_messages LIMIT 1")
             .execute(db.pool())
             .await

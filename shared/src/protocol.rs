@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 pub const PROTOCOL_V2: u8 = 2;
@@ -33,6 +34,31 @@ pub struct SignedEnvelopeV2 {
 }
 
 impl SignedEnvelopeV2 {
+    pub fn digest(&self) -> Result<Vec<u8>, ProtocolError> {
+        let mut hash = Sha256::new();
+        hash.update(self.signing_bytes()?);
+        hash.update(&self.signature);
+        Ok(hash.finalize().to_vec())
+    }
+
+    /// Compatible with the existing per-device message chain.
+    pub fn chain_hash(&self) -> Vec<u8> {
+        let mut hash = Sha256::new();
+        for field in [
+            &self.message_id,
+            &self.conversation_id,
+            &self.sender_user_id,
+            &self.sender_device_id,
+        ] {
+            hash.update(field.as_bytes());
+        }
+        hash.update(self.sender_seq.to_be_bytes());
+        hash.update(&self.prev_hash);
+        hash.update(&self.ciphertext);
+        hash.update(&self.signature);
+        hash.finalize().to_vec()
+    }
+
     pub fn signing_bytes(&self) -> Result<Vec<u8>, ProtocolError> {
         let mut encoded = Vec::new();
         encoded.extend_from_slice(SIGNED_ENVELOPE_V2_DOMAIN);
@@ -99,6 +125,23 @@ pub struct DeliveryStatus {
     pub status: String,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AckOutcome {
+    #[default]
+    Processed,
+    Rejected,
+}
+
+impl AckOutcome {
+    pub fn status(self) -> &'static str {
+        match self {
+            Self::Processed => "delivered",
+            Self::Rejected => "rejected",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ClientMessage {
@@ -127,7 +170,13 @@ pub enum ClientMessage {
     #[serde(rename = "send_v2")]
     SendV2 { envelopes: Vec<SignedEnvelopeV2> },
     #[serde(rename = "ack_v2")]
-    AckV2 { message_id: String },
+    AckV2 {
+        message_id: String,
+        #[serde(default)]
+        outcome: AckOutcome,
+    },
+    #[serde(rename = "delivery_query")]
+    DeliveryQuery { message_ids: Vec<String> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -152,6 +201,13 @@ pub enum ServerMessage {
     },
     #[serde(rename = "error")]
     Error { code: String, message: String },
+    #[serde(rename = "message_error")]
+    MessageError {
+        message_id: String,
+        code: String,
+        message: String,
+        retryable: bool,
+    },
     #[serde(rename = "delivered")]
     Delivered { message_id: String },
     #[serde(rename = "delivery_update")]

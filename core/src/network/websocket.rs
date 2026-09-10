@@ -145,7 +145,10 @@ impl WebSocketClient {
     }
 
     pub async fn send_ack(&self, message_id: String) -> Result<(), String> {
-        let msg = ClientMessage::AckV2 { message_id };
+        let msg = ClientMessage::AckV2 {
+            message_id,
+            outcome: Default::default(),
+        };
         let json = serde_json::to_string(&msg).map_err(|e| e.to_string())?;
 
         self.write

@@ -8,3 +8,4 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 libsodium-sys = "0.2"
 thiserror = { workspace = true }
+sha2 = "0.10"

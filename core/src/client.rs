@@ -368,7 +368,8 @@ impl LitesealClient {
                         });
                     }
                 }
-                ServerMessage::Error { code, message } => {
+                ServerMessage::Error { code, message }
+                | ServerMessage::MessageError { code, message, .. } => {
                     events.push(RelayEvent::Error { code, message });
                 }
                 ServerMessage::AuthOk | ServerMessage::AuthFail { .. } => {}

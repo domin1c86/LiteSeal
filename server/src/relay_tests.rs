@@ -11,6 +11,142 @@ type Socket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
 #[tokio::test]
 #[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn receipts_survive_rejection_and_reject_conflicting_replays() {
+    let server = TestServer::start().await;
+    let alice = server.register().await;
+    let bob = server.register().await;
+    let mut sender = server.connect(&alice).await;
+    let mut recipient = server.connect(&bob).await;
+    let original = envelope(&alice, &bob);
+    send(
+        &mut sender,
+        ClientMessage::SendV2 {
+            envelopes: vec![original.clone()],
+        },
+    )
+    .await;
+    let _ = receive(&mut sender).await;
+    let _ = receive(&mut recipient).await;
+    send(
+        &mut recipient,
+        ClientMessage::AckV2 {
+            message_id: original.message_id.clone(),
+            outcome: liteseal_shared::protocol::AckOutcome::Rejected,
+        },
+    )
+    .await;
+    assert!(
+        matches!(receive(&mut sender).await, ServerMessage::DeliveryUpdate { updates } if updates[0].status == "rejected")
+    );
+    for socket in [&mut sender, &mut recipient] {
+        send(
+            socket,
+            ClientMessage::DeliveryQuery {
+                message_ids: vec![original.message_id.clone()],
+            },
+        )
+        .await;
+    }
+    assert!(
+        matches!(receive(&mut sender).await, ServerMessage::DeliveryUpdate { updates } if updates[0].status == "rejected")
+    );
+    assert!(
+        matches!(receive(&mut recipient).await, ServerMessage::DeliveryUpdate { updates } if updates[0].status == "unknown")
+    );
+    send(
+        &mut sender,
+        ClientMessage::SendV2 {
+            envelopes: vec![original.clone()],
+        },
+    )
+    .await;
+    assert!(
+        matches!(receive(&mut sender).await, ServerMessage::DeliveryUpdate { updates } if updates[0].status == "rejected")
+    );
+    let mut conflict = original;
+    conflict.ciphertext.push(7);
+    conflict.signature =
+        crypto::sign(&conflict.signing_bytes().unwrap(), &alice.keys.ed25519_sk).unwrap();
+    send(
+        &mut sender,
+        ClientMessage::SendV2 {
+            envelopes: vec![conflict],
+        },
+    )
+    .await;
+    assert!(
+        matches!(receive(&mut sender).await, ServerMessage::MessageError { code, retryable: false, .. } if code == "message_conflict")
+    );
+    assert!(server
+        .db
+        .drain_offline_messages(&bob.device_id)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn thousand_message_backlog_drains_without_reconnect_and_preserves_quota() {
+    let server = TestServer::start().await;
+    let alice = server.register().await;
+    let bob = server.register().await;
+    let mut previous = Vec::new();
+    let mut expected = Vec::new();
+    for seq in 1..=1001 {
+        let mut item = envelope(&alice, &bob);
+        item.sender_seq = seq;
+        item.prev_hash = previous;
+        item.signature =
+            crypto::sign(&item.signing_bytes().unwrap(), &alice.keys.ed25519_sk).unwrap();
+        previous = item.chain_hash();
+        let stored = server
+            .db
+            .store_offline_message(&crate::relay::handlers::offline_record(&item))
+            .await
+            .unwrap();
+        if seq <= 1000 {
+            assert_eq!(stored, crate::db::StoreOfflineOutcome::Stored);
+            expected.push(item.message_id);
+        } else {
+            assert_eq!(stored, crate::db::StoreOfflineOutcome::QuotaExceeded);
+        }
+    }
+    let mut socket = server.connect(&bob).await;
+    for id in &expected {
+        assert!(
+            matches!(receive(&mut socket).await, ServerMessage::MessageV2 { envelope, .. } if &envelope.message_id == id)
+        );
+        send(
+            &mut socket,
+            ClientMessage::AckV2 {
+                message_id: id.clone(),
+                outcome: Default::default(),
+            },
+        )
+        .await;
+    }
+    // A query is a barrier after all preceding ACKs on this socket.
+    send(
+        &mut socket,
+        ClientMessage::DeliveryQuery {
+            message_ids: vec![],
+        },
+    )
+    .await;
+    assert!(
+        matches!(receive(&mut socket).await, ServerMessage::DeliveryUpdate { updates } if updates.is_empty())
+    );
+    assert!(server
+        .db
+        .drain_offline_messages(&bob.device_id)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
 async fn beta_device_identity_cannot_be_replaced_or_rotated() {
     let server = TestServer::start().await;
     let alice = server.register().await;
@@ -283,6 +419,7 @@ async fn online_delivery_survives_disconnect_until_authenticated_recipient_ack()
         &mut reconnected,
         ClientMessage::AckV2 {
             message_id: original.message_id.clone(),
+            outcome: Default::default(),
         },
     )
     .await;
