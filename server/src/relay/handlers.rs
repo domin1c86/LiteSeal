@@ -141,48 +141,62 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                             })
                             .unwrap();
 
-                            if state.send_to(&payload.recipient_device_id, relay_msg) {
-                                updates.push(DeliveryStatus {
-                                    message_id: message_id.clone(),
-                                    recipient_user_id: payload.recipient_user_id,
-                                    recipient_device_id: payload.recipient_device_id,
-                                    status: "delivered".to_string(),
-                                });
-                            } else {
-                                let stored = state
-                                    .db
-                                    .store_offline_message(&crate::db::OfflineMessageRecord {
-                                        message_id: message_id.clone(),
-                                        conversation_id: conversation_id.clone(),
-                                        from_user_id: from.clone(),
-                                        sender_device_id: sender_device_id.clone(),
-                                        sender_seq,
-                                        prev_hash: prev_hash.clone(),
-                                        recipient_device_id: payload.recipient_device_id.clone(),
-                                        ciphertext: payload.ciphertext,
-                                        signature: payload.signature,
-                                        timestamp,
-                                    })
-                                    .await;
-                                if stored.is_err() {
-                                    tracing::error!("Failed to persist an offline message");
-                                    let _ = tx.send(serde_json::to_string(&ServerMessage::Error {
-                                        code: "storage_failed".into(),
-                                        message: "服务器未能保存离线消息，请稍后重试；部分设备可能已收到消息".into(),
-                                    }).unwrap());
+                            let valid_device = state
+                                .db
+                                .get_user_device(
+                                    &payload.recipient_user_id,
+                                    &payload.recipient_device_id,
+                                )
+                                .await;
+                            let stored = match valid_device {
+                                Ok(Some(device)) if !device.revoked => {
+                                    state
+                                        .db
+                                        .store_offline_message(&crate::db::OfflineMessageRecord {
+                                            message_id: message_id.clone(),
+                                            conversation_id: conversation_id.clone(),
+                                            from_user_id: from.clone(),
+                                            sender_device_id: sender_device_id.clone(),
+                                            sender_seq,
+                                            prev_hash: prev_hash.clone(),
+                                            recipient_device_id: payload
+                                                .recipient_device_id
+                                                .clone(),
+                                            ciphertext: payload.ciphertext,
+                                            signature: payload.signature,
+                                            timestamp,
+                                        })
+                                        .await
                                 }
-                                updates.push(DeliveryStatus {
-                                    message_id: message_id.clone(),
-                                    recipient_user_id: payload.recipient_user_id,
-                                    recipient_device_id: payload.recipient_device_id,
-                                    status: if stored.is_ok() {
-                                        "stored_offline"
+                                _ => Err(sqlx::Error::Protocol(
+                                    "Recipient device is unavailable".into(),
+                                )),
+                            };
+                            let status = match stored {
+                                Ok(true) => "received",
+                                Ok(false) => {
+                                    if state.send_to(&payload.recipient_device_id, relay_msg) {
+                                        "queued"
                                     } else {
-                                        "failed"
+                                        "stored_offline"
                                     }
-                                    .to_string(),
-                                });
-                            }
+                                }
+                                Err(_) => {
+                                    tracing::error!(
+                                        "Cannot persist relay message or validate recipient device"
+                                    );
+                                    let _ = tx.send(serde_json::to_string(&ServerMessage::Error {
+                                        code: "storage_failed".into(), message: "消息未能保存或收件设备不可用，请重试原消息；部分设备可能已收到".into()
+                                    }).unwrap());
+                                    "failed"
+                                }
+                            };
+                            updates.push(DeliveryStatus {
+                                message_id: message_id.clone(),
+                                recipient_user_id: payload.recipient_user_id,
+                                recipient_device_id: payload.recipient_device_id,
+                                status: status.into(),
+                            });
                         }
                         let update =
                             serde_json::to_string(&ServerMessage::DeliveryUpdate { updates })
@@ -193,11 +207,36 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                         message_id,
                         recipient_device_id,
                     }) => {
-                        let _ = state
+                        if authenticated_device.as_deref() != Some(recipient_device_id.as_str()) {
+                            continue;
+                        }
+                        match state
                             .db
                             .ack_message(&message_id, &recipient_device_id)
-                            .await;
-                        tracing::debug!("Received ack for message: {}", message_id);
+                            .await
+                        {
+                            Ok(Some(sender_device)) => {
+                                let update = ServerMessage::DeliveryUpdate {
+                                    updates: vec![DeliveryStatus {
+                                        message_id,
+                                        recipient_user_id: authenticated_user
+                                            .clone()
+                                            .unwrap_or_default(),
+                                        recipient_device_id,
+                                        status: "received".into(),
+                                    }],
+                                };
+                                state.send_to(
+                                    &sender_device,
+                                    serde_json::to_string(&update).unwrap(),
+                                );
+                            }
+                            Ok(None) => {}
+                            Err(_) => {
+                                // Closing the stream forces replay of unacknowledged durable rows.
+                                break;
+                            }
+                        }
                     }
                     Err(_) => {
                         let resp = serde_json::to_string(&ServerMessage::Error {

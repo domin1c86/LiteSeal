@@ -45,6 +45,10 @@ impl MessageRepository {
                 prev_hash BLOB NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS outgoing_delivery (
+                message_id TEXT NOT NULL, device_id TEXT NOT NULL, status TEXT NOT NULL,
+                PRIMARY KEY(message_id, device_id)
+            );
             CREATE TABLE IF NOT EXISTS outgoing_payloads (
                 message_id TEXT PRIMARY KEY,
                 payloads TEXT NOT NULL
@@ -105,6 +109,47 @@ impl MessageRepository {
         );
 
         Ok(Self { conn })
+    }
+
+    pub fn record_delivery(
+        &self,
+        message_id: &str,
+        device_id: &str,
+        status: &str,
+    ) -> Result<String, DbError> {
+        self.conn.execute(
+            "INSERT INTO outgoing_delivery(message_id, device_id, status) VALUES (?1, ?2, ?3)
+            ON CONFLICT(message_id, device_id) DO UPDATE SET status = CASE
+            WHEN outgoing_delivery.status = 'received' THEN 'received' ELSE excluded.status END",
+            params![message_id, device_id, status],
+        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT status FROM outgoing_delivery WHERE message_id = ?1")?;
+        let statuses = stmt
+            .query_map([message_id], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        let expected = self
+            .outgoing_payloads(message_id)
+            .ok()
+            .and_then(|text| {
+                serde_json::from_str::<Vec<liteseal_shared::protocol::EncryptedPayload>>(&text).ok()
+            })
+            .map_or(statuses.len(), |items| items.len());
+        let received = statuses.iter().filter(|s| s.as_str() == "received").count();
+        let state = if statuses.iter().any(|s| s == "failed") {
+            "failed"
+        } else if received == expected && expected > 0 {
+            "received"
+        } else if received > 0 {
+            "partially_received"
+        } else if statuses.len() < expected || statuses.iter().any(|s| s == "queued") {
+            "queued"
+        } else {
+            "stored_offline"
+        };
+        self.update_message_state(message_id, state)?;
+        Ok(state.into())
     }
 
     pub fn prepare_outgoing(&self, msg: &MessageModel, payloads: &str) -> Result<(), DbError> {

@@ -314,12 +314,13 @@ export default function Chat({ draft, onDraftChange, online, conversationId, use
                 }}
               >
                 <span style={styles.messageText}>{text}</span>
+                {msg.local_state === "integrity_failed" && <span role="alert">消息顺序或完整性链异常，请核对来源</span>}
                 <span style={styles.timestamp}>
                   {new Date(msg.timestamp).toLocaleTimeString([], {
                     hour: "2-digit",
                     minute: "2-digit",
                   })}
-                  {isMine && msg.local_state ? ` · ${msg.local_state}` : ""}
+                  {isMine && msg.local_state ? ` · ${({ pending: "等待确认", queued: "服务器已保存，等待设备确认", stored_offline: "服务器已保存，设备离线", received: "全部目标设备已保存（非已读）", partially_received: "部分设备已保存", delivered: "旧版投递状态（非已读）", failed: "投递失败，可重试" } as Record<string, string>)[msg.local_state] ?? msg.local_state}` : ""}
                   {isMine && ["failed", "pending"].includes(msg.local_state ?? "") && (
                     <button disabled={!online || sending} onClick={async () => {
                       setSending(true);

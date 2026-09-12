@@ -254,9 +254,6 @@ impl LitesealClient {
                     recipient_device_id,
                     timestamp,
                 } => {
-                    if let Some(ws) = self.ws_client.lock().await.as_ref() {
-                        let _ = ws.send_ack(message_id.clone()).await;
-                    }
                     let mut incoming = IncomingMessage {
                         message_id,
                         from,
@@ -270,22 +267,43 @@ impl LitesealClient {
                         timestamp,
                         local_state: "received".to_string(),
                     };
-                    if let Ok(db) = self.db.lock() {
+                    let fresh = {
+                        let db = self.db.lock().map_err(|e| e.to_string())?;
                         let mut model = build_incoming_message_model(incoming.clone());
-                        let previous = db
-                            .get_latest_message_for_sender(
-                                &model.conversation_id,
-                                &model.sender_device_id,
-                            )
-                            .ok()
-                            .flatten();
-                        if MessageIntegrityStore::validate_next(previous.as_ref(), &model)
-                            != IntegrityResult::Valid
+                        if let Some(existing) =
+                            db.get_message(&model.id).map_err(|e| e.to_string())?
                         {
-                            model.local_state = "integrity_failed".to_string();
-                            incoming.local_state = "integrity_failed".to_string();
+                            if existing.conversation_id != model.conversation_id
+                                || existing.sender_device_id != model.sender_device_id
+                                || existing.ciphertext != model.ciphertext
+                                || existing.signature != model.signature
+                            {
+                                return Err("Duplicate message id has conflicting content".into());
+                            }
+                            false
+                        } else {
+                            let previous = db
+                                .get_latest_message_for_sender(
+                                    &model.conversation_id,
+                                    &model.sender_device_id,
+                                )
+                                .map_err(|e| e.to_string())?;
+                            if MessageIntegrityStore::validate_next(previous.as_ref(), &model)
+                                != IntegrityResult::Valid
+                            {
+                                model.local_state = "integrity_failed".into();
+                                incoming.local_state = "integrity_failed".into();
+                            }
+                            db.insert_message(&model).map_err(|e| e.to_string())?;
+                            true
                         }
-                        let _ = db.insert_message(&model);
+                    };
+                    // Acknowledge only after durable local storage. Replay gets an ACK again.
+                    if let Some(ws) = self.ws_client.lock().await.as_ref() {
+                        ws.send_ack(incoming.message_id.clone()).await?;
+                    }
+                    if !fresh {
+                        continue;
                     }
                     messages.push(incoming);
                 }
@@ -303,13 +321,19 @@ impl LitesealClient {
                 }
                 ServerMessage::DeliveryUpdate { updates } => {
                     for update in updates {
-                        if let Ok(db) = self.db.lock() {
-                            let _ = db.update_message_state(&update.message_id, &update.status);
-                        }
+                        let status = {
+                            let db = self.db.lock().map_err(|e| e.to_string())?;
+                            db.record_delivery(
+                                &update.message_id,
+                                &update.recipient_device_id,
+                                &update.status,
+                            )
+                            .map_err(|e| e.to_string())?
+                        };
                         events.push(RelayEvent::DeliveryUpdate {
                             message_id: update.message_id,
                             recipient_device_id: update.recipient_device_id,
-                            status: update.status,
+                            status,
                         });
                     }
                 }

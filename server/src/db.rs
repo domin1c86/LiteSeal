@@ -323,13 +323,21 @@ impl Db {
     pub async fn store_offline_message(
         &self,
         msg: &OfflineMessageRecord,
-    ) -> Result<(), sqlx::Error> {
-        sqlx::query(
+    ) -> Result<bool, sqlx::Error> {
+        let row = sqlx::query(
             "INSERT INTO offline_messages
              (id, message_id, conversation_id, from_user_id, sender_device_id, sender_seq, prev_hash,
               recipient_device_id, ciphertext, signature, timestamp, delivered, acked, created_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, false, false, now())
-             ON CONFLICT (message_id, recipient_device_id) DO NOTHING",
+             ON CONFLICT (message_id, recipient_device_id) DO UPDATE SET id = offline_messages.id
+             WHERE offline_messages.from_user_id = excluded.from_user_id
+               AND offline_messages.sender_device_id = excluded.sender_device_id
+               AND offline_messages.conversation_id = excluded.conversation_id
+               AND offline_messages.sender_seq = excluded.sender_seq
+               AND offline_messages.prev_hash = excluded.prev_hash
+               AND offline_messages.ciphertext = excluded.ciphertext
+               AND offline_messages.signature = excluded.signature
+             RETURNING acked",
         )
         .bind(uuid::Uuid::new_v4().to_string())
         .bind(&msg.message_id)
@@ -342,20 +350,21 @@ impl Db {
         .bind(&msg.ciphertext)
         .bind(&msg.signature)
         .bind(msg.timestamp)
-        .execute(&self.pool)
+        .fetch_optional(&self.pool)
         .await?;
-        Ok(())
+        row.map(|row| row.get("acked"))
+            .ok_or_else(|| sqlx::Error::Protocol("Message id conflict".into()))
     }
 
     pub async fn drain_offline_messages(
         &self,
         device_id: &str,
     ) -> Result<Vec<OfflineMessageRecord>, sqlx::Error> {
-        // Opportunistic queue hygiene: acked rows are done, unacked rows
-        // older than 30 days are considered abandoned.
+        // Keep unacknowledged messages until explicit receipt; never silently
+        // expire messages just because a device stayed offline.
         sqlx::query(
             "DELETE FROM offline_messages
-             WHERE acked = true OR created_at < now() - interval '30 days'",
+             WHERE acked = true AND created_at < now() - interval '30 days'",
         )
         .execute(&self.pool)
         .await?;
@@ -365,7 +374,7 @@ impl Db {
                     prev_hash, recipient_device_id, ciphertext, signature, timestamp
              FROM offline_messages
              WHERE recipient_device_id = $1 AND acked = false
-             ORDER BY created_at ASC",
+             ORDER BY conversation_id, sender_device_id, sender_seq, created_at ASC",
         )
         .bind(device_id)
         .fetch_all(&self.pool)
@@ -391,16 +400,16 @@ impl Db {
         &self,
         message_id: &str,
         recipient_device_id: &str,
-    ) -> Result<(), sqlx::Error> {
-        sqlx::query(
+    ) -> Result<Option<String>, sqlx::Error> {
+        let row = sqlx::query(
             "UPDATE offline_messages SET delivered = true, acked = true
-             WHERE message_id = $1 AND recipient_device_id = $2",
+            WHERE message_id = $1 AND recipient_device_id = $2 RETURNING sender_device_id",
         )
         .bind(message_id)
         .bind(recipient_device_id)
-        .execute(&self.pool)
+        .fetch_optional(&self.pool)
         .await?;
-        Ok(())
+        Ok(row.map(|row| row.get("sender_device_id")))
     }
 
     pub async fn upsert_trusted_contact(
