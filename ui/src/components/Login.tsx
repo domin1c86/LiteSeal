@@ -17,7 +17,7 @@ export default function Login({ onLogin }: LoginProps) {
   const [serverUrl, setServerUrl] = useState("http://localhost:3000");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { register, login, connectRelay, generateKeypair, saveKeypair, loadKeypair } = useDesktop();
+  const { register, login, generateKeypair, saveKeypair, loadKeypair } = useDesktop();
 
   const registering = mode === "register";
   const validUrl = isServerUrl(serverUrl);
@@ -104,7 +104,6 @@ export default function Login({ onLogin }: LoginProps) {
 
       const token = result.access_token ?? result.token;
       const deviceId = result.device_id ?? "";
-      await connectRelay(serverUrl, result.user_id, token, deviceId);
       await saveKeypair({
         user_id: result.user_id,
         token,

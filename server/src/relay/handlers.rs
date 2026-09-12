@@ -44,6 +44,16 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                         token,
                         device_id,
                     }) => {
+                        if authenticated_device.is_some() {
+                            let _ = tx.send(
+                                serde_json::to_string(&ServerMessage::Error {
+                                    code: "already_authenticated".into(),
+                                    message: "Connection is already authenticated".into(),
+                                })
+                                .unwrap(),
+                            );
+                            continue;
+                        }
                         if let Some(user_id) = state.validate_auth(&token, &device_id).await {
                             authenticated_user = Some(user_id.clone());
                             authenticated_device = Some(device_id.clone());
@@ -205,7 +215,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     }
 
     if let Some(device_id) = &authenticated_device {
-        state.unregister(device_id);
+        state.unregister_connection(device_id, &tx);
         tracing::info!("Device disconnected: {}", device_id);
     }
 

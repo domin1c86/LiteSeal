@@ -6,6 +6,7 @@ import type { RelayBatch } from "../App";
 import type { Message, IncomingMessage, Contact, RelayEvent } from "../types";
 
 interface ChatProps {
+  online: boolean;
   conversationId: string | null;
   userId: string;
   deviceId: string;
@@ -18,7 +19,7 @@ interface ChatProps {
   onContactsChanged: () => void;
 }
 
-export default function Chat({ conversationId, userId, deviceId, serverUrl, secretKey, signingKey, contacts, relayBatch, onContactsChanged }: ChatProps) {
+export default function Chat({ online, conversationId, userId, deviceId, serverUrl, secretKey, signingKey, contacts, relayBatch, onContactsChanged }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -170,7 +171,7 @@ export default function Chat({ conversationId, userId, deviceId, serverUrl, secr
 
   async function handleSend(e: React.FormEvent) {
     e.preventDefault();
-    if (!input.trim() || !conversationId) return;
+    if (!online || sending || !input.trim() || !conversationId) return;
 
     const text = input.trim();
     setInput("");
@@ -332,7 +333,7 @@ export default function Chat({ conversationId, userId, deviceId, serverUrl, secr
         <button
           className="composer-send"
           type="submit"
-          disabled={sending || !input.trim()}
+          disabled={!online || sending || !input.trim()}
           style={styles.sendBtn}
         >
           {sending ? "Sending..." : "Send"}

@@ -35,6 +35,7 @@ pub struct StorageStatsResult {
 
 pub struct LitesealClient {
     pub db: Mutex<MessageRepository>,
+    connection_gate: AsyncMutex<()>,
     pub ws_client: AsyncMutex<Option<WebSocketClient>>,
     pub msg_receiver: AsyncMutex<Option<MessageReceiver>>,
 }
@@ -44,6 +45,7 @@ impl LitesealClient {
         let db = MessageRepository::new(db_path).map_err(|e| e.to_string())?;
         Ok(Self {
             db: Mutex::new(db),
+            connection_gate: AsyncMutex::new(()),
             ws_client: AsyncMutex::new(None),
             msg_receiver: AsyncMutex::new(None),
         })
@@ -58,6 +60,7 @@ impl LitesealClient {
         token: String,
         device_id: String,
     ) -> Result<(), String> {
+        let _gate = self.connection_gate.lock().await;
         if device_id.trim().is_empty() {
             return Err("Device id is required to connect".to_string());
         }
@@ -69,23 +72,26 @@ impl LitesealClient {
 
         let (client, rx) = WebSocketClient::connect(&ws_url, user_id, token, device_id).await?;
 
-        let mut ws_guard = self.ws_client.lock().await;
-        *ws_guard = Some(client);
-
         let mut recv_guard = self.msg_receiver.lock().await;
+        let mut ws_guard = self.ws_client.lock().await;
+        if let Some(old) = ws_guard.as_mut() {
+            old.disconnect().await;
+        }
+        *ws_guard = Some(client);
         *recv_guard = Some(rx);
 
         Ok(())
     }
 
     pub async fn disconnect(&self) {
+        let _gate = self.connection_gate.lock().await;
+        let mut recv_guard = self.msg_receiver.lock().await;
         let mut ws_guard = self.ws_client.lock().await;
         if let Some(client) = ws_guard.as_mut() {
             client.disconnect().await;
         }
         *ws_guard = None;
 
-        let mut recv_guard = self.msg_receiver.lock().await;
         *recv_guard = None;
     }
 
@@ -171,6 +177,9 @@ impl LitesealClient {
     pub async fn poll_messages(&self) -> Result<PollMessagesResult, String> {
         let mut recv_guard = self.msg_receiver.lock().await;
         let rx = recv_guard.as_mut().ok_or("Not connected to relay server")?;
+        if rx.is_closed() && rx.is_empty() {
+            return Err("Relay disconnected".into());
+        }
 
         let mut messages = Vec::new();
         let mut events = Vec::new();

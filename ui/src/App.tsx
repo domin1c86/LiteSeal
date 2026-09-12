@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import Login from "./components/Login";
 import Chat from "./components/Chat";
 import ContactList from "./components/ContactList";
@@ -39,26 +39,78 @@ export default function App() {
   const [showStorage, setShowStorage] = useState(false);
   const { getContacts, loadKeypair, saveKeypair, refreshSession, connectRelay, clearKeypair, disconnect, pollMessages } = useDesktop();
   const [loading, setLoading] = useState(true);
+  const [connection, setConnection] = useState("connecting");
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [startupError, setStartupError] = useState<string | null>(null);
+  const [retry, setRetry] = useState(0);
+  const connectionWork = useRef<Promise<void>>(Promise.resolve());
   const [relayBatch, setRelayBatch] = useState<RelayBatch | null>(null);
 
-  // Poll at the app level so incoming messages are acked and persisted even
-  // when no conversation is open; Chat consumes batches for its conversation.
+  // One serialized pump owns reconnect and polling; renders never overlap requests.
   useEffect(() => {
     if (!session) return;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+    let current = session;
+    let failures = 0;
     let seq = 0;
-    const interval = setInterval(async () => {
+    let needsConnect = true;
+    const schedule = (delay: number) => { if (active) timer = setTimeout(tick, delay); };
+    async function pump() {
+      if (!active) return;
       try {
-        const result = await pollMessages();
-        if (result.messages.length > 0 || result.events.length > 0) {
-          seq += 1;
-          setRelayBatch({ seq, messages: result.messages, events: result.events });
+        if (needsConnect) {
+          setConnection(failures ? "reconnecting" : "connecting");
+          try {
+            await connectRelay(current.serverUrl, current.user_id, current.token, current.deviceId);
+          } catch (error) {
+            if (!active) return;
+            if (!String(error).includes("Authentication failed")) throw error;
+            if (!current.refreshToken) { setConnection("auth_required"); setConnectionError("登录已失效，请重新登录；本地历史仍可查看。"); return; }
+            let refreshed: RegisterResult;
+            try { refreshed = await refreshSession(current.serverUrl, current.refreshToken); }
+            catch (refreshError) {
+              if (!active) return;
+              if (/401|403/.test(String(refreshError))) {
+                setConnection("auth_required"); setConnectionError("登录已失效或设备已撤销，请重新登录。"); return;
+              }
+              throw refreshError;
+            }
+            if (!active) return;
+            current = { ...current, token: refreshed.access_token ?? refreshed.token,
+              refreshToken: refreshed.refresh_token ?? current.refreshToken };
+            await saveKeypair({ user_id: current.user_id, token: current.token,
+              refresh_token: current.refreshToken, device_id: current.deviceId, server_url: current.serverUrl,
+              public_key: current.publicKey, secret_key: current.secretKey,
+              ed25519_pk: current.ed25519Pk, ed25519_sk: current.ed25519Sk });
+            if (!active) return;
+            setSession(previous => previous?.user_id === current.user_id ? current : previous);
+            await connectRelay(current.serverUrl, current.user_id, current.token, current.deviceId);
+          }
+          if (!active) return;
+          needsConnect = false;
         }
-      } catch {
-        // not connected; ignore
+        const result = await pollMessages();
+        if (!active) return;
+        setConnection("online"); setConnectionError(null); failures = 0;
+        if (result.messages.length || result.events.length) setRelayBatch({ seq: ++seq, ...result });
+        schedule(1000);
+      } catch (error) {
+        if (!active) return;
+        needsConnect = true;
+        failures += 1;
+        const delay = Math.min(30000, 1000 * 2 ** Math.min(failures - 1, 5));
+        setConnection("offline");
+        setConnectionError(`连接暂不可用，${delay / 1000} 秒后重试。${String(error)}`);
+        schedule(delay);
       }
-    }, 2000);
-    return () => clearInterval(interval);
-  }, [session]);
+    }
+    function tick() {
+      connectionWork.current = connectionWork.current.catch(() => {}).then(pump);
+    }
+    tick();
+    return () => { active = false; clearTimeout(timer); };
+  }, [session?.user_id, session?.deviceId, session?.serverUrl, retry]);
 
   function handleLogin(result: RegisterResult & { serverUrl: string; publicKey: number[]; secretKey: number[]; ed25519Pk: number[]; ed25519Sk: number[] }) {
     setSession({
@@ -93,34 +145,17 @@ export default function App() {
           // Legacy keystore without a device binding cannot reconnect; force login.
           return;
         }
-        try {
-          await connectRelay(serverUrl, saved.user_id, saved.token, saved.device_id);
-          setSession(base);
-        } catch {
-          // Access token likely expired (30 min TTL): rotate via refresh token.
-          try {
-            const r = await refreshSession(serverUrl, saved.refresh_token);
-            const token = r.access_token ?? r.token;
-            const refreshed = {
-              ...saved,
-              token,
-              refresh_token: r.refresh_token ?? saved.refresh_token,
-            };
-            await saveKeypair(refreshed);
-            await connectRelay(serverUrl, r.user_id, token, saved.device_id);
-            setSession({ ...base, token, refreshToken: refreshed.refresh_token });
-          } catch {
-            // Server unreachable or refresh token stale: offline session so
-            // local history stays readable; sending will surface errors.
-            setSession(base);
-          }
-        }
+        setSession(base);
       })
-      .catch(() => {})
+      .catch((error) => {
+        if (!String(error).includes("No saved keypair")) setStartupError(`无法读取保存的会话：${String(error)}`);
+      })
       .finally(() => setLoading(false));
   }, []);
 
   async function handleLogout() {
+    setSession(null);
+    await connectionWork.current.catch(() => {});
     try {
       await disconnect();
     } catch {}
@@ -163,13 +198,21 @@ export default function App() {
   }
 
   if (!session) {
-    return <Login onLogin={handleLogin} />;
+    return <><div role="alert">{startupError}</div><Login onLogin={handleLogin} /></>;
   }
 
   const detailContact = contacts.find((c) => c.user_id === selectedContact) ?? null;
 
   return (
-    <div className="app-shell" style={styles.layout}>
+    <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
+      <div role="status" style={{ padding: "6px 12px", background: "var(--surface)", color: "var(--text-muted)", fontSize: 12 }}>
+        {{ online: "已连接", connecting: "正在连接…", reconnecting: "正在重连…", offline: "离线", auth_required: "需要重新登录" }[connection]}
+        {connectionError && <span> · {connectionError}</span>}
+        {connection === "auth_required"
+          ? <button onClick={() => { setSession(null); }}>重新登录</button>
+          : connection !== "online" && <button onClick={() => setRetry(value => value + 1)}>立即重连</button>}
+      </div>
+    <div className="app-shell" style={{ ...styles.layout, flex: 1, minHeight: 0 }}>
       <ContactList
         contacts={contacts}
         activeConversation={sidebarTab === "chats" ? activeConversation : selectedContact}
@@ -199,6 +242,7 @@ export default function App() {
         )
       ) : (
         <Chat
+          online={connection === "online"}
           conversationId={activeConversation}
           userId={session.user_id}
           deviceId={session.deviceId}
@@ -223,6 +267,7 @@ export default function App() {
       {showStorage && (
         <StorageManager onClose={() => setShowStorage(false)} />
       )}
+    </div>
     </div>
   );
 }

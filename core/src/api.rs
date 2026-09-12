@@ -39,7 +39,11 @@ pub async fn register(
     validate_public_key("Signing public key", &ed25519_pk)?;
     let server_url = normalize_server_url(&server_url)?;
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|_| "Cannot initialize HTTP client".to_string())?;
     let url = format!("{}/auth/register", server_url);
 
     let resp = client
@@ -88,7 +92,11 @@ pub async fn login(
     validate_public_key("Signing public key", &ed25519_pk)?;
     let server_url = normalize_server_url(&server_url)?;
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|_| "Cannot initialize HTTP client".to_string())?;
     let url = format!("{}/auth/login", server_url);
     let resp = client
         .post(&url)
@@ -122,7 +130,11 @@ pub async fn refresh_session(
     }
     let server_url = normalize_server_url(&server_url)?;
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|_| "Cannot initialize HTTP client".to_string())?;
     let url = format!("{}/auth/refresh", server_url);
     let resp = client
         .post(&url)
@@ -150,7 +162,11 @@ pub async fn get_user_devices(
     }
 
     let server_url = normalize_server_url(&server_url)?;
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|_| "Cannot initialize HTTP client".to_string())?;
     let url = format!("{}/users/{}/devices", server_url, user_id);
 
     let resp = client
@@ -177,7 +193,11 @@ pub async fn search_users(server_url: String, query: String) -> Result<Vec<Publi
         return Err("Search query cannot be empty".to_string());
     }
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|_| "Cannot initialize HTTP client".to_string())?;
     let server_url = normalize_server_url(&server_url)?;
     let mut url = url::Url::parse(&format!("{}/users/search", server_url))
         .map_err(|e| format!("Invalid server URL: {}", e))?;
@@ -233,7 +253,11 @@ mod tests {
 /// Checks with the configured server; registration always rechecks the code.
 pub async fn validate_invite(server_url: String, invite_code: String) -> Result<bool, String> {
     let server_url = normalize_server_url(&server_url)?;
-    let response = reqwest::Client::new()
+    let response = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|_| "Cannot initialize HTTP client".to_string())?
         .post(format!("{}/auth/invite/validate", server_url))
         .timeout(std::time::Duration::from_secs(5))
         .json(&serde_json::json!({ "invite_code": invite_code.trim() }))

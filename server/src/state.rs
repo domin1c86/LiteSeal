@@ -31,16 +31,18 @@ impl AppState {
         self.connections.insert(user_id, sender);
     }
 
-    pub fn unregister(&self, user_id: &str) {
-        self.connections.remove(user_id);
+    pub fn unregister_connection(&self, device_id: &str, sender: &MessageSender) {
+        self.connections
+            .remove_if(device_id, |_, current| current.same_channel(sender));
     }
 
     pub fn send_to(&self, user_id: &str, message: String) -> bool {
         if let Some(sender) = self.connections.get(user_id) {
-            let sent = sender.send(message).is_ok();
+            let connection = sender.clone();
             drop(sender);
+            let sent = connection.send(message).is_ok();
             if !sent {
-                self.connections.remove(user_id);
+                self.unregister_connection(user_id, &connection);
             }
             sent
         } else {

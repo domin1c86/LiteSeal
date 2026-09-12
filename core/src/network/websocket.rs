@@ -24,8 +24,9 @@ impl WebSocketClient {
         token: String,
         device_id: String,
     ) -> Result<(Self, MessageReceiver), String> {
-        let (ws_stream, _) = connect_async(url)
+        let (ws_stream, _) = timeout(Duration::from_secs(10), connect_async(url))
             .await
+            .map_err(|_| "WebSocket connection timed out".to_string())?
             .map_err(|e| format!("WebSocket connect failed: {}", e))?;
 
         info!("Connected to relay server: {}", url);
@@ -66,26 +67,34 @@ impl WebSocketClient {
 
         let (tx, rx) = mpsc::unbounded_channel::<ServerMessage>();
 
+        let heartbeat_write = write.clone();
         let recv_task = tokio::spawn(async move {
-            while let Some(Ok(msg)) = read.next().await {
-                match msg {
-                    Message::Text(text) => match serde_json::from_str::<ServerMessage>(&text) {
-                        Ok(server_msg) => {
-                            if tx.send(server_msg).is_err() {
-                                break;
-                            }
-                        }
-                        Err(e) => {
-                            error!("Failed to parse server message: {}", e);
-                        }
-                    },
-                    Message::Close(_) => {
-                        info!("WebSocket closed by server");
-                        break;
+            let mut heartbeat = tokio::time::interval(Duration::from_secs(15));
+            let mut last_received = tokio::time::Instant::now();
+            loop {
+                tokio::select! {
+                    _ = heartbeat.tick() => {
+                        if last_received.elapsed() > Duration::from_secs(45) { break; }
+                        let ping = timeout(Duration::from_secs(5), async {
+                            heartbeat_write.lock().await.send(Message::Ping(Vec::new())).await
+                        }).await;
+                        if !matches!(ping, Ok(Ok(()))) { break; }
                     }
-                    _ => {}
+                    message = read.next() => {
+                        let Some(Ok(message)) = message else { break };
+                        last_received = tokio::time::Instant::now();
+                        match message {
+                            Message::Text(text) => match serde_json::from_str::<ServerMessage>(&text) {
+                                Ok(message) => { if tx.send(message).is_err() { break; } }
+                                Err(_) => { error!("Invalid relay message"); break; }
+                            },
+                            Message::Close(_) => break,
+                            _ => {}
+                        }
+                    }
                 }
             }
+            // Dropping tx lets the foreground poll detect disconnected sockets.
         });
 
         Ok((
@@ -148,7 +157,10 @@ impl WebSocketClient {
     }
 
     pub async fn disconnect(&mut self) {
-        let _ = self.write.lock().await.send(Message::Close(None)).await;
+        let _ = timeout(Duration::from_secs(2), async {
+            self.write.lock().await.send(Message::Close(None)).await
+        })
+        .await;
         if let Some(task) = self.recv_task.take() {
             task.abort();
         }
@@ -182,5 +194,13 @@ mod tests {
             to: "user-2".to_string(),
         })
         .is_err());
+    }
+}
+
+impl Drop for WebSocketClient {
+    fn drop(&mut self) {
+        if let Some(task) = self.recv_task.take() {
+            task.abort();
+        }
     }
 }
