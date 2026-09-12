@@ -64,19 +64,19 @@ export default function Login({ onLogin }: LoginProps) {
       // public key for us; fresh keys only for register or first login here.
       let keys: { publicKey: number[]; secretKey: number[]; ed25519Pk: number[]; ed25519Sk: number[] } | null = null;
       let savedDeviceId: string | undefined;
-      if (mode === "login") {
-        try {
-          const saved = await loadKeypair();
-          keys = {
-            publicKey: saved.public_key,
-            secretKey: saved.secret_key,
-            ed25519Pk: saved.ed25519_pk,
-            ed25519Sk: saved.ed25519_sk,
-          };
-          savedDeviceId = saved.device_id || undefined;
-        } catch {
-          // no keystore yet
+      let savedIdentity: Awaited<ReturnType<typeof loadKeypair>> | null = null;
+      try { savedIdentity = await loadKeypair(); }
+      catch (error) {
+        if (!String(error).includes("No saved keypair")) throw new Error(`无法读取原有密钥，请先恢复密钥文件，避免覆盖历史：${String(error)}`);
+      }
+      if (savedIdentity) {
+        if (mode === "register") throw new Error("本机已有聊天身份，请登录原账号；注册其他账号请使用独立 Windows 用户环境。");
+        if ((savedIdentity.server_url || "http://localhost:3000").replace(/\/+$/, "") !== serverUrl.trim().replace(/\/+$/, "")) {
+          throw new Error("当前密钥属于另一服务器，请使用原服务器地址登录。");
         }
+        keys = { publicKey: savedIdentity.public_key, secretKey: savedIdentity.secret_key,
+          ed25519Pk: savedIdentity.ed25519_pk, ed25519Sk: savedIdentity.ed25519_sk };
+        savedDeviceId = savedIdentity.device_id || undefined;
       }
       if (!keys) {
         const [publicKey, secretKey, ed25519Pk, ed25519Sk] = await generateKeypair();
@@ -90,18 +90,14 @@ export default function Login({ onLogin }: LoginProps) {
         try {
           result = await login(username.trim(), password, serverUrl, keys.publicKey, keys.ed25519Pk, savedDeviceId);
         } catch (err) {
-          // Saved device belongs to another account or was revoked: retry
-          // once with a fresh keypair and a new device registration.
           if (savedDeviceId && String(err).includes("403")) {
-            const [publicKey, secretKey, ed25519Pk, ed25519Sk] = await generateKeypair();
-            keys = { publicKey, secretKey, ed25519Pk, ed25519Sk };
-            result = await login(username.trim(), password, serverUrl, keys.publicKey, keys.ed25519Pk);
-          } else {
-            throw err;
+            throw new Error("原设备已被撤销或账号不匹配。已保留原密钥，请确认账号或恢复设备；不会自动覆盖旧身份。");
           }
+          throw err;
         }
       }
 
+      if (savedIdentity && result.user_id !== savedIdentity.user_id) throw new Error("账号与本机历史不匹配，原密钥未修改。");
       const token = result.access_token ?? result.token;
       const deviceId = result.device_id ?? "";
       await saveKeypair({
@@ -138,6 +134,7 @@ export default function Login({ onLogin }: LoginProps) {
           liteseal<span style={styles.titleCursor}>▌</span>
         </h1>
         <p style={styles.subtitle}>end-to-end encrypted messaging</p>
+        <p style={{ color: "var(--text-muted)", fontSize: 12 }}>普通退出保留本机密钥。同账号登录可继续读取历史；丢失密钥后，仅凭账号密码无法恢复旧消息。</p>
         <div style={styles.segmented}>
           <button
             type="button"

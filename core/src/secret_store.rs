@@ -106,7 +106,25 @@ impl SecretStore for WindowsDpapiSecretStore {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         let encrypted = Self::protect(bytes)?;
-        std::fs::write(&self.path, encrypted).map_err(|e| e.to_string())
+        use std::io::Write;
+        let temporary = self
+            .path
+            .with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+        let result = (|| -> Result<(), std::io::Error> {
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary)?;
+            file.write_all(&encrypted)?;
+            file.sync_all()?;
+            drop(file);
+            std::fs::rename(&temporary, &self.path)?;
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_file(&temporary);
+        }
+        result.map_err(|e| e.to_string())
     }
 
     fn load(&self) -> Result<Vec<u8>, String> {

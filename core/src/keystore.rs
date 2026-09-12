@@ -72,9 +72,6 @@ fn validate_keystore_data(data: &KeystoreData) -> Result<(), String> {
     if data.user_id.trim().is_empty() {
         return Err("Missing user id".to_string());
     }
-    if data.token.trim().is_empty() {
-        return Err("Missing auth token".to_string());
-    }
     if data.public_key.len() != 32 {
         return Err("Invalid public key length".to_string());
     }
@@ -136,4 +133,12 @@ mod tests {
         assert!(data.refresh_token.is_empty());
         assert!(validate_keystore_data(&data).is_ok());
     }
+}
+
+/// Sign out without destroying the identity needed to decrypt local history.
+pub fn clear_session() -> Result<(), String> {
+    let mut data = load_keypair()?;
+    data.token.clear();
+    data.refresh_token.clear();
+    save_keypair(data)
 }

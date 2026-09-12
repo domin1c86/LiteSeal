@@ -230,6 +230,7 @@ export function useDesktop() {
   }
 
   return {
+    signOut: () => invoke("sign_out", {}),
     retryMessage: (messageId: string) => invoke("retry_message", { messageId }),
     register,
     login,

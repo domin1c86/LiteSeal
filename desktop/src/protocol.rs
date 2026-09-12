@@ -84,6 +84,8 @@ pub enum Command {
     },
     #[serde(rename = "generate_keypair_cmd")]
     GenerateKeypairCmd {},
+    #[serde(rename = "sign_out")]
+    SignOut {},
     #[serde(rename = "save_keypair")]
     SaveKeypair {
         #[serde(rename = "data")]
@@ -224,6 +226,7 @@ impl Response {
 
 pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, String> {
     let result = match command {
+        Command::SignOut {} => serde_json::to_value(commands::keystore::sign_out().await?),
         Command::RetryMessage { message_id } => {
             serde_json::to_value(commands::chat::retry_message(message_id, state).await?)
         }

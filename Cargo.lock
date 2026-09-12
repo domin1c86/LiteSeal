@@ -1199,6 +1199,7 @@ dependencies = [
  "futures-util",
  "liteseal-core",
  "liteseal-shared",
+ "reqwest",
  "serde",
  "serde_json",
  "tokio",

@@ -38,7 +38,7 @@ export default function App() {
   const [selectedContact, setSelectedContact] = useState<string | null>(null);
   const [showAddContact, setShowAddContact] = useState(false);
   const [showStorage, setShowStorage] = useState(false);
-  const { getContacts, loadKeypair, saveKeypair, refreshSession, connectRelay, clearKeypair, disconnect, pollMessages } = useDesktop();
+  const { getContacts, loadKeypair, saveKeypair, refreshSession, connectRelay, signOut, disconnect, pollMessages } = useDesktop();
   const [loading, setLoading] = useState(true);
   const [connection, setConnection] = useState("connecting");
   const [connectionError, setConnectionError] = useState<string | null>(null);
@@ -155,20 +155,23 @@ export default function App() {
   }, []);
 
   async function handleLogout() {
+    setLoading(true);
     setSession(null);
     await connectionWork.current.catch(() => {});
     try {
       await disconnect();
     } catch {}
     try {
-      await clearKeypair();
-    } catch {}
+      const warning = await signOut();
+      setStartupError(warning);
+    } catch (error) { setStartupError(`退出处理未完成：${String(error)}。请勿删除密钥文件。`); }
     setSession(null);
     setContacts([]);
     setDrafts({});
     setActiveConversation(null);
     setSelectedContact(null);
     setSidebarTab("chats");
+    setLoading(false);
   }
 
   function refreshContacts() {

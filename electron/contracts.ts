@@ -3,6 +3,7 @@ import type { RegisterResult, ConnectResult, SendMessageResult, PollMessagesResu
 } from "../ui/src/types";
 
 export interface CommandMap {
+  sign_out: { args: {}; result: string | null };
   retry_message: { args: { messageId: string }; result: SendMessageResult };
   send_message: { args: { messageId?: string; senderId: string; ciphertext: number[]; signature: number[]; senderDeviceId: string; payloads: EncryptedPayload[] }; result: SendMessageResult };
   poll_messages: { args: {  }; result: PollMessagesResult };
@@ -36,6 +37,7 @@ export type DesktopApi = {
   [K in CommandName]: (args: CommandMap[K]["args"]) => Promise<CommandMap[K]["result"]>;
 };
 export const commandNames = [
+  "sign_out",
   "send_message",
   "retry_message",
   "poll_messages",
