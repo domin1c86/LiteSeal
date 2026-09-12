@@ -139,7 +139,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                                     status: "delivered".to_string(),
                                 });
                             } else {
-                                let _ = state
+                                let stored = state
                                     .db
                                     .store_offline_message(&crate::db::OfflineMessageRecord {
                                         message_id: message_id.clone(),
@@ -154,11 +154,23 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                                         timestamp,
                                     })
                                     .await;
+                                if stored.is_err() {
+                                    tracing::error!("Failed to persist an offline message");
+                                    let _ = tx.send(serde_json::to_string(&ServerMessage::Error {
+                                        code: "storage_failed".into(),
+                                        message: "服务器未能保存离线消息，请稍后重试；部分设备可能已收到消息".into(),
+                                    }).unwrap());
+                                }
                                 updates.push(DeliveryStatus {
                                     message_id: message_id.clone(),
                                     recipient_user_id: payload.recipient_user_id,
                                     recipient_device_id: payload.recipient_device_id,
-                                    status: "stored_offline".to_string(),
+                                    status: if stored.is_ok() {
+                                        "stored_offline"
+                                    } else {
+                                        "failed"
+                                    }
+                                    .to_string(),
                                 });
                             }
                         }
