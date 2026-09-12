@@ -19,6 +19,8 @@ pub struct Request {
 pub enum Command {
     #[serde(rename = "send_message")]
     SendMessage {
+        #[serde(rename = "messageId", default)]
+        message_id: Option<String>,
         #[serde(rename = "senderId")]
         sender_id: String,
         #[serde(rename = "ciphertext")]
@@ -29,6 +31,11 @@ pub enum Command {
         sender_device_id: String,
         #[serde(rename = "payloads")]
         payloads: Vec<EncryptedPayload>,
+    },
+    #[serde(rename = "retry_message")]
+    RetryMessage {
+        #[serde(rename = "messageId")]
+        message_id: String,
     },
     #[serde(rename = "poll_messages")]
     PollMessages {},
@@ -217,7 +224,11 @@ impl Response {
 
 pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, String> {
     let result = match command {
+        Command::RetryMessage { message_id } => {
+            serde_json::to_value(commands::chat::retry_message(message_id, state).await?)
+        }
         Command::SendMessage {
+            message_id,
             sender_id,
             ciphertext,
             signature,
@@ -230,6 +241,7 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
                 signature,
                 sender_device_id,
                 payloads,
+                message_id,
                 state,
             )
             .await?,

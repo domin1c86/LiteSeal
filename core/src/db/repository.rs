@@ -45,6 +45,11 @@ impl MessageRepository {
                 prev_hash BLOB NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS outgoing_payloads (
+                message_id TEXT PRIMARY KEY,
+                payloads TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS attachments (
                 id TEXT PRIMARY KEY,
                 message_id TEXT NOT NULL,
@@ -100,6 +105,25 @@ impl MessageRepository {
         );
 
         Ok(Self { conn })
+    }
+
+    pub fn prepare_outgoing(&self, msg: &MessageModel, payloads: &str) -> Result<(), DbError> {
+        let tx = self.conn.unchecked_transaction()?;
+        self.insert_message(msg)?;
+        tx.execute(
+            "INSERT INTO outgoing_payloads(message_id, payloads) VALUES (?1, ?2)",
+            params![msg.id, payloads],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn outgoing_payloads(&self, message_id: &str) -> Result<String, DbError> {
+        Ok(self.conn.query_row(
+            "SELECT payloads FROM outgoing_payloads WHERE message_id = ?1",
+            [message_id],
+            |row| row.get(0),
+        )?)
     }
 
     // Conversation operations

@@ -6,6 +6,8 @@ import type { RelayBatch } from "../App";
 import type { Message, IncomingMessage, Contact, RelayEvent } from "../types";
 
 interface ChatProps {
+  draft: { text: string; messageId?: string };
+  onDraftChange: (draft: { text: string; messageId?: string }) => void;
   online: boolean;
   conversationId: string | null;
   userId: string;
@@ -19,14 +21,16 @@ interface ChatProps {
   onContactsChanged: () => void;
 }
 
-export default function Chat({ online, conversationId, userId, deviceId, serverUrl, secretKey, signingKey, contacts, relayBatch, onContactsChanged }: ChatProps) {
+export default function Chat({ draft, onDraftChange, online, conversationId, userId, deviceId, serverUrl, secretKey, signingKey, contacts, relayBatch, onContactsChanged }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
-  const [input, setInput] = useState("");
+  const input = draft.text;
+  const alive = useRef(true);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const { sendMessage, getUserDevices, getLocalMessages, encryptMessage, decryptMessage, signMessage, verifyMessage, setContactTrust } = useDesktop();
+  const { retryMessage, sendMessage, getUserDevices, getLocalMessages, encryptMessage, decryptMessage, signMessage, verifyMessage, setContactTrust } = useDesktop();
   const activeContact = contacts.find((c) => c.user_id === conversationId);
   // conversationId prop is the peer's user id; storage/relay use the canonical DM id.
   const storageConversationId = conversationId ? dmConversationId(userId, conversationId) : null;
@@ -174,7 +178,8 @@ export default function Chat({ online, conversationId, userId, deviceId, serverU
     if (!online || sending || !input.trim() || !conversationId) return;
 
     const text = input.trim();
-    setInput("");
+    const messageId = draft.messageId ?? crypto.randomUUID();
+    onDraftChange({ text: input, messageId });
     setSendError(null);
     setSending(true);
 
@@ -211,11 +216,14 @@ export default function Chat({ online, conversationId, userId, deviceId, serverU
         ciphertext,
         signature,
         deviceId,
-        payloads
+        payloads,
+        messageId
       );
 
+      onDraftChange({ text: "" });
+      if (!alive.current) return;
       setMessages((prev) => [
-        ...prev,
+        ...prev.filter(message => message.id !== result.message_id),
         {
           id: result.message_id,
           conversation_id: storageConversationId ?? conversationId,
@@ -312,6 +320,14 @@ export default function Chat({ online, conversationId, userId, deviceId, serverU
                     minute: "2-digit",
                   })}
                   {isMine && msg.local_state ? ` · ${msg.local_state}` : ""}
+                  {isMine && ["failed", "pending"].includes(msg.local_state ?? "") && (
+                    <button disabled={!online || sending} onClick={async () => {
+                      setSending(true);
+                      try { await retryMessage(msg.id); setSendError(null); }
+                      catch (error) { setSendError(String(error)); }
+                      finally { setSending(false); }
+                    }}>重试原消息</button>
+                  )}
                 </span>
               </div>
             </div>
@@ -320,6 +336,9 @@ export default function Chat({ online, conversationId, userId, deviceId, serverU
         <div ref={messagesEndRef} />
       </div>
       {sendError && <div style={styles.sendError}>{sendError}</div>}
+      {draft.messageId && <div style={styles.sendError}>原消息内容已保留，重试沿用同一编号。
+        <button disabled={sending} onClick={() => onDraftChange({ text: "" })}>保留已提交消息，另写一条</button>
+      </div>}
       <form className="chat-composer" onSubmit={handleSend} style={styles.inputBar}>
         <span style={styles.prompt}>›</span>
         <input
@@ -327,7 +346,8 @@ export default function Chat({ online, conversationId, userId, deviceId, serverU
           type="text"
           placeholder="type a message…"
           value={input}
-          onChange={(e) => setInput(e.target.value)}
+          disabled={sending || !!draft.messageId}
+          onChange={(e) => onDraftChange({ text: e.target.value })}
           style={styles.input}
         />
         <button
@@ -336,7 +356,7 @@ export default function Chat({ online, conversationId, userId, deviceId, serverU
           disabled={!online || sending || !input.trim()}
           style={styles.sendBtn}
         >
-          {sending ? "Sending..." : "Send"}
+          {sending ? "Sending..." : draft.messageId ? "重试原消息" : "Send"}
         </button>
       </form>
     </div>

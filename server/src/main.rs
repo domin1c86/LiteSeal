@@ -53,17 +53,17 @@ async fn main() {
             get(auth::handlers::list_devices).post(auth::handlers::register_device),
         )
         .route(
-            "/devices/{device_id}",
+            "/devices/:device_id",
             delete(auth::handlers::revoke_device).put(auth::handlers::rotate_device_keys),
         )
         .route("/users/search", get(keys::handlers::search_users))
-        .route("/users/{user_id}/key", get(keys::handlers::get_public_key))
+        .route("/users/:user_id/key", get(keys::handlers::get_public_key))
         .route(
-            "/users/{user_id}/devices",
+            "/users/:user_id/devices",
             get(keys::handlers::list_user_devices),
         )
         .route(
-            "/contacts/{user_id}/trust",
+            "/contacts/:user_id/trust",
             post(keys::handlers::trust_contact),
         )
         .route("/ws", get(relay::handlers::ws_handler))

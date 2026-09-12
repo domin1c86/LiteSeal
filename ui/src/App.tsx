@@ -29,6 +29,7 @@ interface Session {
 
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
+  const [drafts, setDrafts] = useState<Record<string, { text: string; messageId?: string }>>({});
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [activeConversation, setActiveConversation] = useState<string | null>(
     null
@@ -164,6 +165,7 @@ export default function App() {
     } catch {}
     setSession(null);
     setContacts([]);
+    setDrafts({});
     setActiveConversation(null);
     setSelectedContact(null);
     setSidebarTab("chats");
@@ -242,6 +244,9 @@ export default function App() {
         )
       ) : (
         <Chat
+          key={`${session.user_id}:${activeConversation}`}
+          draft={drafts[activeConversation ?? ""] ?? { text: "" }}
+          onDraftChange={(draft) => { if (activeConversation) setDrafts(previous => ({ ...previous, [activeConversation]: draft })); }}
           online={connection === "online"}
           conversationId={activeConversation}
           userId={session.user_id}

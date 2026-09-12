@@ -9,11 +9,19 @@ pub async fn send_message(
     signature: Vec<u8>,
     sender_device_id: String,
     payloads: Vec<EncryptedPayload>,
+    message_id: Option<String>,
     state: &AppState,
 ) -> Result<SendMessageResult, String> {
     state
         .client
-        .send_message(sender_id, ciphertext, signature, sender_device_id, payloads)
+        .send_message_with_id(
+            sender_id,
+            ciphertext,
+            signature,
+            sender_device_id,
+            payloads,
+            message_id,
+        )
         .await
 }
 
@@ -62,4 +70,11 @@ pub async fn verify_message(
 
 pub async fn generate_keypair_cmd() -> Result<(Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>), String> {
     chat::generate_keypair()
+}
+
+pub async fn retry_message(
+    message_id: String,
+    state: &AppState,
+) -> Result<SendMessageResult, String> {
+    state.client.retry_message(message_id).await
 }

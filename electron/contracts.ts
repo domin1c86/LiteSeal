@@ -3,7 +3,8 @@ import type { RegisterResult, ConnectResult, SendMessageResult, PollMessagesResu
 } from "../ui/src/types";
 
 export interface CommandMap {
-  send_message: { args: { senderId: string; ciphertext: number[]; signature: number[]; senderDeviceId: string; payloads: EncryptedPayload[] }; result: SendMessageResult };
+  retry_message: { args: { messageId: string }; result: SendMessageResult };
+  send_message: { args: { messageId?: string; senderId: string; ciphertext: number[]; signature: number[]; senderDeviceId: string; payloads: EncryptedPayload[] }; result: SendMessageResult };
   poll_messages: { args: {  }; result: PollMessagesResult };
   get_local_messages: { args: { conversationId: string; limit: number; offset: number }; result: Message[] };
   encrypt_message: { args: { plaintext: number[]; recipientPublicKey: number[]; senderSecretKey: number[] }; result: number[] };
@@ -36,6 +37,7 @@ export type DesktopApi = {
 };
 export const commandNames = [
   "send_message",
+  "retry_message",
   "poll_messages",
   "get_local_messages",
   "encrypt_message",

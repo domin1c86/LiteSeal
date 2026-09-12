@@ -89,9 +89,11 @@ export function useDesktop() {
     ciphertext: number[],
     signature: number[],
     senderDeviceId: string,
-    payloads: EncryptedPayload[]
+    payloads: EncryptedPayload[],
+    messageId?: string
   ): Promise<SendMessageResult> {
     return invoke("send_message", {
+      messageId,
       senderId,
       ciphertext,
       signature,
@@ -228,6 +230,7 @@ export function useDesktop() {
   }
 
   return {
+    retryMessage: (messageId: string) => invoke("retry_message", { messageId }),
     register,
     login,
     refreshSession,

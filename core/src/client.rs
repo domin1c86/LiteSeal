@@ -105,6 +105,51 @@ impl LitesealClient {
         sender_device_id: String,
         payloads: Vec<EncryptedPayload>,
     ) -> Result<SendMessageResult, String> {
+        self.send_message_with_id(
+            sender_id,
+            ciphertext,
+            signature,
+            sender_device_id,
+            payloads,
+            None,
+        )
+        .await
+    }
+
+    pub async fn retry_message(&self, message_id: String) -> Result<SendMessageResult, String> {
+        let (message, payloads) = {
+            let db = self.db.lock().map_err(|e| e.to_string())?;
+            let message = db
+                .get_message(&message_id)
+                .map_err(|e| e.to_string())?
+                .ok_or("Message not found")?;
+            let payloads = serde_json::from_str(
+                &db.outgoing_payloads(&message_id)
+                    .map_err(|e| e.to_string())?,
+            )
+            .map_err(|_| "Cannot read saved outgoing message")?;
+            (message, payloads)
+        };
+        self.send_message_with_id(
+            message.sender_id,
+            message.ciphertext,
+            message.signature,
+            message.sender_device_id,
+            payloads,
+            Some(message_id),
+        )
+        .await
+    }
+
+    pub async fn send_message_with_id(
+        &self,
+        sender_id: String,
+        ciphertext: Vec<u8>,
+        signature: Vec<u8>,
+        sender_device_id: String,
+        payloads: Vec<EncryptedPayload>,
+        message_id: Option<String>,
+    ) -> Result<SendMessageResult, String> {
         if payloads.is_empty() {
             return Err("Message has no recipient payloads".to_string());
         }
@@ -120,47 +165,58 @@ impl LitesealClient {
         let ws_guard = self.ws_client.lock().await;
         let client = ws_guard.as_ref().ok_or("Not connected to relay server")?;
 
-        let message_id = Uuid::new_v4().to_string();
-        let timestamp = chrono::Utc::now().timestamp_millis();
-
-        // The sender owns its hash chain: seq and prev_hash come from the last
-        // message this device stored for the conversation, matching what
-        // recipients validate in MessageIntegrityStore::validate_next.
-        let (sender_seq, prev_hash) = {
+        let message_id = message_id.unwrap_or_else(|| Uuid::new_v4().to_string());
+        Uuid::parse_str(&message_id).map_err(|_| "Invalid message id")?;
+        let (outgoing, payloads) = {
             let db = self.db.lock().map_err(|e| e.to_string())?;
-            let previous = db
-                .get_latest_message_for_sender(&conversation_id, &sender_device_id)
+            if let Some(existing) = db.get_message(&message_id).map_err(|e| e.to_string())? {
+                if existing.sender_id != sender_id
+                    || existing.sender_device_id != sender_device_id
+                    || existing.conversation_id != conversation_id
+                {
+                    return Err("Message id belongs to another conversation or device".into());
+                }
+                let saved = serde_json::from_str(
+                    &db.outgoing_payloads(&message_id)
+                        .map_err(|e| e.to_string())?,
+                )
+                .map_err(|_| "Cannot read saved outgoing message")?;
+                (existing, saved)
+            } else {
+                let previous = db
+                    .get_latest_message_for_sender(&conversation_id, &sender_device_id)
+                    .map_err(|e| e.to_string())?;
+                let (seq, hash) = next_chain_state(previous.as_ref());
+                let outgoing = build_outgoing_message_model(
+                    message_id.clone(),
+                    conversation_id.clone(),
+                    sender_id,
+                    sender_device_id.clone(),
+                    seq,
+                    chrono::Utc::now().timestamp_millis(),
+                    ciphertext,
+                    signature,
+                    hash,
+                    "pending",
+                );
+                db.prepare_outgoing(
+                    &outgoing,
+                    &serde_json::to_string(&payloads).map_err(|e| e.to_string())?,
+                )
                 .map_err(|e| e.to_string())?;
-            next_chain_state(previous.as_ref())
+                (outgoing, payloads)
+            }
         };
-
-        let outgoing = build_outgoing_message_model(
-            message_id.clone(),
-            conversation_id.clone(),
-            sender_id,
-            sender_device_id.clone(),
-            sender_seq,
-            timestamp,
-            ciphertext.clone(),
-            signature.clone(),
-            prev_hash.clone(),
-            "pending",
-        );
-
-        {
-            let db = self.db.lock().map_err(|e| e.to_string())?;
-            db.insert_message(&outgoing).map_err(|e| e.to_string())?;
-        }
 
         if let Err(err) = client
             .send_message(
                 message_id.clone(),
                 conversation_id,
-                ciphertext,
-                signature,
+                outgoing.ciphertext,
+                outgoing.signature,
                 sender_device_id,
-                sender_seq,
-                prev_hash,
+                outgoing.sender_seq,
+                outgoing.prev_hash,
                 payloads,
             )
             .await
