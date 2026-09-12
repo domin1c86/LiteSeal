@@ -2,7 +2,7 @@
 
 面向 Windows 与 Android 的聊天软件，当前优先完善 Windows。桌面架构为 **Electron + React + Rust 子进程**，移动端继续复用 Rust 核心。
 
-完整入口、环境配置、邀请码、功能清单及手动测试用例见 [Windows 开发与测试指南](WINDOWS_TESTING_GUIDE.md)。桥接协议及迁移说明见 [Electron 架构说明](ELECTRON_ARCHITECTURE.md)。
+完整入口、环境配置、邀请码、功能清单及手动测试用例见 [Windows 开发与测试指南](WINDOWS_TESTING_GUIDE.md)。桥接协议及迁移说明见 [Electron 架构说明](ELECTRON_ARCHITECTURE.md)。后续缺项、优先级和完成标准见 [开发清单](DEVELOPMENT_BACKLOG.md)。
 
 ## 项目结构
 
