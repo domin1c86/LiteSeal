@@ -78,3 +78,27 @@ pub async fn retry_message(
 ) -> Result<SendMessageResult, String> {
     state.client.retry_message(message_id).await
 }
+
+pub async fn get_local_message_page(
+    conversation_id: String,
+    limit: i64,
+    before_timestamp: Option<i64>,
+    before_id: Option<String>,
+    state: &AppState,
+) -> Result<Vec<MessageModel>, String> {
+    if !(1..=101).contains(&limit) || before_timestamp.is_some() != before_id.is_some() {
+        return Err("Invalid pagination cursor or limit".into());
+    }
+    state
+        .client
+        .db
+        .lock()
+        .map_err(|e| e.to_string())?
+        .get_message_page(
+            &conversation_id,
+            limit,
+            before_timestamp,
+            before_id.as_deref(),
+        )
+        .map_err(|e| e.to_string())
+}

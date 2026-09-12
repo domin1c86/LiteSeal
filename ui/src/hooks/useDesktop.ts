@@ -230,6 +230,7 @@ export function useDesktop() {
   }
 
   return {
+    getLocalMessagePage: (conversationId: string, limit: number, beforeTimestamp?: number, beforeId?: string) => invoke("get_local_message_page", { conversationId, limit, beforeTimestamp, beforeId }),
     signOut: () => invoke("sign_out", {}),
     retryMessage: (messageId: string) => invoke("retry_message", { messageId }),
     register,

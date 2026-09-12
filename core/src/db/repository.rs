@@ -331,6 +331,49 @@ impl MessageRepository {
         Ok(messages)
     }
 
+    pub fn get_message_page(
+        &self,
+        conversation_id: &str,
+        limit: i64,
+        before_timestamp: Option<i64>,
+        before_id: Option<&str>,
+    ) -> Result<Vec<MessageModel>, DbError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, conversation_id, sender_id, sender_device_id,
+             sender_seq, timestamp, message_type, local_state, expire_at,
+             ciphertext, signature, prev_hash
+             FROM messages WHERE conversation_id = ?1
+             AND (?3 IS NULL OR timestamp < ?3 OR (timestamp = ?3 AND id < ?4))
+             ORDER BY timestamp DESC, id DESC LIMIT ?2",
+        )?;
+
+        let rows = stmt.query_map(
+            params![conversation_id, limit, before_timestamp, before_id],
+            |row| {
+                Ok(MessageModel {
+                    id: row.get(0)?,
+                    conversation_id: row.get(1)?,
+                    sender_id: row.get(2)?,
+                    sender_device_id: row.get(3)?,
+                    sender_seq: row.get(4)?,
+                    timestamp: row.get(5)?,
+                    message_type: row.get(6)?,
+                    local_state: row.get(7)?,
+                    expire_at: row.get(8)?,
+                    ciphertext: row.get(9)?,
+                    signature: row.get(10)?,
+                    prev_hash: row.get(11)?,
+                })
+            },
+        )?;
+
+        let mut messages = Vec::new();
+        for row in rows {
+            messages.push(row?);
+        }
+        Ok(messages)
+    }
+
     pub fn get_latest_message_for_sender(
         &self,
         conversation_id: &str,

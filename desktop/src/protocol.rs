@@ -39,6 +39,16 @@ pub enum Command {
     },
     #[serde(rename = "poll_messages")]
     PollMessages {},
+    #[serde(rename = "get_local_message_page")]
+    GetLocalMessagePage {
+        #[serde(rename = "conversationId")]
+        conversation_id: String,
+        limit: i64,
+        #[serde(rename = "beforeTimestamp", default)]
+        before_timestamp: Option<i64>,
+        #[serde(rename = "beforeId", default)]
+        before_id: Option<String>,
+    },
     #[serde(rename = "get_local_messages")]
     GetLocalMessages {
         #[serde(rename = "conversationId")]
@@ -226,6 +236,21 @@ impl Response {
 
 pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, String> {
     let result = match command {
+        Command::GetLocalMessagePage {
+            conversation_id,
+            limit,
+            before_timestamp,
+            before_id,
+        } => serde_json::to_value(
+            commands::chat::get_local_message_page(
+                conversation_id,
+                limit,
+                before_timestamp,
+                before_id,
+                state,
+            )
+            .await?,
+        ),
         Command::SignOut {} => serde_json::to_value(commands::keystore::sign_out().await?),
         Command::RetryMessage { message_id } => {
             serde_json::to_value(commands::chat::retry_message(message_id, state).await?)

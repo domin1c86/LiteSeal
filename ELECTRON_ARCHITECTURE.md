@@ -12,7 +12,7 @@ flowchart LR
   C <-->|HTTP / WebSocket| S[Axum 服务端 / PostgreSQL]
 ```
 
-`electron/contracts.ts` 定义全部 26 个桌面命令的参数和结果类型，preload 为每个命令暴露单独方法，页面不能访问通用 ipcRenderer、文件系统或进程启动器。`useDesktop` 保持页面原有调用方式；联系人添加返回 `{ success: boolean }`，删除和信任更新的 hook 丢弃成功结果返回 void。
+`electron/contracts.ts` 定义全部 29 个桌面命令的参数和结果类型，preload 为每个命令暴露单独方法，页面不能访问通用 ipcRenderer、文件系统或进程启动器。`useDesktop` 保持页面原有调用方式；联系人添加返回 `{ success: boolean }`，删除和信任更新的 hook 丢弃成功结果返回 void。
 
 Rust 的 `desktop/src/protocol.rs` 使用 serde 枚举分发所有命令，并验证字段类型、必填项、未知字段及字节范围。顶层参数沿用 camelCase，嵌套业务模型和结果沿用核心的 snake_case；`Vec<u8>` 对应 JSON 数字数组，空返回值对应 null，错误转换为前端 Error。
 
@@ -58,3 +58,12 @@ Windows 数据路径和格式保持兼容：
 原图标资源迁入 `electron/icons/`，SVG 包装原 PNG 供打包工具生成所需尺寸。原桌面框架代码和依赖已移除；移动端 FFI、服务端路由及密码学协议继续使用原实现。
 
 `npm test` 不打开界面，包含真实子进程调用、模拟传输故障和 HTTP 端点、隔离数据库兼容及既有 Rust 测试。Windows 工作流额外执行 DPAPI 测试和安装包构建检查。Windows 实机、真实服务端双人聊天及所有界面交互结果应单独记录，不能从 Linux 测试推断。
+
+
+## 2026-09-11 P0 接口更新
+
+- `send_message` 增加可选 `messageId`，允许以同一编号重试原消息；省略时兼容旧调用。密文和收件设备载荷持久化到 SQLite，原消息重试不重新生成编号或覆盖原载荷。
+- `retry_message({ messageId })` 从本地发件记录重试。对应桌面会话仍需有效中继连接。
+- `get_local_message_page({ conversationId, limit, beforeTimestamp?, beforeId? })` 返回按时间和编号倒序的记录；时间与编号游标必须成对提供，limit 为 1 至 101。UI 每次读取 51 条判断是否还有更早记录，展示 50 条。旧偏移接口保留供兼容。
+- `sign_out({})` 保留 DPAPI 身份密钥，清除本地令牌并尝试服务端撤销，返回可选警告文字。普通退出不调用彻底删除密钥的接口。
+- 本轮跳过所有测试执行；构建/编译检查不代替自动化和 Windows 验收。多设备完整性链问题见开发清单 W-06。

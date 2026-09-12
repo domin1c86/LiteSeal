@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useLayoutEffect } from "react";
 import { useDesktop } from "../hooks/useDesktop";
 import { dmConversationId } from "../lib/conversation";
 import { trustLabel } from "./ContactList";
@@ -26,11 +26,18 @@ export default function Chat({ draft, onDraftChange, online, conversationId, use
   const input = draft.text;
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+  const [hasOlder, setHasOlder] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const cursor = useRef<{ timestamp: number; id: string } | null>(null);
+  const historyGeneration = useRef(0);
+  const scrollArea = useRef<HTMLDivElement>(null);
+  const scrollRestore = useRef<{ height: number; top: number } | null>(null);
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const { retryMessage, sendMessage, getUserDevices, getLocalMessages, encryptMessage, decryptMessage, signMessage, verifyMessage, setContactTrust } = useDesktop();
+  const { retryMessage, sendMessage, getUserDevices, getLocalMessagePage, encryptMessage, decryptMessage, signMessage, verifyMessage, setContactTrust } = useDesktop();
   const activeContact = contacts.find((c) => c.user_id === conversationId);
   // conversationId prop is the peer's user id; storage/relay use the canonical DM id.
   const storageConversationId = conversationId ? dmConversationId(userId, conversationId) : null;
@@ -51,33 +58,58 @@ export default function Chat({ draft, onDraftChange, online, conversationId, use
     };
   }
 
+  async function decodeHistory(items: Message[]) {
+    return Promise.all(items.map(async (message) => {
+      const peer = contacts.find(contact => contact.user_id === (message.sender_id === userId ? conversationId : message.sender_id));
+      if (!peer) return { ...message, ciphertext: Array.from(new TextEncoder().encode("[sender not in contacts]")) };
+      try {
+        const plaintext = await decryptMessage(message.ciphertext, peer.public_key, secretKey);
+        return { ...message, ciphertext: plaintext };
+      } catch { return { ...message, ciphertext: Array.from(new TextEncoder().encode("[encrypted]")) }; }
+    }));
+  }
+
   useEffect(() => {
-    if (!conversationId || !storageConversationId) return;
-    setLoading(true);
-    setSendError(null);
-    getLocalMessages(storageConversationId, 50, 0)
-      .then(async (msgs) => {
-        const decrypted = await Promise.all(
-          msgs.map(async (msg) => {
-            const peer = contacts.find((c) =>
-              msg.sender_id === userId
-                ? c.user_id === conversationId
-                : c.user_id === msg.sender_id
-            );
-            if (!peer) return msg;
-            try {
-              const plaintext = await decryptMessage(msg.ciphertext, peer.public_key, secretKey);
-              return { ...msg, ciphertext: plaintext };
-            } catch {
-              return { ...msg, ciphertext: Array.from(new TextEncoder().encode("[encrypted]")) };
-            }
-          })
-        );
-        setMessages(decrypted);
-      })
-      .catch(console.error)
-      .finally(() => setLoading(false));
-  }, [conversationId, contacts, secretKey, userId]);
+    if (!storageConversationId) return;
+    let active = true;
+    historyGeneration.current += 1;
+    setLoadingOlder(false);
+    setLoading(true); setHistoryError(null); cursor.current = null;
+    getLocalMessagePage(storageConversationId, 51).then(async (rows) => {
+      const page = rows.slice(0, 50);
+      const decoded = await decodeHistory([...page].reverse());
+      if (!active) return;
+      cursor.current = page.length ? page[page.length - 1] : null;
+      setHasOlder(rows.length > 50);
+      setMessages(previous => {
+        const known = new Set(decoded.map(item => item.id));
+        return [...decoded, ...previous.filter(item => !known.has(item.id))].sort((a, b) => a.timestamp - b.timestamp || a.id.localeCompare(b.id));
+      });
+    }).catch(error => { if (active) setHistoryError(String(error)); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [storageConversationId, secretKey, userId, contacts]);
+
+  async function loadOlder() {
+    if (!storageConversationId || !cursor.current || loadingOlder || loading) return;
+    const generation = historyGeneration.current;
+    setLoadingOlder(true); setHistoryError(null);
+    try {
+      const rows = await getLocalMessagePage(storageConversationId, 51, cursor.current.timestamp, cursor.current.id);
+      const page = rows.slice(0, 50);
+      const decoded = await decodeHistory([...page].reverse());
+      if (!alive.current || generation !== historyGeneration.current) return;
+      cursor.current = page.length ? page[page.length - 1] : cursor.current;
+      setHasOlder(rows.length > 50);
+      const area = scrollArea.current;
+      if (area) scrollRestore.current = { height: area.scrollHeight, top: area.scrollTop };
+      setMessages(previous => {
+        const known = new Set(previous.map(item => item.id));
+        return [...decoded.filter(item => !known.has(item.id)), ...previous];
+      });
+    } catch (error) { if (alive.current && generation === historyGeneration.current) setHistoryError(String(error)); }
+    finally { if (alive.current && generation === historyGeneration.current) setLoadingOlder(false); }
+  }
 
   useEffect(() => {
     if (!conversationId || !relayBatch) return;
@@ -169,8 +201,12 @@ export default function Chat({ draft, onDraftChange, online, conversationId, use
     }
   }
 
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  useLayoutEffect(() => {
+    const area = scrollArea.current;
+    if (area && scrollRestore.current) {
+      area.scrollTop = scrollRestore.current.top + area.scrollHeight - scrollRestore.current.height;
+      scrollRestore.current = null;
+    } else { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }
   }, [messages]);
 
   async function handleSend(e: React.FormEvent) {
@@ -289,7 +325,9 @@ export default function Chat({ draft, onDraftChange, online, conversationId, use
           )}
         </div>
       </div>
-      <div className="chat-messages" style={styles.messages}>
+      <div ref={scrollArea} className="chat-messages" style={styles.messages}>
+        {hasOlder && <button disabled={loadingOlder || loading} onClick={loadOlder}>{loadingOlder ? "正在加载…" : "加载更早消息"}</button>}
+        {historyError && <div role="alert">历史加载失败：{historyError}</div>}
         {loading && <p style={styles.loadingText}>loading…</p>}
         {messages.map((msg) => {
           const isMine = msg.sender_id === userId;
