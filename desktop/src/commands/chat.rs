@@ -80,6 +80,7 @@ pub async fn retry_message(
 }
 
 pub async fn get_local_message_page(
+    user_id: String,
     conversation_id: String,
     limit: i64,
     before_timestamp: Option<i64>,
@@ -94,9 +95,10 @@ pub async fn get_local_message_page(
         .db
         .lock()
         .map_err(|e| e.to_string())?
-        .get_message_page(
+        .get_visible_message_page(
             &conversation_id,
             limit,
+            &user_id,
             before_timestamp,
             before_id.as_deref(),
         )

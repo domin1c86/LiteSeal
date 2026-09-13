@@ -17,6 +17,22 @@ pub struct Request {
 #[derive(Deserialize)]
 #[serde(tag = "name", content = "args", deny_unknown_fields)]
 pub enum Command {
+    #[serde(rename = "delete_message_locally")]
+    DeleteMessageLocally {
+        #[serde(rename = "userId")]
+        user_id: String,
+        #[serde(rename = "conversationId")]
+        conversation_id: String,
+        #[serde(rename = "messageId")]
+        message_id: String,
+    },
+    #[serde(rename = "get_locally_deleted_ids")]
+    GetLocallyDeletedIds {
+        #[serde(rename = "userId")]
+        user_id: String,
+        #[serde(rename = "conversationId")]
+        conversation_id: String,
+    },
     #[serde(rename = "get_conversation_preferences")]
     GetConversationPreferences {
         #[serde(rename = "userId")]
@@ -67,6 +83,8 @@ pub enum Command {
     PollMessages {},
     #[serde(rename = "get_local_message_page")]
     GetLocalMessagePage {
+        #[serde(rename = "userId", default)]
+        user_id: String,
         #[serde(rename = "conversationId")]
         conversation_id: String,
         limit: i64,
@@ -262,6 +280,32 @@ impl Response {
 
 pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, String> {
     let result = match command {
+        Command::DeleteMessageLocally {
+            user_id,
+            conversation_id,
+            message_id,
+        } => {
+            state
+                .client
+                .db
+                .lock()
+                .map_err(|e| e.to_string())?
+                .delete_message_locally(&user_id, &conversation_id, &message_id)
+                .map_err(|e| e.to_string())?;
+            serde_json::to_value(())
+        }
+        Command::GetLocallyDeletedIds {
+            user_id,
+            conversation_id,
+        } => serde_json::to_value(
+            state
+                .client
+                .db
+                .lock()
+                .map_err(|e| e.to_string())?
+                .locally_deleted_ids(&user_id, &conversation_id)
+                .map_err(|e| e.to_string())?,
+        ),
         Command::GetConversationPreferences { user_id } => serde_json::to_value(
             state
                 .client
@@ -322,12 +366,14 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
             serde_json::to_value(())
         }
         Command::GetLocalMessagePage {
+            user_id,
             conversation_id,
             limit,
             before_timestamp,
             before_id,
         } => serde_json::to_value(
             commands::chat::get_local_message_page(
+                user_id,
                 conversation_id,
                 limit,
                 before_timestamp,

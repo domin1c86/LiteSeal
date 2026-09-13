@@ -3,12 +3,14 @@ import type { RegisterResult, ConnectResult, SendMessageResult, PollMessagesResu
 } from "../ui/src/types";
 
 export interface CommandMap {
+  delete_message_locally: { args: { userId: string; conversationId: string; messageId: string }; result: void };
+  get_locally_deleted_ids: { args: { userId: string; conversationId: string }; result: string[] };
   copy_message_text: { args: { text: string }; result: void };
   get_conversation_preferences: { args: { userId: string }; result: ConversationPreference[] };
   save_conversation_preference: { args: { userId: string; peerId: string; pinned?: boolean; archived?: boolean; draft?: number[] }; result: void };
   get_conversation_summaries: { args: { userId: string }; result: ConversationSummary[] };
   mark_messages_read: { args: { userId: string; ids: string[] }; result: void };
-  get_local_message_page: { args: { conversationId: string; limit: number; beforeTimestamp?: number; beforeId?: string }; result: Message[] };
+  get_local_message_page: { args: { userId?: string; conversationId: string; limit: number; beforeTimestamp?: number; beforeId?: string }; result: Message[] };
   sign_out: { args: {}; result: string | null };
   retry_message: { args: { messageId: string }; result: SendMessageResult };
   send_message: { args: { messageId?: string; senderId: string; ciphertext: number[]; signature: number[]; senderDeviceId: string; payloads: EncryptedPayload[] }; result: SendMessageResult };
@@ -43,6 +45,8 @@ export type DesktopApi = {
   [K in CommandName]: (args: CommandMap[K]["args"]) => Promise<CommandMap[K]["result"]>;
 };
 export const commandNames = [
+  "delete_message_locally",
+  "get_locally_deleted_ids",
   "copy_message_text",
   "get_conversation_preferences",
   "save_conversation_preference",

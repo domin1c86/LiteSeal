@@ -230,12 +230,14 @@ export function useDesktop() {
   }
 
   return {
+    deleteMessageLocally: (userId: string, conversationId: string, messageId: string) => invoke("delete_message_locally", { userId, conversationId, messageId }),
+    getLocallyDeletedIds: (userId: string, conversationId: string) => invoke("get_locally_deleted_ids", { userId, conversationId }),
     copyMessageText: (text: string) => invoke("copy_message_text", { text }),
     getConversationPreferences: (userId: string) => invoke("get_conversation_preferences", { userId }),
     saveConversationPreference: (args: CommandMap["save_conversation_preference"]["args"]) => invoke("save_conversation_preference", args),
     getConversationSummaries: (userId: string) => invoke("get_conversation_summaries", { userId }),
     markMessagesRead: (userId: string, ids: string[]) => invoke("mark_messages_read", { userId, ids }),
-    getLocalMessagePage: (conversationId: string, limit: number, beforeTimestamp?: number, beforeId?: string) => invoke("get_local_message_page", { conversationId, limit, beforeTimestamp, beforeId }),
+    getLocalMessagePage: (conversationId: string, limit: number, beforeTimestamp?: number, beforeId?: string, userId?: string) => invoke("get_local_message_page", { userId, conversationId, limit, beforeTimestamp, beforeId }),
     signOut: () => invoke("sign_out", {}),
     retryMessage: (messageId: string) => invoke("retry_message", { messageId }),
     register,

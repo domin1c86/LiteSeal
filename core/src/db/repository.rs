@@ -65,6 +65,10 @@ impl MessageRepository {
                 pinned INTEGER NOT NULL DEFAULT 0, archived INTEGER NOT NULL DEFAULT 0,
                 draft BLOB NOT NULL DEFAULT X'', PRIMARY KEY(user_id, peer_id)
             );
+            CREATE TABLE IF NOT EXISTS locally_deleted_messages (
+                user_id TEXT NOT NULL, message_id TEXT NOT NULL,
+                PRIMARY KEY(user_id, message_id)
+            );
             CREATE TABLE IF NOT EXISTS local_message_reads (
                 user_id TEXT NOT NULL, message_id TEXT NOT NULL,
                 PRIMARY KEY(user_id, message_id)
@@ -359,16 +363,47 @@ impl MessageRepository {
         Ok(())
     }
 
+    pub fn delete_message_locally(
+        &self,
+        user_id: &str,
+        conversation_id: &str,
+        message_id: &str,
+    ) -> Result<(), DbError> {
+        let message = self.get_message(message_id)?.ok_or(DbError::NotFound)?;
+        if user_id.is_empty() || message.conversation_id != conversation_id {
+            return Err(DbError::NotFound);
+        }
+        self.conn.execute(
+            "INSERT OR IGNORE INTO locally_deleted_messages(user_id, message_id)
+            SELECT ?1, id FROM messages WHERE id = ?2 AND conversation_id = ?3",
+            params![user_id, message_id, conversation_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn locally_deleted_ids(
+        &self,
+        user_id: &str,
+        conversation_id: &str,
+    ) -> Result<Vec<String>, DbError> {
+        let mut stmt = self.conn.prepare("SELECT d.message_id FROM locally_deleted_messages d JOIN messages m ON m.id = d.message_id
+            WHERE d.user_id = ?1 AND m.conversation_id = ?2")?;
+        let rows = stmt.query_map(params![user_id, conversation_id], |row| row.get(0))?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
     pub fn conversation_summaries(
         &self,
         user_id: &str,
     ) -> Result<Vec<ConversationSummary>, DbError> {
         let mut stmt = self.conn.prepare("SELECT conversation_id,
-            (SELECT id FROM messages latest WHERE latest.conversation_id = m.conversation_id ORDER BY timestamp DESC, id DESC LIMIT 1),
+            (SELECT id FROM messages latest WHERE latest.conversation_id = m.conversation_id
+                AND NOT EXISTS (SELECT 1 FROM locally_deleted_messages d WHERE d.user_id = ?1 AND d.message_id = latest.id) ORDER BY timestamp DESC, id DESC LIMIT 1),
             SUM(CASE WHEN sender_id != ?1 AND NOT EXISTS
                 (SELECT 1 FROM local_message_reads r WHERE r.user_id = ?1 AND r.message_id = m.id)
                 THEN 1 ELSE 0 END)
-            FROM messages m GROUP BY conversation_id ORDER BY MAX(timestamp) DESC, conversation_id")?;
+            FROM messages m WHERE NOT EXISTS (SELECT 1 FROM locally_deleted_messages d WHERE d.user_id = ?1 AND d.message_id = m.id)
+            GROUP BY conversation_id ORDER BY MAX(timestamp) DESC, conversation_id")?;
         let rows = stmt.query_map([user_id], |row| {
             Ok((
                 row.get::<_, String>(0)?,
@@ -576,17 +611,29 @@ impl MessageRepository {
         before_timestamp: Option<i64>,
         before_id: Option<&str>,
     ) -> Result<Vec<MessageModel>, DbError> {
+        self.get_visible_message_page(conversation_id, limit, "", before_timestamp, before_id)
+    }
+
+    pub fn get_visible_message_page(
+        &self,
+        conversation_id: &str,
+        limit: i64,
+        user_id: &str,
+        before_timestamp: Option<i64>,
+        before_id: Option<&str>,
+    ) -> Result<Vec<MessageModel>, DbError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, conversation_id, sender_id, sender_device_id,
              sender_seq, timestamp, message_type, local_state, expire_at,
              ciphertext, signature, prev_hash
              FROM messages WHERE conversation_id = ?1
+             AND NOT EXISTS (SELECT 1 FROM locally_deleted_messages d WHERE d.user_id = ?5 AND d.message_id = messages.id)
              AND (?3 IS NULL OR timestamp < ?3 OR (timestamp = ?3 AND id < ?4))
              ORDER BY timestamp DESC, id DESC LIMIT ?2",
         )?;
 
         let rows = stmt.query_map(
-            params![conversation_id, limit, before_timestamp, before_id],
+            params![conversation_id, limit, before_timestamp, before_id, user_id],
             |row| {
                 Ok(MessageModel {
                     id: row.get(0)?,

@@ -12,7 +12,7 @@ flowchart LR
   C <-->|HTTP / WebSocket| S[Axum 服务端 / PostgreSQL]
 ```
 
-`electron/contracts.ts` 定义全部 34 个桌面命令的参数和结果类型，preload 为每个命令暴露单独方法，页面不能访问通用 ipcRenderer、文件系统或进程启动器。`useDesktop` 保持页面原有调用方式；联系人添加返回 `{ success: boolean }`，删除和信任更新的 hook 丢弃成功结果返回 void。
+`electron/contracts.ts` 定义全部 36 个桌面命令的参数和结果类型，preload 为每个命令暴露单独方法，页面不能访问通用 ipcRenderer、文件系统或进程启动器。`useDesktop` 保持页面原有调用方式；联系人添加返回 `{ success: boolean }`，删除和信任更新的 hook 丢弃成功结果返回 void。
 
 Rust 的 `desktop/src/protocol.rs` 使用 serde 枚举分发所有命令，并验证字段类型、必填项、未知字段及字节范围。顶层参数沿用 camelCase，嵌套业务模型和结果沿用核心的 snake_case；`Vec<u8>` 对应 JSON 数字数组，空返回值对应 null，错误转换为前端 Error。
 
@@ -85,3 +85,7 @@ Windows 数据路径和格式保持兼容：
 新消息明文使用带版本前缀的 JSON 正文封装（ui/src/lib/messageContent.ts），包含 text 以及可选 reply/forwarded 快照，之后按原路径加密、签名和持久化；Rust 投递协议不变，旧纯文本继续显示。桌面 UI 及服务端统一使用当前版本；未升级移动 UI 不保证能展示结构化正文。转发来源由转发者提供，不构成原作者真实性证明。
 
 copy_message_text({ text }) 由 Electron 主进程处理，仅写入文本剪贴板，不暴露剪贴板读取或原始系统接口。沿用来源校验并限制最大 1,048,576 个字符串代码单元。桌面 API 总计 34 个，其中这个命令不转发 Rust sidecar。
+
+### 本机逻辑删除
+
+新增 delete_message_locally({ userId, conversationId, messageId }) 和 get_locally_deleted_ids({ userId, conversationId })；桌面 API 总计 36 个。SQLite locally_deleted_messages 保存账号与消息编号联合标记，不修改原始密文。get_local_message_page 增加可选 userId，Windows UI 总是传入以过滤已删除消息；省略时保留旧调用行为。会话摘要及未读也排除标记记录。原始历史/完整性链接口保留原始记录，供链校验、重试和兼容调用，不代表物理擦除。

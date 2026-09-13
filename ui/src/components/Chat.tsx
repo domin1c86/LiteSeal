@@ -26,6 +26,10 @@ interface ChatProps {
 export default function Chat({ draft, onDraftChange, onForward, online, conversationId, userId, deviceId, serverUrl, secretKey, signingKey, contacts, relayBatch, onContactsChanged }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const input = draft.text;
+  const deletedIds = useRef(new Set<string>());
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const { deleteMessageLocally, getLocallyDeletedIds } = useDesktop();
   const { copyMessageText } = useDesktop();
   const [actionStatus, setActionStatus] = useState<string | null>(null);
   const [forwardDraft, setForwardDraft] = useState<Draft | null>(null);
@@ -105,7 +109,9 @@ export default function Chat({ draft, onDraftChange, onForward, online, conversa
     historyGeneration.current += 1;
     setLoadingOlder(false);
     setLoading(true); setHistoryError(null); cursor.current = null;
-    getLocalMessagePage(storageConversationId, 51).then(async (rows) => {
+    Promise.all([getLocalMessagePage(storageConversationId, 51, undefined, undefined, userId), getLocallyDeletedIds(userId, storageConversationId)]).then(async ([rows, removed]) => {
+      if (!active) return;
+      for (const id of removed) deletedIds.current.add(id);
       const page = rows.slice(0, 50);
       const decoded = await decodeHistory([...page].reverse());
       if (!active) return;
@@ -113,7 +119,7 @@ export default function Chat({ draft, onDraftChange, onForward, online, conversa
       setHasOlder(rows.length > 50);
       setMessages(previous => {
         const known = new Set(decoded.map(item => item.id));
-        return [...decoded, ...previous.filter(item => !known.has(item.id))].sort((a, b) => a.timestamp - b.timestamp || a.id.localeCompare(b.id));
+        return [...decoded, ...previous.filter(item => !known.has(item.id))].filter(item => !deletedIds.current.has(item.id)).sort((a, b) => a.timestamp - b.timestamp || a.id.localeCompare(b.id));
       });
     }).catch(error => { if (active) setHistoryError(String(error)); })
       .finally(() => { if (active) setLoading(false); });
@@ -125,7 +131,7 @@ export default function Chat({ draft, onDraftChange, onForward, online, conversa
     const generation = historyGeneration.current;
     setLoadingOlder(true); setHistoryError(null);
     try {
-      const rows = await getLocalMessagePage(storageConversationId, 51, cursor.current.timestamp, cursor.current.id);
+      const rows = await getLocalMessagePage(storageConversationId, 51, cursor.current.timestamp, cursor.current.id, userId);
       const page = rows.slice(0, 50);
       const decoded = await decodeHistory([...page].reverse());
       if (!alive.current || generation !== historyGeneration.current) return;
@@ -135,7 +141,7 @@ export default function Chat({ draft, onDraftChange, onForward, online, conversa
       if (area) scrollRestore.current = { height: area.scrollHeight, top: area.scrollTop };
       setMessages(previous => {
         const known = new Set(previous.map(item => item.id));
-        return [...decoded.filter(item => !known.has(item.id)), ...previous];
+        return [...decoded.filter(item => !known.has(item.id)), ...previous].filter(item => !deletedIds.current.has(item.id));
       });
     } catch (error) { if (alive.current && generation === historyGeneration.current) setHistoryError(String(error)); }
     finally { if (alive.current && generation === historyGeneration.current) setLoadingOlder(false); }
@@ -147,10 +153,13 @@ export default function Chat({ draft, onDraftChange, onForward, online, conversa
       try {
         applyRelayEvents(relayBatch.events);
         const incoming: IncomingMessage[] = relayBatch.messages;
-        if (incoming.length > 0) {
+        if (incoming.length > 0 && storageConversationId) {
+          const removed = await getLocallyDeletedIds(userId, storageConversationId);
+          if (!alive.current) return;
+          for (const id of removed) deletedIds.current.add(id);
           const decoded = await Promise.all(
             incoming
-              .filter((m) => m.conversation_id === storageConversationId)
+              .filter((m) => m.conversation_id === storageConversationId && !deletedIds.current.has(m.message_id))
               .map(async (m) => {
                 const sender = contacts.find((c) => c.user_id === m.from);
                 if (!sender) {
@@ -196,7 +205,7 @@ export default function Chat({ draft, onDraftChange, onForward, online, conversa
           setMessages((prev) => {
             const seen = new Set(prev.map((msg) => msg.id));
             const updates = new Map(decoded.map((msg) => [msg.id, msg]));
-            return [...prev.map((msg) => updates.get(msg.id) ?? msg), ...decoded.filter((msg) => !seen.has(msg.id))];
+            return [...prev.map((msg) => updates.get(msg.id) ?? msg), ...decoded.filter((msg) => !seen.has(msg.id))].filter(msg => !deletedIds.current.has(msg.id));
           });
         }
       } catch {
@@ -396,6 +405,7 @@ export default function Chat({ draft, onDraftChange, onForward, online, conversa
                 <div style={{ display: "flex", gap: 6 }}>
                   <button onClick={() => { void copyMessageText(content.text).then(() => setActionStatus("已复制消息正文")).catch(error => setActionStatus(String(error))); }}>复制</button>
                   <button disabled={sending || !!draft.messageId} onClick={() => { void onDraftChange({ ...draft, reply: reference }).catch(error => setActionStatus(String(error))); }}>回复</button>
+                  <button disabled={sending || deleting || draft.messageId === msg.id} onClick={() => setDeleteTarget(msg.id)}>从本机删除</button>
                   <button onClick={() => { setForwardDraft({ text: content.text, forwarded: reference }); setForwardTarget(""); }}>转发</button>
                 </div>
                 {msg.local_state === "integrity_failed" && <span role="alert">消息顺序或完整性链异常，请核对来源</span>}
@@ -420,6 +430,24 @@ export default function Chat({ draft, onDraftChange, onForward, online, conversa
         })}
         <div ref={messagesEndRef} />
       </div>
+      {deleteTarget && <div role="dialog" aria-modal="true" aria-label="从本机删除消息">
+        <p>从本机聊天、摘要和未读计数中移除此消息。为保持消息链校验，加密记录仍保留；对方的消息、已经生成的引用/转发和正在进行的投递不受影响。这不是撤回或彻底擦除。</p>
+        <button disabled={deleting} onClick={async () => {
+          if (!storageConversationId) return;
+          const id = deleteTarget;
+          setDeleting(true);
+          try {
+            await deleteMessageLocally(userId, storageConversationId, id);
+            deletedIds.current.add(id);
+            if (!alive.current) return;
+            setMessages(previous => previous.filter(message => message.id !== id));
+            setDeleteTarget(null);
+            setActionStatus("已从本机聊天中删除；未撤回对方消息。");
+          } catch (error) { if (alive.current) setActionStatus(String(error)); }
+          finally { if (alive.current) setDeleting(false); }
+        }}>确认从本机删除</button>
+        <button disabled={deleting} onClick={() => setDeleteTarget(null)}>取消</button>
+      </div>}
       {actionStatus && <div role="status">{actionStatus}</div>}
       {forwardDraft && <div role="dialog" aria-label="转发消息">
         <label>目标联系人 <select value={forwardTarget} disabled={forwarding} onChange={event => setForwardTarget(event.target.value)}>
