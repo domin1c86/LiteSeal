@@ -1,8 +1,10 @@
 import type { RegisterResult, ConnectResult, SendMessageResult, PollMessagesResult,
-  ConversationSummary, Message, Contact, RemoteDevice, UserSearchResult, StorageStats, KeystoreData, EncryptedPayload
+  ConversationPreference, ConversationSummary, Message, Contact, RemoteDevice, UserSearchResult, StorageStats, KeystoreData, EncryptedPayload
 } from "../ui/src/types";
 
 export interface CommandMap {
+  get_conversation_preferences: { args: { userId: string }; result: ConversationPreference[] };
+  save_conversation_preference: { args: { userId: string; peerId: string; pinned?: boolean; archived?: boolean; draft?: number[] }; result: void };
   get_conversation_summaries: { args: { userId: string }; result: ConversationSummary[] };
   mark_messages_read: { args: { userId: string; ids: string[] }; result: void };
   get_local_message_page: { args: { conversationId: string; limit: number; beforeTimestamp?: number; beforeId?: string }; result: Message[] };
@@ -40,6 +42,8 @@ export type DesktopApi = {
   [K in CommandName]: (args: CommandMap[K]["args"]) => Promise<CommandMap[K]["result"]>;
 };
 export const commandNames = [
+  "get_conversation_preferences",
+  "save_conversation_preference",
   "get_conversation_summaries",
   "mark_messages_read",
   "get_local_message_page",

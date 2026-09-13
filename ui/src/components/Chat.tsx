@@ -7,7 +7,7 @@ import type { Message, IncomingMessage, Contact, RelayEvent } from "../types";
 
 interface ChatProps {
   draft: { text: string; messageId?: string };
-  onDraftChange: (draft: { text: string; messageId?: string }) => void;
+  onDraftChange: (draft: { text: string; messageId?: string }) => Promise<void>;
   online: boolean;
   conversationId: string | null;
   userId: string;
@@ -239,11 +239,11 @@ export default function Chat({ draft, onDraftChange, online, conversationId, use
 
     const text = input.trim();
     const messageId = draft.messageId ?? crypto.randomUUID();
-    onDraftChange({ text: input, messageId });
     setSendError(null);
     setSending(true);
 
     try {
+      await onDraftChange({ text: input, messageId });
       const contact = contacts.find((c) => c.user_id === conversationId);
       if (!contact) throw new Error("Recipient not found in contacts");
 
@@ -280,7 +280,7 @@ export default function Chat({ draft, onDraftChange, online, conversationId, use
         messageId
       );
 
-      onDraftChange({ text: "" });
+      await onDraftChange({ text: "" });
       if (!alive.current) return;
       setMessages((prev) => [
         ...prev.filter(message => message.id !== result.message_id),
@@ -401,7 +401,7 @@ export default function Chat({ draft, onDraftChange, online, conversationId, use
       {readError && <p role="alert">{readError}</p>}
       {sendError && <div style={styles.sendError}>{sendError}</div>}
       {draft.messageId && <div style={styles.sendError}>原消息内容已保留，重试沿用同一编号。
-        <button disabled={sending} onClick={() => onDraftChange({ text: "" })}>保留已提交消息，另写一条</button>
+        <button disabled={sending} onClick={() => { void onDraftChange({ text: "" }).catch(() => {}); }}>保留已提交消息，另写一条</button>
       </div>}
       <form className="chat-composer" onSubmit={handleSend} style={styles.inputBar}>
         <span style={styles.prompt}>›</span>
@@ -411,7 +411,7 @@ export default function Chat({ draft, onDraftChange, online, conversationId, use
           placeholder="type a message…"
           value={input}
           disabled={sending || !!draft.messageId}
-          onChange={(e) => onDraftChange({ text: e.target.value })}
+          onChange={(e) => { void onDraftChange({ text: e.target.value }).catch(() => {}); }}
           style={styles.input}
         />
         <button

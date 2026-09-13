@@ -230,6 +230,8 @@ export function useDesktop() {
   }
 
   return {
+    getConversationPreferences: (userId: string) => invoke("get_conversation_preferences", { userId }),
+    saveConversationPreference: (args: CommandMap["save_conversation_preference"]["args"]) => invoke("save_conversation_preference", args),
     getConversationSummaries: (userId: string) => invoke("get_conversation_summaries", { userId }),
     markMessagesRead: (userId: string, ids: string[]) => invoke("mark_messages_read", { userId, ids }),
     getLocalMessagePage: (conversationId: string, limit: number, beforeTimestamp?: number, beforeId?: string) => invoke("get_local_message_page", { conversationId, limit, beforeTimestamp, beforeId }),

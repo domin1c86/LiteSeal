@@ -18,6 +18,14 @@ pub struct ConversationSummary {
     pub unread_count: i64,
 }
 
+#[derive(serde::Serialize)]
+pub struct ConversationPreference {
+    pub peer_id: String,
+    pub pinned: bool,
+    pub archived: bool,
+    pub draft: Vec<u8>,
+}
+
 pub struct MessageRepository {
     conn: Connection,
 }
@@ -52,6 +60,11 @@ impl MessageRepository {
                 prev_hash BLOB NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS conversation_preferences (
+                user_id TEXT NOT NULL, peer_id TEXT NOT NULL,
+                pinned INTEGER NOT NULL DEFAULT 0, archived INTEGER NOT NULL DEFAULT 0,
+                draft BLOB NOT NULL DEFAULT X'', PRIMARY KEY(user_id, peer_id)
+            );
             CREATE TABLE IF NOT EXISTS local_message_reads (
                 user_id TEXT NOT NULL, message_id TEXT NOT NULL,
                 PRIMARY KEY(user_id, message_id)
@@ -312,6 +325,38 @@ impl MessageRepository {
     pub fn incoming_chain_version(&self, message_id: &str) -> Result<i64, DbError> {
         Ok(self.conn.query_row("SELECT COALESCE((SELECT version FROM incoming_chain_versions WHERE message_id = ?1), 0)",
             [message_id], |row| row.get(0))?)
+    }
+
+    pub fn conversation_preferences(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<ConversationPreference>, DbError> {
+        let mut stmt = self.conn.prepare("SELECT peer_id, pinned, archived, draft FROM conversation_preferences WHERE user_id = ?1")?;
+        let rows = stmt.query_map([user_id], |row| {
+            Ok(ConversationPreference {
+                peer_id: row.get(0)?,
+                pinned: row.get(1)?,
+                archived: row.get(2)?,
+                draft: row.get(3)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn save_conversation_preference(
+        &self,
+        user_id: &str,
+        peer_id: &str,
+        pinned: Option<bool>,
+        archived: Option<bool>,
+        draft: Option<&[u8]>,
+    ) -> Result<(), DbError> {
+        self.conn.execute("INSERT INTO conversation_preferences(user_id, peer_id, pinned, archived, draft)
+            VALUES (?1, ?2, COALESCE(?3, 0), COALESCE(?4, 0), COALESCE(?5, X''))
+            ON CONFLICT(user_id, peer_id) DO UPDATE SET
+            pinned = COALESCE(?3, pinned), archived = COALESCE(?4, archived), draft = COALESCE(?5, draft)",
+            params![user_id, peer_id, pinned, archived, draft])?;
+        Ok(())
     }
 
     pub fn conversation_summaries(

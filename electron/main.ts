@@ -22,6 +22,11 @@ else {
   app.on("before-quit", event => {
     if (cleanedUp) return;
     event.preventDefault();
+    // Let the renderer's pending-save guard run while the sidecar is still alive.
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.close();
+      return;
+    }
     if (quitting) return;
     quitting = true;
     void bridge.stop().finally(() => { cleanedUp = true; app.quit(); });

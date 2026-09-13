@@ -17,6 +17,21 @@ pub struct Request {
 #[derive(Deserialize)]
 #[serde(tag = "name", content = "args", deny_unknown_fields)]
 pub enum Command {
+    #[serde(rename = "get_conversation_preferences")]
+    GetConversationPreferences {
+        #[serde(rename = "userId")]
+        user_id: String,
+    },
+    #[serde(rename = "save_conversation_preference")]
+    SaveConversationPreference {
+        #[serde(rename = "userId")]
+        user_id: String,
+        #[serde(rename = "peerId")]
+        peer_id: String,
+        pinned: Option<bool>,
+        archived: Option<bool>,
+        draft: Option<Vec<u8>>,
+    },
     #[serde(rename = "get_conversation_summaries")]
     GetConversationSummaries {
         #[serde(rename = "userId")]
@@ -247,6 +262,43 @@ impl Response {
 
 pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, String> {
     let result = match command {
+        Command::GetConversationPreferences { user_id } => serde_json::to_value(
+            state
+                .client
+                .db
+                .lock()
+                .map_err(|e| e.to_string())?
+                .conversation_preferences(&user_id)
+                .map_err(|e| e.to_string())?,
+        ),
+        Command::SaveConversationPreference {
+            user_id,
+            peer_id,
+            pinned,
+            archived,
+            draft,
+        } => {
+            if draft
+                .as_ref()
+                .is_some_and(|value| value.len() > 1024 * 1024)
+            {
+                return Err("Draft exceeds 1 MiB".into());
+            }
+            state
+                .client
+                .db
+                .lock()
+                .map_err(|e| e.to_string())?
+                .save_conversation_preference(
+                    &user_id,
+                    &peer_id,
+                    pinned,
+                    archived,
+                    draft.as_deref(),
+                )
+                .map_err(|e| e.to_string())?;
+            serde_json::to_value(())
+        }
         Command::GetConversationSummaries { user_id } => serde_json::to_value(
             state
                 .client

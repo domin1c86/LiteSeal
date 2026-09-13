@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { useConversationPreferences } from "./hooks/useConversationPreferences";
 import Login from "./components/Login";
 import Chat from "./components/Chat";
 import ContactList from "./components/ContactList";
@@ -29,7 +30,8 @@ interface Session {
 
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
-  const [drafts, setDrafts] = useState<Record<string, { text: string; messageId?: string }>>({});
+  const preferences = useConversationPreferences(session);
+  const { drafts } = preferences;
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [activeConversation, setActiveConversation] = useState<string | null>(
     null
@@ -156,6 +158,8 @@ export default function App() {
 
   async function handleLogout() {
     setLoading(true);
+    try { await preferences.flush(); }
+    catch { setLoading(false); return; }
     setSession(null);
     await connectionWork.current.catch(() => {});
     try {
@@ -167,7 +171,6 @@ export default function App() {
     } catch (error) { setStartupError(`退出处理未完成：${String(error)}。请勿删除密钥文件。`); }
     setSession(null);
     setContacts([]);
-    setDrafts({});
     setActiveConversation(null);
     setSelectedContact(null);
     setSidebarTab("chats");
@@ -214,9 +217,11 @@ export default function App() {
         {{ online: "已连接", connecting: "正在连接…", reconnecting: "正在重连…", offline: "离线", auth_required: "需要重新登录" }[connection]}
         {connectionError && <span> · {connectionError}</span>}
         {connection === "auth_required"
-          ? <button onClick={() => { setSession(null); }}>重新登录</button>
+          ? <button onClick={() => { void preferences.flush().then(() => setSession(null)).catch(() => {}); }}>重新登录</button>
           : connection !== "online" && <button onClick={() => setRetry(value => value + 1)}>立即重连</button>}
       </div>
+      {preferences.ready && <div role="status" style={{ padding: "2px 12px", fontSize: 12 }}>{preferences.saving ? "会话更改保存中，请稍候再关闭窗口" : "会话更改已保存到本机"}</div>}
+      {preferences.error && <div role="alert">{preferences.error} <button onClick={() => { void preferences.retry().catch(() => {}); }}>重试</button></div>}
     <div className="app-shell" style={{ ...styles.layout, flex: 1, minHeight: 0 }}>
       <ContactList
         key={session.user_id}
@@ -224,6 +229,10 @@ export default function App() {
         secretKey={session.secretKey}
         signingPublicKey={session.ed25519Pk}
         contacts={contacts}
+        flags={preferences.flags}
+        drafts={drafts}
+        preferencesReady={preferences.ready}
+        onFlagsChange={(id, flags) => { void preferences.saveFlags(id, flags).catch(() => {}); }}
         activeConversation={sidebarTab === "chats" ? activeConversation : selectedContact}
         tab={sidebarTab}
         onTabChange={setSidebarTab}
@@ -249,11 +258,11 @@ export default function App() {
             <p style={styles.contactsEmptyText}>no contact selected</p>
           </div>
         )
-      ) : (
+      ) : !preferences.ready ? <div role="status">正在恢复会话设置和草稿…</div> : (
         <Chat
           key={`${session.user_id}:${activeConversation}`}
           draft={drafts[activeConversation ?? ""] ?? { text: "" }}
-          onDraftChange={(draft) => { if (activeConversation) setDrafts(previous => ({ ...previous, [activeConversation]: draft })); }}
+          onDraftChange={(draft) => activeConversation ? preferences.saveDraft(activeConversation, draft) : Promise.resolve()}
           online={connection === "online"}
           conversationId={activeConversation}
           userId={session.user_id}

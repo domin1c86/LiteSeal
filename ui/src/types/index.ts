@@ -136,3 +136,6 @@ export interface ConversationSummary {
   latest: Message;
   unread_count: number;
 }
+
+export interface ConversationPreference { peer_id: string; pinned: boolean; archived: boolean; draft: number[] }
+export interface Draft { text: string; messageId?: string }
