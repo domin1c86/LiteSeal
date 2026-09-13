@@ -39,7 +39,7 @@ pub async fn register(
     validate_public_key("Signing public key", &ed25519_pk)?;
     let server_url = normalize_server_url(&server_url)?;
 
-    let client = reqwest::Client::new();
+    let client = http_client();
     let url = format!("{}/auth/register", server_url);
 
     let resp = client
@@ -87,7 +87,7 @@ pub async fn login(
     validate_public_key("Signing public key", &ed25519_pk)?;
     let server_url = normalize_server_url(&server_url)?;
 
-    let client = reqwest::Client::new();
+    let client = http_client();
     let url = format!("{}/auth/login", server_url);
     let resp = client
         .post(&url)
@@ -125,7 +125,7 @@ pub async fn refresh_session(
     }
     let server_url = normalize_server_url(&server_url)?;
 
-    let client = reqwest::Client::new();
+    let client = http_client();
     let url = format!("{}/auth/refresh", server_url);
     let resp = client
         .post(&url)
@@ -154,7 +154,7 @@ pub async fn get_user_devices(
     }
 
     let server_url = normalize_server_url(&server_url)?;
-    let client = reqwest::Client::new();
+    let client = http_client();
     let url = format!("{}/users/{}/devices", server_url, user_id);
 
     let resp = client
@@ -186,7 +186,7 @@ pub async fn search_users(
         return Err("Search query cannot be empty".to_string());
     }
 
-    let client = reqwest::Client::new();
+    let client = http_client();
     let server_url = normalize_server_url(&server_url)?;
     let mut url = url::Url::parse(&format!("{}/users/search", server_url))
         .map_err(|e| format!("Invalid server URL: {}", e))?;
@@ -238,7 +238,7 @@ pub async fn logout_all(server_url: String, access_token: String) -> Result<(), 
 
 async fn revoke(server_url: String, access_token: String, path: &str) -> Result<(), String> {
     let server_url = normalize_server_url(&server_url)?;
-    let response = reqwest::Client::new()
+    let response = http_client()
         .post(format!("{server_url}{path}"))
         .json(&serde_json::json!({ "access_token": access_token }))
         .send()
@@ -261,6 +261,14 @@ fn is_loopback_host(url: &url::Url) -> bool {
         Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
         None => false,
     }
+}
+
+fn http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .expect("HTTP client configuration")
 }
 
 #[cfg(test)]

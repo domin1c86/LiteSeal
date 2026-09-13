@@ -28,6 +28,7 @@ dirs = "5"
 chrono = "0.4"
 sha2 = "0.10"
 hex = "0.4"
+zeroize = { version = "1", features = ["zeroize_derive"] }
 # Version must match the uniffi pinned by uniffi-bindgen-react-native in
 # mobile/package.json (ubrn 0.31.x pins uniffi =0.31.0).
 uniffi = { version = "=0.31.0", features = ["tokio"], optional = true }

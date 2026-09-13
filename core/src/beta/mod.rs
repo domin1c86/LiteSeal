@@ -1,4 +1,6 @@
 //! Durable Windows beta state. The legacy mobile FFI remains independent.
+pub mod account;
+pub mod engine;
 pub mod store;
 #[cfg(all(test, windows))]
 mod tests;
