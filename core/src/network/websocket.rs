@@ -1,5 +1,5 @@
 use futures_util::{SinkExt, StreamExt};
-use liteseal_shared::protocol::{ClientMessage, EncryptedPayload, ServerMessage};
+use liteseal_shared::protocol::{ClientMessage, EncryptedPayload, RecipientChain, ServerMessage};
 use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex};
@@ -69,7 +69,10 @@ impl WebSocketClient {
 
         let heartbeat_write = write.clone();
         let recv_task = tokio::spawn(async move {
-            let mut heartbeat = tokio::time::interval(Duration::from_secs(15));
+            let mut heartbeat = tokio::time::interval_at(
+                tokio::time::Instant::now() + Duration::from_secs(15),
+                Duration::from_secs(15),
+            );
             let mut last_received = tokio::time::Instant::now();
             loop {
                 tokio::select! {
@@ -117,19 +120,34 @@ impl WebSocketClient {
         sender_seq: i64,
         prev_hash: Vec<u8>,
         payloads: Vec<EncryptedPayload>,
+        recipient_chains: std::collections::BTreeMap<String, RecipientChain>,
     ) -> Result<(), String> {
         if payloads.is_empty() {
             return Err("Message has no recipient payloads".to_string());
         }
-        let msg = ClientMessage::Send {
-            message_id,
-            conversation_id,
-            ciphertext,
-            signature,
-            sender_device_id,
-            sender_seq,
-            prev_hash,
-            payloads,
+        let msg = if recipient_chains.is_empty() {
+            ClientMessage::Send {
+                message_id,
+                conversation_id,
+                ciphertext,
+                signature,
+                sender_device_id,
+                sender_seq,
+                prev_hash,
+                payloads,
+            }
+        } else {
+            ClientMessage::SendV2 {
+                message_id,
+                conversation_id,
+                ciphertext,
+                signature,
+                sender_device_id,
+                sender_seq,
+                prev_hash,
+                payloads,
+                recipient_chains,
+            }
         };
         let json = serde_json::to_string(&msg).map_err(|e| e.to_string())?;
 

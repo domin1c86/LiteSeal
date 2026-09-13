@@ -9,6 +9,12 @@ pub struct EncryptedPayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecipientChain {
+    pub sender_seq: i64,
+    pub prev_hash: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeliveryStatus {
     pub message_id: String,
     pub recipient_user_id: String,
@@ -36,6 +42,18 @@ pub enum ClientMessage {
         prev_hash: Vec<u8>,
         payloads: Vec<EncryptedPayload>,
     },
+    #[serde(rename = "send_v2")]
+    SendV2 {
+        message_id: String,
+        conversation_id: String,
+        ciphertext: Vec<u8>,
+        signature: Vec<u8>,
+        sender_device_id: String,
+        sender_seq: i64,
+        prev_hash: Vec<u8>,
+        payloads: Vec<EncryptedPayload>,
+        recipient_chains: std::collections::BTreeMap<String, RecipientChain>,
+    },
     #[serde(rename = "ack")]
     Ack {
         message_id: String,
@@ -52,6 +70,19 @@ pub enum ServerMessage {
     AuthFail { reason: String },
     #[serde(rename = "message")]
     Message {
+        message_id: String,
+        from: String,
+        conversation_id: String,
+        ciphertext: Vec<u8>,
+        signature: Vec<u8>,
+        sender_device_id: String,
+        sender_seq: i64,
+        prev_hash: Vec<u8>,
+        recipient_device_id: String,
+        timestamp: i64,
+    },
+    #[serde(rename = "message_v2")]
+    MessageV2 {
         message_id: String,
         from: String,
         conversation_id: String,

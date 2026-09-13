@@ -208,6 +208,12 @@ impl LitesealClient {
             }
         };
 
+        let chains = self
+            .db
+            .lock()
+            .map_err(|e| e.to_string())?
+            .outgoing_chains(&message_id)
+            .map_err(|e| e.to_string())?;
         if let Err(err) = client
             .send_message(
                 message_id.clone(),
@@ -218,6 +224,7 @@ impl LitesealClient {
                 outgoing.sender_seq,
                 outgoing.prev_hash,
                 payloads,
+                chains,
             )
             .await
         {
@@ -241,8 +248,25 @@ impl LitesealClient {
         let mut events = Vec::new();
 
         while let Ok(msg) = rx.try_recv() {
+            let chain_version = if matches!(&msg, ServerMessage::MessageV2 { .. }) {
+                2
+            } else {
+                0
+            };
             match msg {
                 ServerMessage::Message {
+                    message_id,
+                    from,
+                    conversation_id,
+                    ciphertext,
+                    signature,
+                    sender_device_id,
+                    sender_seq,
+                    prev_hash,
+                    recipient_device_id,
+                    timestamp,
+                }
+                | ServerMessage::MessageV2 {
                     message_id,
                     from,
                     conversation_id,
@@ -274,6 +298,13 @@ impl LitesealClient {
                             db.get_message(&model.id).map_err(|e| e.to_string())?
                         {
                             if existing.conversation_id != model.conversation_id
+                                || existing.sender_id != model.sender_id
+                                || existing.sender_seq != model.sender_seq
+                                || existing.prev_hash != model.prev_hash
+                                || db
+                                    .incoming_chain_version(&model.id)
+                                    .map_err(|e| e.to_string())?
+                                    != chain_version
                                 || existing.sender_device_id != model.sender_device_id
                                 || existing.ciphertext != model.ciphertext
                                 || existing.signature != model.signature
@@ -283,18 +314,39 @@ impl LitesealClient {
                             false
                         } else {
                             let previous = db
-                                .get_latest_message_for_sender(
+                                .get_latest_received_for_version(
                                     &model.conversation_id,
                                     &model.sender_device_id,
+                                    chain_version,
                                 )
                                 .map_err(|e| e.to_string())?;
-                            if MessageIntegrityStore::validate_next(previous.as_ref(), &model)
-                                != IntegrityResult::Valid
+                            if (chain_version == 2
+                                && previous.is_none()
+                                && (model.sender_seq != 1 || !model.prev_hash.is_empty()))
+                                || MessageIntegrityStore::validate_next(previous.as_ref(), &model)
+                                    != IntegrityResult::Valid
                             {
                                 model.local_state = "integrity_failed".into();
                                 incoming.local_state = "integrity_failed".into();
                             }
-                            db.insert_message(&model).map_err(|e| e.to_string())?;
+                            let repaired = db
+                                .insert_received(&model, chain_version)
+                                .map_err(|e| e.to_string())?;
+                            for m in repaired {
+                                messages.push(IncomingMessage {
+                                    message_id: m.id,
+                                    from: m.sender_id,
+                                    conversation_id: m.conversation_id,
+                                    ciphertext: m.ciphertext,
+                                    signature: m.signature,
+                                    sender_device_id: m.sender_device_id,
+                                    sender_seq: m.sender_seq,
+                                    prev_hash: m.prev_hash,
+                                    recipient_device_id: incoming.recipient_device_id.clone(),
+                                    timestamp: m.timestamp,
+                                    local_state: m.local_state,
+                                });
+                            }
                             true
                         }
                     };

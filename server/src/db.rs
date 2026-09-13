@@ -23,6 +23,7 @@ pub struct DeviceRecord {
 
 #[derive(Debug, Clone)]
 pub struct OfflineMessageRecord {
+    pub chain_version: i32,
     pub message_id: String,
     pub conversation_id: String,
     pub from_user_id: String,
@@ -327,8 +328,8 @@ impl Db {
         let row = sqlx::query(
             "INSERT INTO offline_messages
              (id, message_id, conversation_id, from_user_id, sender_device_id, sender_seq, prev_hash,
-              recipient_device_id, ciphertext, signature, timestamp, delivered, acked, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, false, false, now())
+              recipient_device_id, ciphertext, signature, timestamp, delivered, acked, created_at, chain_version)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, false, false, now(), $12)
              ON CONFLICT (message_id, recipient_device_id) DO UPDATE SET id = offline_messages.id
              WHERE offline_messages.from_user_id = excluded.from_user_id
                AND offline_messages.sender_device_id = excluded.sender_device_id
@@ -337,6 +338,7 @@ impl Db {
                AND offline_messages.prev_hash = excluded.prev_hash
                AND offline_messages.ciphertext = excluded.ciphertext
                AND offline_messages.signature = excluded.signature
+               AND offline_messages.chain_version = excluded.chain_version
              RETURNING acked",
         )
         .bind(uuid::Uuid::new_v4().to_string())
@@ -350,6 +352,7 @@ impl Db {
         .bind(&msg.ciphertext)
         .bind(&msg.signature)
         .bind(msg.timestamp)
+        .bind(msg.chain_version)
         .fetch_optional(&self.pool)
         .await?;
         row.map(|row| row.get("acked"))
@@ -371,7 +374,7 @@ impl Db {
 
         let rows = sqlx::query(
             "SELECT message_id, conversation_id, from_user_id, sender_device_id, sender_seq,
-                    prev_hash, recipient_device_id, ciphertext, signature, timestamp
+                    prev_hash, recipient_device_id, ciphertext, signature, timestamp, chain_version
              FROM offline_messages
              WHERE recipient_device_id = $1 AND acked = false
              ORDER BY conversation_id, sender_device_id, sender_seq, created_at ASC",
@@ -382,6 +385,7 @@ impl Db {
         Ok(rows
             .into_iter()
             .map(|r| OfflineMessageRecord {
+                chain_version: r.get("chain_version"),
                 message_id: r.get("message_id"),
                 conversation_id: r.get("conversation_id"),
                 from_user_id: r.get("from_user_id"),
@@ -534,6 +538,7 @@ CREATE TABLE IF NOT EXISTS offline_messages (
     created_at TIMESTAMPTZ NOT NULL,
     UNIQUE(message_id, recipient_device_id)
 );
+ALTER TABLE offline_messages ADD COLUMN IF NOT EXISTS chain_version INTEGER NOT NULL DEFAULT 0;
 CREATE TABLE IF NOT EXISTS message_deliveries (
     id TEXT PRIMARY KEY,
     message_id TEXT NOT NULL,

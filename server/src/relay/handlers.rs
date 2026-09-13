@@ -38,7 +38,14 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
         match msg {
             Message::Text(text) => {
                 let text_str: &str = &text;
-                match serde_json::from_str::<ClientMessage>(text_str) {
+                let parsed = serde_json::from_str::<ClientMessage>(text_str);
+                let chains = match &parsed {
+                    Ok(ClientMessage::SendV2 {
+                        recipient_chains, ..
+                    }) => Some(recipient_chains.clone()),
+                    _ => None,
+                };
+                match parsed {
                     Ok(ClientMessage::Auth {
                         user_id: _,
                         token,
@@ -60,24 +67,15 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                             state.register(device_id.clone(), tx.clone());
                             let resp = serde_json::to_string(&ServerMessage::AuthOk).unwrap();
                             let _ = tx.send(resp);
-                            if let Ok(messages) = state.db.drain_offline_messages(&device_id).await
-                            {
-                                for msg in messages {
-                                    let relay_msg =
-                                        serde_json::to_string(&ServerMessage::Message {
-                                            message_id: msg.message_id,
-                                            from: msg.from_user_id,
-                                            conversation_id: msg.conversation_id,
-                                            ciphertext: msg.ciphertext,
-                                            signature: msg.signature,
-                                            sender_device_id: msg.sender_device_id,
-                                            sender_seq: msg.sender_seq,
-                                            prev_hash: msg.prev_hash,
-                                            recipient_device_id: msg.recipient_device_id,
-                                            timestamp: msg.timestamp,
-                                        })
-                                        .unwrap();
-                                    let _ = tx.send(relay_msg);
+                            match state.db.drain_offline_messages(&device_id).await {
+                                Ok(messages) => {
+                                    for msg in messages {
+                                        let _ = tx.send(delivery_frame(msg));
+                                    }
+                                }
+                                Err(_) => {
+                                    tracing::error!("Cannot load pending deliveries; closing connection for retry");
+                                    break;
                                 }
                             }
                         } else {
@@ -99,6 +97,19 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                         sender_seq,
                         prev_hash,
                         payloads,
+                    })
+                    | Ok(ClientMessage::SendV2 {
+                        message_id,
+                        conversation_id,
+                        ciphertext: _,
+                        signature: _,
+                        // The claimed sender device is untrusted; the relay
+                        // stamps the authenticated device instead.
+                        sender_device_id: _,
+                        sender_seq,
+                        prev_hash,
+                        payloads,
+                        recipient_chains: _,
                     }) => {
                         let (from, sender_device_id) =
                             match (&authenticated_user, &authenticated_device) {
@@ -127,20 +138,46 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                         let timestamp = chrono_now();
                         let mut updates = Vec::new();
                         for payload in payloads {
-                            let relay_msg = serde_json::to_string(&ServerMessage::Message {
+                            let chain_version = if chains.is_some() { 2 } else { 0 };
+                            let (sequence, previous_hash) = if let Some(chains) = &chains {
+                                match chains.get(&payload.recipient_device_id) {
+                                    Some(chain)
+                                        if (chain.sender_seq > 1
+                                            && chain.prev_hash.len() == 32)
+                                            || (chain.sender_seq == 1
+                                                && chain.prev_hash.is_empty()) =>
+                                    {
+                                        (chain.sender_seq, chain.prev_hash.clone())
+                                    }
+                                    _ => {
+                                        let _ = tx.send(
+                                            serde_json::to_string(&ServerMessage::Error {
+                                                code: "invalid_chain".into(),
+                                                message: "Missing or invalid recipient chain"
+                                                    .into(),
+                                            })
+                                            .unwrap(),
+                                        );
+                                        continue;
+                                    }
+                                }
+                            } else {
+                                (sender_seq, prev_hash.clone())
+                            };
+                            let record = crate::db::OfflineMessageRecord {
+                                chain_version,
                                 message_id: message_id.clone(),
-                                from: from.clone(),
                                 conversation_id: conversation_id.clone(),
+                                from_user_id: from.clone(),
+                                sender_device_id: sender_device_id.clone(),
+                                sender_seq: sequence,
+                                prev_hash: previous_hash,
+                                recipient_device_id: payload.recipient_device_id.clone(),
                                 ciphertext: payload.ciphertext.clone(),
                                 signature: payload.signature.clone(),
-                                sender_device_id: sender_device_id.clone(),
-                                sender_seq,
-                                prev_hash: prev_hash.clone(),
-                                recipient_device_id: payload.recipient_device_id.clone(),
                                 timestamp,
-                            })
-                            .unwrap();
-
+                            };
+                            let relay_msg = delivery_frame(record.clone());
                             let valid_device = state
                                 .db
                                 .get_user_device(
@@ -150,23 +187,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                                 .await;
                             let stored = match valid_device {
                                 Ok(Some(device)) if !device.revoked => {
-                                    state
-                                        .db
-                                        .store_offline_message(&crate::db::OfflineMessageRecord {
-                                            message_id: message_id.clone(),
-                                            conversation_id: conversation_id.clone(),
-                                            from_user_id: from.clone(),
-                                            sender_device_id: sender_device_id.clone(),
-                                            sender_seq,
-                                            prev_hash: prev_hash.clone(),
-                                            recipient_device_id: payload
-                                                .recipient_device_id
-                                                .clone(),
-                                            ciphertext: payload.ciphertext,
-                                            signature: payload.signature,
-                                            timestamp,
-                                        })
-                                        .await
+                                    state.db.store_offline_message(&record).await
                                 }
                                 _ => Err(sqlx::Error::Protocol(
                                     "Recipient device is unavailable".into(),
@@ -266,4 +287,35 @@ fn chrono_now() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_millis() as i64
+}
+
+fn delivery_frame(msg: crate::db::OfflineMessageRecord) -> String {
+    let frame = if msg.chain_version == 2 {
+        ServerMessage::MessageV2 {
+            message_id: msg.message_id,
+            from: msg.from_user_id,
+            conversation_id: msg.conversation_id,
+            ciphertext: msg.ciphertext,
+            signature: msg.signature,
+            sender_device_id: msg.sender_device_id,
+            sender_seq: msg.sender_seq,
+            prev_hash: msg.prev_hash,
+            recipient_device_id: msg.recipient_device_id,
+            timestamp: msg.timestamp,
+        }
+    } else {
+        ServerMessage::Message {
+            message_id: msg.message_id,
+            from: msg.from_user_id,
+            conversation_id: msg.conversation_id,
+            ciphertext: msg.ciphertext,
+            signature: msg.signature,
+            sender_device_id: msg.sender_device_id,
+            sender_seq: msg.sender_seq,
+            prev_hash: msg.prev_hash,
+            recipient_device_id: msg.recipient_device_id,
+            timestamp: msg.timestamp,
+        }
+    };
+    serde_json::to_string(&frame).expect("Relay frame is serializable")
 }

@@ -45,6 +45,14 @@ impl MessageRepository {
                 prev_hash BLOB NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS outgoing_chains (
+                message_id TEXT NOT NULL, device_id TEXT NOT NULL,
+                sender_seq INTEGER NOT NULL, prev_hash BLOB NOT NULL,
+                PRIMARY KEY(message_id, device_id)
+            );
+            CREATE TABLE IF NOT EXISTS incoming_chain_versions (
+                message_id TEXT PRIMARY KEY, version INTEGER NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS outgoing_delivery (
                 message_id TEXT NOT NULL, device_id TEXT NOT NULL, status TEXT NOT NULL,
                 PRIMARY KEY(message_id, device_id)
@@ -153,7 +161,49 @@ impl MessageRepository {
     }
 
     pub fn prepare_outgoing(&self, msg: &MessageModel, payloads: &str) -> Result<(), DbError> {
+        use liteseal_shared::protocol::EncryptedPayload;
         let tx = self.conn.unchecked_transaction()?;
+        let items: Vec<EncryptedPayload> =
+            serde_json::from_str(payloads).map_err(|_| DbError::NotFound)?;
+        for item in &items {
+            let previous_id = {
+                let mut stmt = tx.prepare("SELECT c.message_id FROM outgoing_chains c JOIN messages m ON m.id = c.message_id
+                    WHERE m.conversation_id = ?1 AND m.sender_device_id = ?2 AND c.device_id = ?3
+                    ORDER BY c.sender_seq DESC LIMIT 1")?;
+                let mut rows = stmt.query(params![
+                    msg.conversation_id,
+                    msg.sender_device_id,
+                    item.recipient_device_id
+                ])?;
+                rows.next()?
+                    .map(|row| row.get::<_, String>(0))
+                    .transpose()?
+            };
+            let (seq, hash) = if let Some(id) = previous_id {
+                let mut previous = self.get_message(&id)?.ok_or(DbError::NotFound)?;
+                let old_items: Vec<EncryptedPayload> =
+                    serde_json::from_str(&self.outgoing_payloads(&id)?)
+                        .map_err(|_| DbError::NotFound)?;
+                let old_payload = old_items
+                    .iter()
+                    .find(|p| p.recipient_device_id == item.recipient_device_id)
+                    .ok_or(DbError::NotFound)?;
+                let chain = tx.query_row("SELECT sender_seq, prev_hash FROM outgoing_chains WHERE message_id = ?1 AND device_id = ?2",
+                    params![id, item.recipient_device_id], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?)))?;
+                previous.sender_seq = chain.0;
+                previous.prev_hash = chain.1;
+                previous.ciphertext = old_payload.ciphertext.clone();
+                previous.signature = old_payload.signature.clone();
+                (
+                    previous.sender_seq + 1,
+                    crate::integrity::MessageIntegrityStore::hash_message(&previous),
+                )
+            } else {
+                (1, Vec::new())
+            };
+            tx.execute("INSERT INTO outgoing_chains(message_id, device_id, sender_seq, prev_hash) VALUES (?1, ?2, ?3, ?4)",
+                params![msg.id, item.recipient_device_id, seq, hash])?;
+        }
         self.insert_message(msg)?;
         tx.execute(
             "INSERT INTO outgoing_payloads(message_id, payloads) VALUES (?1, ?2)",
@@ -161,6 +211,96 @@ impl MessageRepository {
         )?;
         tx.commit()?;
         Ok(())
+    }
+
+    pub fn outgoing_chains(
+        &self,
+        message_id: &str,
+    ) -> Result<
+        std::collections::BTreeMap<String, liteseal_shared::protocol::RecipientChain>,
+        DbError,
+    > {
+        let mut stmt = self.conn.prepare(
+            "SELECT device_id, sender_seq, prev_hash FROM outgoing_chains WHERE message_id = ?1",
+        )?;
+        let result = stmt
+            .query_map([message_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    liteseal_shared::protocol::RecipientChain {
+                        sender_seq: row.get(1)?,
+                        prev_hash: row.get(2)?,
+                    },
+                ))
+            })?
+            .collect::<Result<_, _>>()?;
+        Ok(result)
+    }
+
+    pub fn insert_received(
+        &self,
+        message: &MessageModel,
+        version: i64,
+    ) -> Result<Vec<MessageModel>, DbError> {
+        let mut repaired = Vec::new();
+        let tx = self.conn.unchecked_transaction()?;
+        self.insert_message(message)?;
+        tx.execute(
+            "INSERT INTO incoming_chain_versions(message_id, version) VALUES (?1, ?2)",
+            params![message.id, version],
+        )?;
+        // Revisit quarantined successors when a missing predecessor arrives.
+        if version == 2 {
+            loop {
+                let previous = self.get_latest_received_for_version(
+                    &message.conversation_id,
+                    &message.sender_device_id,
+                    version,
+                )?;
+                let next_seq = previous
+                    .as_ref()
+                    .map_or(1, |m| m.sender_seq.saturating_add(1));
+                let ids = {
+                    let mut stmt = tx.prepare("SELECT m.id FROM messages m JOIN incoming_chain_versions v ON v.message_id = m.id
+                        WHERE m.conversation_id = ?1 AND m.sender_device_id = ?2 AND v.version = ?3
+                        AND m.sender_seq = ?4 AND m.local_state = 'integrity_failed'")?;
+                    let rows = stmt.query_map(
+                        params![
+                            message.conversation_id,
+                            message.sender_device_id,
+                            version,
+                            next_seq
+                        ],
+                        |r| r.get::<_, String>(0),
+                    )?;
+                    rows.collect::<Result<Vec<_>, _>>()?
+                };
+                if ids.len() != 1 {
+                    break;
+                }
+                let mut candidate = self.get_message(&ids[0])?.ok_or(DbError::NotFound)?;
+                let valid_start = previous.is_some()
+                    || (candidate.sender_seq == 1 && candidate.prev_hash.is_empty());
+                if !valid_start
+                    || crate::integrity::MessageIntegrityStore::validate_next(
+                        previous.as_ref(),
+                        &candidate,
+                    ) != crate::integrity::IntegrityResult::Valid
+                {
+                    break;
+                }
+                self.update_message_state(&candidate.id, "received")?;
+                candidate.local_state = "received".into();
+                repaired.push(candidate);
+            }
+        }
+        tx.commit()?;
+        Ok(repaired)
+    }
+
+    pub fn incoming_chain_version(&self, message_id: &str) -> Result<i64, DbError> {
+        Ok(self.conn.query_row("SELECT COALESCE((SELECT version FROM incoming_chain_versions WHERE message_id = ?1), 0)",
+            [message_id], |row| row.get(0))?)
     }
 
     pub fn outgoing_payloads(&self, message_id: &str) -> Result<String, DbError> {
@@ -404,6 +544,46 @@ impl MessageRepository {
                 prev_hash: row.get(11)?,
             })
         })?;
+
+        match rows.next() {
+            Some(Ok(msg)) => Ok(Some(msg)),
+            Some(Err(e)) => Err(DbError::SqliteError(e)),
+            None => Ok(None),
+        }
+    }
+    pub fn get_latest_received_for_version(
+        &self,
+        conversation_id: &str,
+        sender_device_id: &str,
+        version: i64,
+    ) -> Result<Option<MessageModel>, DbError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, conversation_id, sender_id, sender_device_id,
+             sender_seq, timestamp, message_type, local_state, expire_at,
+             ciphertext, signature, prev_hash
+             FROM messages
+             WHERE conversation_id = ?1 AND sender_device_id = ?2 AND local_state != 'integrity_failed'
+             AND COALESCE((SELECT version FROM incoming_chain_versions WHERE message_id = messages.id), 0) = ?3
+             ORDER BY sender_seq DESC LIMIT 1",
+        )?;
+
+        let mut rows =
+            stmt.query_map(params![conversation_id, sender_device_id, version], |row| {
+                Ok(MessageModel {
+                    id: row.get(0)?,
+                    conversation_id: row.get(1)?,
+                    sender_id: row.get(2)?,
+                    sender_device_id: row.get(3)?,
+                    sender_seq: row.get(4)?,
+                    timestamp: row.get(5)?,
+                    message_type: row.get(6)?,
+                    local_state: row.get(7)?,
+                    expire_at: row.get(8)?,
+                    ciphertext: row.get(9)?,
+                    signature: row.get(10)?,
+                    prev_hash: row.get(11)?,
+                })
+            })?;
 
         match rows.next() {
             Some(Ok(msg)) => Ok(Some(msg)),

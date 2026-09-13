@@ -165,7 +165,8 @@ export default function Chat({ draft, onDraftChange, online, conversationId, use
           );
           setMessages((prev) => {
             const seen = new Set(prev.map((msg) => msg.id));
-            return [...prev, ...decoded.filter((msg) => !seen.has(msg.id))];
+            const updates = new Map(decoded.map((msg) => [msg.id, msg]));
+            return [...prev.map((msg) => updates.get(msg.id) ?? msg), ...decoded.filter((msg) => !seen.has(msg.id))];
           });
         }
       } catch {

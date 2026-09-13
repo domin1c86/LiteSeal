@@ -26,7 +26,7 @@ async fn desktop_connects_sends_polls_and_persists_relay_events() {
             assert_eq!(auth["device_id"], "device-a");
             socket.send(Message::Text(json!({"type":"auth_ok"}).to_string())).await.unwrap();
             let sent: Value = serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
-            assert_eq!(sent["type"], "send");
+            assert_eq!(sent["type"], "send_v2");
             assert_eq!(sent["conversation_id"], "dm:alice:bob");
             assert_eq!(sent["payloads"][0]["recipient_device_id"], "device-b");
             socket.send(Message::Text(json!({"type":"delivered","message_id":sent["message_id"]}).to_string())).await.unwrap();
