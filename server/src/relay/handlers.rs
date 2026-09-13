@@ -113,7 +113,8 @@ async fn handle_socket(socket: WebSocket, state: AppState, remote_ip: std::net::
                     _ => continue,
                 };
                 let Ok(message) = serde_json::from_str::<ClientMessage>(&text) else {
-                    send_error(&tx, "parse_error", "Invalid message format"); continue;
+                    let (code, message) = parse_failure(&text);
+                    send_error(&tx, code, message); continue;
                 };
                 match message {
                     ClientMessage::Auth { .. } => break,
@@ -367,6 +368,21 @@ fn canonical_conversation_id(a: &str, b: &str) -> String {
     format!("dm:{lo}:{hi}")
 }
 
+/// Clients built before `SignedEnvelopeV2` send frames that no longer parse;
+/// ask them to upgrade instead of reporting a generic format error.
+fn parse_failure(text: &str) -> (&'static str, &'static str) {
+    let kind = serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|value| value.get("type")?.as_str().map(str::to_owned));
+    match kind.as_deref() {
+        Some("send" | "send_v2" | "ack" | "ack_v2") => (
+            "client_upgrade_required",
+            "This LiteSeal client is outdated; install the current version",
+        ),
+        _ => ("parse_error", "Invalid message format"),
+    }
+}
+
 fn send_error(sender: &mpsc::Sender<String>, code: &str, message: &str) {
     send_message(
         sender,
@@ -393,6 +409,16 @@ fn unix_millis() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn outdated_client_frames_request_an_upgrade() {
+        // The pre-envelope send_v2 shape carried payloads and chains inline.
+        let old = r#"{"type":"send_v2","message_id":"m","conversation_id":"c","payloads":[],"recipient_chains":{}}"#;
+        assert!(serde_json::from_str::<ClientMessage>(old).is_err());
+        assert_eq!(parse_failure(old).0, "client_upgrade_required");
+        assert_eq!(parse_failure("not json").0, "parse_error");
+        assert_eq!(parse_failure(r#"{"type":"unknown"}"#).0, "parse_error");
+    }
 
     fn valid_envelope() -> SignedEnvelopeV2 {
         SignedEnvelopeV2 {
