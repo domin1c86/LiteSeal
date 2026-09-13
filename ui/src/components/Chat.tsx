@@ -1,13 +1,15 @@
+import { decodeContent, encodeContent } from "../lib/messageContent";
 import { useState, useEffect, useRef, useLayoutEffect } from "react";
 import { useDesktop } from "../hooks/useDesktop";
 import { dmConversationId } from "../lib/conversation";
 import { trustLabel } from "./ContactList";
 import type { RelayBatch } from "../App";
-import type { Message, IncomingMessage, Contact, RelayEvent } from "../types";
+import type { Draft, Message, IncomingMessage, Contact, RelayEvent } from "../types";
 
 interface ChatProps {
-  draft: { text: string; messageId?: string };
-  onDraftChange: (draft: { text: string; messageId?: string }) => Promise<void>;
+  draft: Draft;
+  onForward: (peerId: string, draft: Draft) => Promise<void>;
+  onDraftChange: (draft: Draft) => Promise<void>;
   online: boolean;
   conversationId: string | null;
   userId: string;
@@ -21,9 +23,14 @@ interface ChatProps {
   onContactsChanged: () => void;
 }
 
-export default function Chat({ draft, onDraftChange, online, conversationId, userId, deviceId, serverUrl, secretKey, signingKey, contacts, relayBatch, onContactsChanged }: ChatProps) {
+export default function Chat({ draft, onDraftChange, onForward, online, conversationId, userId, deviceId, serverUrl, secretKey, signingKey, contacts, relayBatch, onContactsChanged }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const input = draft.text;
+  const { copyMessageText } = useDesktop();
+  const [actionStatus, setActionStatus] = useState<string | null>(null);
+  const [forwardDraft, setForwardDraft] = useState<Draft | null>(null);
+  const [forwardTarget, setForwardTarget] = useState("");
+  const [forwarding, setForwarding] = useState(false);
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   const [hasOlder, setHasOlder] = useState(false);
@@ -243,7 +250,7 @@ export default function Chat({ draft, onDraftChange, online, conversationId, use
     setSending(true);
 
     try {
-      await onDraftChange({ text: input, messageId });
+      await onDraftChange({ ...draft, text: input, messageId });
       const contact = contacts.find((c) => c.user_id === conversationId);
       if (!contact) throw new Error("Recipient not found in contacts");
 
@@ -253,7 +260,7 @@ export default function Chat({ draft, onDraftChange, online, conversationId, use
       if (devices.length === 0) throw new Error("Recipient has no active devices");
 
       const encoder = new TextEncoder();
-      const plaintext = Array.from(encoder.encode(text));
+      const plaintext = Array.from(encoder.encode(encodeContent({ text, reply: draft.reply, forwarded: draft.forwarded })));
 
       // Local copy encrypted to the contact's stored key so history stays readable.
       const ciphertext = await encryptMessage(plaintext, contact.public_key, secretKey);
@@ -361,8 +368,12 @@ export default function Chat({ draft, onDraftChange, online, conversationId, use
           } catch {
             text = "[encrypted]";
           }
+          const content = decodeContent(text);
+          const sender = isMine ? userId : contacts.find(contact => contact.user_id === msg.sender_id)?.username ?? msg.sender_id;
+          const reference = { messageId: msg.id, sender: sender.slice(0, 256), text: content.text.slice(0, 500) };
           return (
             <div
+              id={`message-${msg.id}`}
               key={msg.id}
               style={{
                 ...styles.messageRow,
@@ -375,7 +386,18 @@ export default function Chat({ draft, onDraftChange, online, conversationId, use
                   ...(isMine ? styles.bubbleMine : styles.bubbleTheirs),
                 }}
               >
-                <span style={styles.messageText}>{text}</span>
+                {content.reply && <button style={{ display: "block", maxWidth: "100%", textAlign: "left", whiteSpace: "pre-wrap" }} onClick={() => {
+                  const target = document.getElementById(`message-${content.reply!.messageId}`);
+                  if (target) target.scrollIntoView({ block: "center", behavior: "smooth" });
+                  else setActionStatus("原消息未加载，请先加载更早消息；引用快照仍可查看。");
+                }}>回复 {content.reply.sender}：{content.reply.text}</button>}
+                {content.forwarded && <div style={{ fontSize: 12 }}>转发内容（来源由转发者提供）：{content.forwarded.sender}</div>}
+                <span style={styles.messageText}>{content.text}</span>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button onClick={() => { void copyMessageText(content.text).then(() => setActionStatus("已复制消息正文")).catch(error => setActionStatus(String(error))); }}>复制</button>
+                  <button disabled={sending || !!draft.messageId} onClick={() => { void onDraftChange({ ...draft, reply: reference }).catch(error => setActionStatus(String(error))); }}>回复</button>
+                  <button onClick={() => { setForwardDraft({ text: content.text, forwarded: reference }); setForwardTarget(""); }}>转发</button>
+                </div>
                 {msg.local_state === "integrity_failed" && <span role="alert">消息顺序或完整性链异常，请核对来源</span>}
                 <span style={styles.timestamp}>
                   {new Date(msg.timestamp).toLocaleTimeString([], {
@@ -398,6 +420,24 @@ export default function Chat({ draft, onDraftChange, online, conversationId, use
         })}
         <div ref={messagesEndRef} />
       </div>
+      {actionStatus && <div role="status">{actionStatus}</div>}
+      {forwardDraft && <div role="dialog" aria-label="转发消息">
+        <label>目标联系人 <select value={forwardTarget} disabled={forwarding} onChange={event => setForwardTarget(event.target.value)}>
+          <option value="">请选择</option>{contacts.map(contact => <option key={contact.user_id} value={contact.user_id}>{contact.username}</option>)}
+        </select></label>
+        <button disabled={!forwardTarget || forwarding} onClick={async () => {
+          setForwarding(true);
+          try { await onForward(forwardTarget, forwardDraft); if (alive.current) setForwardDraft(null); }
+          catch (error) { if (alive.current) setActionStatus(String(error)); }
+          finally { if (alive.current) setForwarding(false); }
+        }}>生成转发草稿</button>
+        <button disabled={forwarding} onClick={() => setForwardDraft(null)}>取消</button>
+      </div>}
+      {(draft.reply || draft.forwarded) && <div>
+        {draft.reply && <div>回复 {draft.reply.sender}：{draft.reply.text}</div>}
+        {draft.forwarded && <div>转发：{draft.forwarded.sender}</div>}
+        <button disabled={sending || !!draft.messageId} onClick={() => { void onDraftChange({ ...draft, reply: undefined, forwarded: undefined }).catch(error => setActionStatus(String(error))); }}>移除引用/转发标记</button>
+      </div>}
       {readError && <p role="alert">{readError}</p>}
       {sendError && <div style={styles.sendError}>{sendError}</div>}
       {draft.messageId && <div style={styles.sendError}>原消息内容已保留，重试沿用同一编号。
@@ -411,7 +451,7 @@ export default function Chat({ draft, onDraftChange, online, conversationId, use
           placeholder="type a message…"
           value={input}
           disabled={sending || !!draft.messageId}
-          onChange={(e) => { void onDraftChange({ text: e.target.value }).catch(() => {}); }}
+          onChange={(e) => { void onDraftChange({ ...draft, text: e.target.value }).catch(() => {}); }}
           style={styles.input}
         />
         <button

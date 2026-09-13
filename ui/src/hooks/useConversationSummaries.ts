@@ -1,3 +1,4 @@
+import { decodeContent } from "../lib/messageContent";
 import { useEffect, useState } from "react";
 import { useDesktop } from "./useDesktop";
 import { dmConversationId } from "../lib/conversation";
@@ -32,7 +33,7 @@ export function useConversationSummaries(userId: string, secretKey: number[], si
               if (message.local_state === "integrity_failed") text = "[消息完整性异常]";
               else if (key?.length && await verifyMessage(message.ciphertext, message.signature, key)) {
                 const plaintext = await decryptMessage(message.ciphertext, contact.public_key, secretKey);
-                text = `${message.sender_id === userId ? "我：" : ""}${new TextDecoder().decode(new Uint8Array(plaintext)).replace(/\s+/g, " ").slice(0, 120)}`;
+                text = `${message.sender_id === userId ? "我：" : ""}${decodeContent(new TextDecoder().decode(new Uint8Array(plaintext))).text.replace(/\s+/g, " ").slice(0, 120)}`;
               }
             } catch { /* Keep an explicit encrypted placeholder. */ }
             cache.set(cacheKey, text);

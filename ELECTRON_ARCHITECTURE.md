@@ -12,7 +12,7 @@ flowchart LR
   C <-->|HTTP / WebSocket| S[Axum 服务端 / PostgreSQL]
 ```
 
-`electron/contracts.ts` 定义全部 33 个桌面命令的参数和结果类型，preload 为每个命令暴露单独方法，页面不能访问通用 ipcRenderer、文件系统或进程启动器。`useDesktop` 保持页面原有调用方式；联系人添加返回 `{ success: boolean }`，删除和信任更新的 hook 丢弃成功结果返回 void。
+`electron/contracts.ts` 定义全部 34 个桌面命令的参数和结果类型，preload 为每个命令暴露单独方法，页面不能访问通用 ipcRenderer、文件系统或进程启动器。`useDesktop` 保持页面原有调用方式；联系人添加返回 `{ success: boolean }`，删除和信任更新的 hook 丢弃成功结果返回 void。
 
 Rust 的 `desktop/src/protocol.rs` 使用 serde 枚举分发所有命令，并验证字段类型、必填项、未知字段及字节范围。顶层参数沿用 camelCase，嵌套业务模型和结果沿用核心的 snake_case；`Vec<u8>` 对应 JSON 数字数组，空返回值对应 null，错误转换为前端 Error。
 
@@ -79,3 +79,9 @@ Windows 数据路径和格式保持兼容：
 ### 会话整理与草稿
 
 新增 get_conversation_preferences({ userId }) 和 save_conversation_preference({ userId, peerId, pinned?, archived?, draft? })，总计 33 个业务命令。可选字段按列更新，避免草稿保存覆盖置顶/归档状态。conversation_preferences 使用账号及联系人联合主键；draft 保存加密字节（最多 1 MiB），空字节表示清空。加密内容包含格式版本、联系人编号、文本与可选重试编号，前端使用现有账号密钥加解密。保存队列串行执行，错误保留待保存操作并支持重试；普通退出等待保存，未保存时 beforeunload 阻止常规关闭。进程强制终止无法保证未完成写入。
+
+### 引用与转发消息
+
+新消息明文使用带版本前缀的 JSON 正文封装（ui/src/lib/messageContent.ts），包含 text 以及可选 reply/forwarded 快照，之后按原路径加密、签名和持久化；Rust 投递协议不变，旧纯文本继续显示。桌面 UI 及服务端统一使用当前版本；未升级移动 UI 不保证能展示结构化正文。转发来源由转发者提供，不构成原作者真实性证明。
+
+copy_message_text({ text }) 由 Electron 主进程处理，仅写入文本剪贴板，不暴露剪贴板读取或原始系统接口。沿用来源校验并限制最大 1,048,576 个字符串代码单元。桌面 API 总计 34 个，其中这个命令不转发 Rust sidecar。

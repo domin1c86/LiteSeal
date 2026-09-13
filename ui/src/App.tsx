@@ -262,6 +262,13 @@ export default function App() {
         <Chat
           key={`${session.user_id}:${activeConversation}`}
           draft={drafts[activeConversation ?? ""] ?? { text: "" }}
+          onForward={async (peerId, draft) => {
+            const previous = drafts[peerId];
+            if (previous && (previous.text || previous.messageId || previous.reply || previous.forwarded)) throw new Error("目标会话已有草稿，请先发送或清空，转发不会覆盖它。");
+            await preferences.saveDraft(peerId, draft);
+            setActiveConversation(peerId);
+            setSidebarTab("chats");
+          }}
           onDraftChange={(draft) => activeConversation ? preferences.saveDraft(activeConversation, draft) : Promise.resolve()}
           online={connection === "online"}
           conversationId={activeConversation}

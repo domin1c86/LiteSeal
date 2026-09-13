@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, net, protocol, session } from "electron";
+import { app, clipboard, BrowserWindow, dialog, ipcMain, net, protocol, session } from "electron";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { DesktopBridge } from "./bridge";
@@ -75,7 +75,15 @@ else {
         if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame || !trustedUrl(event.senderFrame.url)) {
           return { ok: false, error: "不允许的桌面接口来源" };
         }
-        try { return { ok: true, result: await bridge.call(name, args as never) }; }
+        try {
+          if (name === "copy_message_text") {
+            const text = args && typeof args === "object" ? (args as Record<string, unknown>).text : undefined;
+            if (typeof text !== "string" || text.length > 1024 * 1024) throw new Error("无效的复制文本或文本超过 1 MiB");
+            clipboard.writeText(text);
+            return { ok: true, result: null };
+          }
+          return { ok: true, result: await bridge.call(name, args as never) };
+        }
         catch (error) { return { ok: false, error: error instanceof Error ? error.message : "桌面操作失败" }; }
       });
     }

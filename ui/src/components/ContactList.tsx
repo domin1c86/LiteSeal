@@ -94,7 +94,7 @@ export default function ContactList({
         const trust = trustLabel(contact);
         const preview = previews[contact.user_id];
         const preference = flags[contact.user_id] ?? { pinned: false, archived: false };
-        const summary = drafts[contact.user_id]?.text ? `[草稿] ${drafts[contact.user_id].text}` : preview?.text ?? "加载中…";
+        const summary = drafts[contact.user_id]?.text || drafts[contact.user_id]?.reply || drafts[contact.user_id]?.forwarded ? `[草稿] ${drafts[contact.user_id].text || "引用回复"}` : preview?.text ?? "加载中…";
         return (
           <div
             role="button"

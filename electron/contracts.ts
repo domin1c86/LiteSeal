@@ -3,6 +3,7 @@ import type { RegisterResult, ConnectResult, SendMessageResult, PollMessagesResu
 } from "../ui/src/types";
 
 export interface CommandMap {
+  copy_message_text: { args: { text: string }; result: void };
   get_conversation_preferences: { args: { userId: string }; result: ConversationPreference[] };
   save_conversation_preference: { args: { userId: string; peerId: string; pinned?: boolean; archived?: boolean; draft?: number[] }; result: void };
   get_conversation_summaries: { args: { userId: string }; result: ConversationSummary[] };
@@ -42,6 +43,7 @@ export type DesktopApi = {
   [K in CommandName]: (args: CommandMap[K]["args"]) => Promise<CommandMap[K]["result"]>;
 };
 export const commandNames = [
+  "copy_message_text",
   "get_conversation_preferences",
   "save_conversation_preference",
   "get_conversation_summaries",

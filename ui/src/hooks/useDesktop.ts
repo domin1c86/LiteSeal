@@ -230,6 +230,7 @@ export function useDesktop() {
   }
 
   return {
+    copyMessageText: (text: string) => invoke("copy_message_text", { text }),
     getConversationPreferences: (userId: string) => invoke("get_conversation_preferences", { userId }),
     saveConversationPreference: (args: CommandMap["save_conversation_preference"]["args"]) => invoke("save_conversation_preference", args),
     getConversationSummaries: (userId: string) => invoke("get_conversation_summaries", { userId }),

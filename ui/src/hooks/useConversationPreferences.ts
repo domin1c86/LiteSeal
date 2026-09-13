@@ -32,7 +32,13 @@ export function useConversationPreferences(session: Identity | null) {
             const saved = JSON.parse(new TextDecoder().decode(new Uint8Array(bytes)));
             if (saved.version !== 1 || saved.peerId !== row.peer_id || typeof saved.text !== "string"
                 || (saved.messageId !== undefined && typeof saved.messageId !== "string")) throw new Error("草稿格式不正确");
-            draft = { text: saved.text, messageId: saved.messageId };
+            const validReference = (value: unknown) => {
+              if (!value || typeof value !== "object") return false;
+              const item = value as Record<string, unknown>;
+              return typeof item.messageId === "string" && item.messageId.length <= 128 && typeof item.sender === "string" && item.sender.length <= 256 && typeof item.text === "string" && item.text.length <= 500;
+            };
+            if ((saved.reply && !validReference(saved.reply)) || (saved.forwarded && !validReference(saved.forwarded))) throw new Error("草稿引用格式不正确");
+            draft = { text: saved.text, messageId: saved.messageId, reply: saved.reply, forwarded: saved.forwarded };
           }
           return { row, draft };
         }));
@@ -71,9 +77,9 @@ export function useConversationPreferences(session: Identity | null) {
     if (!session || !ready) return Promise.reject(new Error("草稿尚未恢复"));
     const identity = session;
     draftVersions.current.set(peerId, draft);
-    if (draft.text || draft.messageId) setDrafts(previous => ({ ...previous, [peerId]: draft }));
+    if (draft.text || draft.messageId || draft.reply || draft.forwarded) setDrafts(previous => ({ ...previous, [peerId]: draft }));
     return enqueue(`draft:${peerId}`, async () => {
-      const encrypted = draft.text || draft.messageId
+      const encrypted = draft.text || draft.messageId || draft.reply || draft.forwarded
         ? await encryptMessage(Array.from(new TextEncoder().encode(JSON.stringify({ version: 1, peerId, ...draft }))), identity.publicKey, identity.secretKey)
         : [];
       await saveConversationPreference({ userId: identity.user_id, peerId, draft: encrypted });

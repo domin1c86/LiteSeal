@@ -138,4 +138,4 @@ export interface ConversationSummary {
 }
 
 export interface ConversationPreference { peer_id: string; pinned: boolean; archived: boolean; draft: number[] }
-export interface Draft { text: string; messageId?: string }
+export interface Draft { text: string; messageId?: string; reply?: import("../lib/messageContent").MessageReference; forwarded?: import("../lib/messageContent").MessageReference }
