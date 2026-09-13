@@ -13,9 +13,9 @@ dist/
 .DS_Store
 Thumbs.db
 
-# Tauri
-src-tauri/target/
-src-tauri/gen/
+# Electron
+dist-electron/
+release/
 
 # Compose
 .compose/

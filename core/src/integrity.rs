@@ -66,9 +66,6 @@ mod tests {
             ciphertext: vec![seq as u8],
             signature: vec![seq as u8, 9],
             prev_hash,
-            protocol_version: 2,
-            verification_state: "verified_v2".to_string(),
-            quarantined: false,
         }
     }
 

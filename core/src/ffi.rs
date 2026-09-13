@@ -217,6 +217,7 @@ pub async fn register(
     ed25519_pk: Vec<u8>,
 ) -> FfiResult<FfiAuthResult> {
     api::register(
+        String::new(), // Mobile registration needs an invite field before it can use this server.
         username,
         password,
         server_url,
@@ -269,7 +270,8 @@ pub async fn get_user_devices(
     server_url: String,
     user_id: String,
 ) -> FfiResult<Vec<FfiRemoteDevice>> {
-    let devices = api::get_user_devices(server_url, user_id).await?;
+    // The mobile surface has no session token yet; the server requires one.
+    let devices = api::get_user_devices(server_url, user_id, String::new()).await?;
     Ok(devices
         .into_iter()
         .map(|d| FfiRemoteDevice {
@@ -287,7 +289,7 @@ pub async fn search_users(
     server_url: String,
     query: String,
 ) -> FfiResult<Vec<FfiUserSearchResult>> {
-    let results = api::search_users(server_url, query).await?;
+    let results = api::search_users(server_url, query, String::new()).await?;
     Ok(results
         .into_iter()
         .map(|r| FfiUserSearchResult {

@@ -3,7 +3,7 @@ pub struct ServerConfig {
     pub database_url: String,
     pub bind_addr: String,
     pub cors_allow_origin: String,
-    pub bootstrap_invite_code: Option<String>,
+    pub invite_codes: Vec<String>,
 }
 
 impl ServerConfig {
@@ -23,9 +23,14 @@ impl ServerConfig {
             bind_addr: std::env::var("LITESEAL_BIND")
                 .unwrap_or_else(|_| "0.0.0.0:3000".to_string()),
             cors_allow_origin,
-            bootstrap_invite_code: std::env::var("LITESEAL_BOOTSTRAP_INVITE_CODE")
-                .ok()
-                .filter(|code| !code.trim().is_empty()),
+            // Reusable, comma-separated codes; none configured closes registration.
+            invite_codes: std::env::var("LITESEAL_INVITE_CODES")
+                .unwrap_or_default()
+                .split(',')
+                .map(str::trim)
+                .filter(|code| !code.is_empty())
+                .map(str::to_owned)
+                .collect(),
         })
     }
 }

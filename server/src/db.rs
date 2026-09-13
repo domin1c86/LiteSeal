@@ -94,7 +94,11 @@ impl Db {
         )
         .execute(&mut *transaction)
         .await?;
-        for (version, sql) in [(1_i64, MIGRATIONS), (2, BETA_MIGRATIONS)] {
+        for (version, sql) in [
+            (1_i64, MIGRATIONS),
+            (2, BETA_MIGRATIONS),
+            (3, OPERATION_MIGRATIONS),
+        ] {
             let applied = sqlx::query("SELECT 1 FROM schema_migrations WHERE version = $1")
                 .bind(version)
                 .fetch_optional(&mut *transaction)
@@ -114,35 +118,20 @@ impl Db {
         Ok(())
     }
 
+    /// Creates the user, its only device and the first session atomically.
     #[allow(clippy::too_many_arguments)]
-    pub async fn register_with_invite(
+    pub async fn register_user(
         &self,
         username: &str,
         password_hash: &str,
-        invite_code_hash: &str,
         device_name: &str,
         public_key: &[u8],
         ed25519_pk: &[u8],
         access_token_hash: &str,
         refresh_token_hash: &str,
-    ) -> Result<Option<(UserRecord, DeviceRecord)>, sqlx::Error> {
+    ) -> Result<(UserRecord, DeviceRecord), sqlx::Error> {
         let mut transaction = self.pool.begin().await?;
         let user_id = uuid::Uuid::new_v4().to_string();
-        let invite = sqlx::query(
-            "UPDATE invitation_codes
-             SET consumed_at = now(), consumed_by = $1
-             WHERE code_hash = $2 AND consumed_at IS NULL AND expires_at > now()
-             RETURNING id",
-        )
-        .bind(&user_id)
-        .bind(invite_code_hash)
-        .fetch_optional(&mut *transaction)
-        .await?;
-        if invite.is_none() {
-            transaction.rollback().await?;
-            return Ok(None);
-        }
-
         let device_id = uuid::Uuid::new_v4().to_string();
         sqlx::query(
             "INSERT INTO users (id, username, password_hash, created_at)
@@ -172,7 +161,7 @@ impl Db {
         .await?;
         transaction.commit().await?;
 
-        Ok(Some((
+        Ok((
             UserRecord {
                 id: user_id,
                 username: username.to_string(),
@@ -185,7 +174,7 @@ impl Db {
                 ed25519_pk: ed25519_pk.to_vec(),
                 revoked: false,
             },
-        )))
+        ))
     }
 
     pub async fn get_user_by_username(
@@ -352,19 +341,6 @@ impl Db {
                 revoked: r.get("revoked"),
             })
             .collect())
-    }
-
-    pub async fn seed_invite_code(&self, code_hash: &str) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            "INSERT INTO invitation_codes (id, code_hash, expires_at, created_at)
-             VALUES ($1, $2, now() + interval '30 days', now())
-             ON CONFLICT (code_hash) DO NOTHING",
-        )
-        .bind(uuid::Uuid::new_v4().to_string())
-        .bind(code_hash)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
     }
 
     pub async fn revoke_device(&self, user_id: &str, device_id: &str) -> Result<(), sqlx::Error> {
@@ -581,6 +557,31 @@ impl Db {
             .collect())
     }
 
+    pub async fn upsert_trusted_contact(
+        &self,
+        owner_user_id: &str,
+        contact_user_id: &str,
+        fingerprint: &str,
+        state: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO trusted_contacts (id, owner_user_id, contact_user_id, fingerprint, state, updated_at)
+             VALUES ($1, $2, $3, $4, $5, now())
+             ON CONFLICT(owner_user_id, contact_user_id) DO UPDATE SET
+                fingerprint = excluded.fingerprint,
+                state = excluded.state,
+                updated_at = now()",
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(owner_user_id)
+        .bind(contact_user_id)
+        .bind(fingerprint)
+        .bind(state)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn hit_rate_limit(
         &self,
         key: &str,
@@ -780,6 +781,23 @@ CREATE TABLE beta_receipts (
 CREATE INDEX beta_receipts_sender_idx ON beta_receipts (sender_device_id, message_id);
 ";
 
+// Receipts outlive acknowledged ciphertext, so message operations locate the
+// original message and its server receive time through them.
+const OPERATION_MIGRATIONS: &str = "
+ALTER TABLE beta_receipts ADD COLUMN received_at BIGINT NOT NULL DEFAULT ((EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT);
+CREATE INDEX beta_receipts_message_idx ON beta_receipts (message_id);
+CREATE TABLE IF NOT EXISTS message_operations (
+ id TEXT PRIMARY KEY, target_id TEXT NOT NULL, kind TEXT NOT NULL,
+ revision BIGINT NOT NULL, accepted_at BIGINT NOT NULL, request TEXT NOT NULL,
+ UNIQUE(target_id, revision)
+);
+CREATE TABLE IF NOT EXISTS operation_deliveries (
+ operation_id TEXT NOT NULL REFERENCES message_operations(id), device_id TEXT NOT NULL,
+ body TEXT NOT NULL, acked BOOLEAN NOT NULL DEFAULT false, PRIMARY KEY(operation_id, device_id)
+);
+CREATE INDEX IF NOT EXISTS operation_pending_device ON operation_deliveries(device_id) WHERE acked = false;
+";
+
 impl OfflineMessageRecord {
     pub fn envelope(&self) -> liteseal_shared::protocol::SignedEnvelopeV2 {
         liteseal_shared::protocol::SignedEnvelopeV2 {
@@ -830,7 +848,7 @@ mod integration_tests {
             .fetch_one(db.pool())
             .await
             .unwrap();
-        assert_eq!(versions, 2);
+        assert_eq!(versions, 3);
         sqlx::query("SELECT 1 FROM offline_messages LIMIT 1")
             .execute(db.pool())
             .await
@@ -850,58 +868,34 @@ mod integration_tests {
         Db::connect(&url).await.expect("connect test Postgres")
     }
 
-    async fn register(db: &Db, username: &str, invite_hash: &str) -> Option<(String, String)> {
+    async fn register(db: &Db, username: &str) -> Result<(String, String), sqlx::Error> {
         let access = format!("access-{username}");
         let refresh = format!("refresh-{username}");
-        let result = db
-            .register_with_invite(
-                username,
-                "password-hash",
-                invite_hash,
-                "test device",
-                &[1; 32],
-                &[2; 32],
-                &access,
-                &refresh,
-            )
-            .await
-            .expect("registration query");
-        result.map(|(user, device)| (user.id, device.id))
+        db.register_user(
+            username,
+            "password-hash",
+            "test device",
+            &[1; 32],
+            &[2; 32],
+            &access,
+            &refresh,
+        )
+        .await
+        .map(|(user, device)| (user.id, device.id))
     }
 
     #[tokio::test]
     #[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
-    async fn invitation_and_refresh_consumption_are_atomic_under_concurrency() {
+    async fn registration_rolls_back_and_refresh_rotates_once_under_concurrency() {
         let db = test_db().await;
         let suffix = uuid::Uuid::new_v4();
-        let invite = format!("invite-{suffix}");
-        db.seed_invite_code(&invite).await.unwrap();
-
-        let first_db = db.clone();
-        let first_invite = invite.clone();
-        let first = tokio::spawn(async move {
-            register(&first_db, &format!("first-{suffix}"), &first_invite).await
-        });
-        let second_db = db.clone();
-        let second_invite = invite.clone();
-        let second = tokio::spawn(async move {
-            register(&second_db, &format!("second-{suffix}"), &second_invite).await
-        });
-        let results = [first.await.unwrap(), second.await.unwrap()];
-        assert_eq!(results.iter().filter(|result| result.is_some()).count(), 1);
-
-        let rollback_invite = format!("rollback-{suffix}");
-        db.seed_invite_code(&rollback_invite).await.unwrap();
-        let winner_user = if results[0].is_some() {
-            format!("first-{suffix}")
-        } else {
-            format!("second-{suffix}")
-        };
+        let user = format!("user-{suffix}");
+        let (user_id, _) = register(&db, &user).await.expect("first registration");
+        // A duplicate username fails without leaving a second device behind.
         assert!(db
-            .register_with_invite(
-                &winner_user,
+            .register_user(
+                &user,
                 "password-hash",
-                &rollback_invite,
                 "test device",
                 &[1; 32],
                 &[2; 32],
@@ -910,21 +904,10 @@ mod integration_tests {
             )
             .await
             .is_err());
-        let recovered = register(
-            &db,
-            &format!("rollback-recovered-{suffix}"),
-            &rollback_invite,
-        )
-        .await;
-        assert!(
-            recovered.is_some(),
-            "failed registration consumed its invite"
-        );
+        assert_eq!(db.list_user_devices(&user_id).await.unwrap().len(), 1);
 
-        let refresh_invite = format!("refresh-{suffix}");
-        db.seed_invite_code(&refresh_invite).await.unwrap();
         let refresh_user = format!("refresh-user-{suffix}");
-        register(&db, &refresh_user, &refresh_invite)
+        register(&db, &refresh_user)
             .await
             .expect("refresh test registration");
         let old_refresh = format!("refresh-{refresh_user}");

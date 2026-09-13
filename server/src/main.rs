@@ -4,6 +4,7 @@ mod db;
 #[cfg(test)]
 mod http_tests;
 mod keys;
+mod message_operations;
 mod relay;
 #[cfg(test)]
 mod relay_tests;
@@ -28,12 +29,8 @@ async fn main() {
     let db = Db::connect(&config.database_url)
         .await
         .expect("failed to connect to Postgres");
-    if let Some(invite_code) = &config.bootstrap_invite_code {
-        db.seed_invite_code(&auth::service::hash_token(invite_code))
-            .await
-            .expect("failed to seed bootstrap invitation code");
-    }
-    let state = AppState::new(db);
+    let mut state = AppState::new(db);
+    state.invite_codes = std::sync::Arc::new(config.invite_codes);
     let allowed_origin = HeaderValue::from_str(&config.cors_allow_origin)
         .expect("LITESEAL_CORS_ALLOW_ORIGIN is not a valid origin");
     let app = build_router(state, allowed_origin);
@@ -70,6 +67,10 @@ fn build_router(state: AppState, allowed_origin: HeaderValue) -> Router {
             }),
         )
         .route("/auth/register", post(auth::handlers::register))
+        .route(
+            "/auth/invite/validate",
+            post(auth::handlers::validate_invite),
+        )
         .route("/auth/login", post(auth::handlers::login))
         .route("/auth/refresh", post(auth::handlers::refresh))
         .route("/auth/logout", post(auth::handlers::logout))
@@ -87,6 +88,19 @@ fn build_router(state: AppState, allowed_origin: HeaderValue) -> Router {
         .route(
             "/users/:user_id/devices",
             get(keys::handlers::list_user_devices),
+        )
+        .route(
+            "/contacts/:user_id/trust",
+            post(keys::handlers::trust_contact),
+        )
+        .route(
+            "/message-operations",
+            get(message_operations::pending).post(message_operations::submit),
+        )
+        .route("/message-operations/ack", post(message_operations::ack))
+        .route(
+            "/message-operations/targets/:id",
+            get(message_operations::targets),
         )
         .route("/ws", get(relay::handlers::ws_handler))
         .layer(cors)

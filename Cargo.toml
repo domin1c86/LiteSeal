@@ -2,7 +2,7 @@
 members = [
     "shared",
     "core",
-    "src-tauri",
+    "desktop",
     "server",
 ]
 resolver = "2"

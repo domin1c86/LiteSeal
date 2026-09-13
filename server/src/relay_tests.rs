@@ -9,6 +9,64 @@ use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, Web
 
 type Socket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
+const TEST_INVITE: &str = "LITESEAL-TEST-INVITE";
+
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn message_operation_targets_survive_acknowledged_delivery() {
+    let server = TestServer::start().await;
+    let alice = server.register().await;
+    let bob = server.register().await;
+    let mut sender = server.connect(&alice).await;
+    let mut recipient = server.connect(&bob).await;
+    let original = envelope(&alice, &bob);
+    send(
+        &mut sender,
+        ClientMessage::SendV2 {
+            envelopes: vec![original.clone()],
+        },
+    )
+    .await;
+    let _ = receive(&mut sender).await;
+    let _ = receive(&mut recipient).await;
+    send(
+        &mut recipient,
+        ClientMessage::AckV2 {
+            message_id: original.message_id.clone(),
+            outcome: Default::default(),
+        },
+    )
+    .await;
+    assert!(matches!(receive(&mut sender).await,
+        ServerMessage::DeliveryUpdate { updates } if updates[0].status == "delivered"));
+    // The acknowledged ciphertext is gone; the receipt still names the target.
+    let response = http_client()
+        .get(format!(
+            "{}/message-operations/targets/{}",
+            server.url, original.message_id
+        ))
+        .query(&[("device_id", &alice.device_id)])
+        .bearer_auth(&alice.token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let targets: Vec<serde_json::Value> = response.json().await.unwrap();
+    assert_eq!(targets.len(), 1);
+    assert_eq!(targets[0]["device_id"], bob.device_id);
+    let response = http_client()
+        .get(format!(
+            "{}/message-operations/targets/{}",
+            server.url, original.message_id
+        ))
+        .query(&[("device_id", &bob.device_id)])
+        .bearer_auth(&bob.token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::CONFLICT);
+}
+
 #[tokio::test]
 #[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
 async fn receipts_survive_rejection_and_reject_conflicting_replays() {
@@ -225,10 +283,9 @@ impl TestServer {
         let database_url = std::env::var("LITESEAL_TEST_DATABASE_URL")
             .expect("set LITESEAL_TEST_DATABASE_URL to a dedicated test database");
         let db = Db::connect(&database_url).await.unwrap();
-        let app = build_router(
-            AppState::new(db.clone()),
-            HeaderValue::from_static("http://localhost:1420"),
-        );
+        let mut state = AppState::new(db.clone());
+        state.invite_codes = std::sync::Arc::new(vec![TEST_INVITE.to_string()]);
+        let app = build_router(state, HeaderValue::from_static("http://localhost:1420"));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let task = tokio::spawn(async move {
@@ -243,18 +300,13 @@ impl TestServer {
     }
 
     async fn register(&self) -> TestUser {
-        let invite = uuid::Uuid::new_v4().to_string();
-        self.db
-            .seed_invite_code(&auth::service::hash_token(&invite))
-            .await
-            .unwrap();
         let keys = crypto::generate_keypair().unwrap();
         let response = http_client()
             .post(format!("{}/auth/register", self.url))
             .json(&serde_json::json!({
                 "username": format!("beta{}", uuid::Uuid::new_v4().simple()),
                 "password": "Test-only-password-2026!",
-                "invite_code": invite,
+                "invite_code": TEST_INVITE,
                 "device_name": "test desktop",
                 "public_key": keys.public_key.to_vec(),
                 "ed25519_pk": keys.ed25519_pk.to_vec(),

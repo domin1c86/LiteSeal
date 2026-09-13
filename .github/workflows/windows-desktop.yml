@@ -1,0 +1,37 @@
+name: Windows Electron desktop
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install dependencies
+        run: npm ci
+      - name: Install libsodium
+        shell: pwsh
+        run: |
+          vcpkg install libsodium:x64-windows-static-md
+          "SODIUM_LIB_DIR=$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows-static-md/lib" >> $env:GITHUB_ENV
+      - name: Compile workspace
+        run: cargo check --locked --workspace
+      - name: Test desktop bridge and Rust workspace
+        run: npm test
+      - name: Build Windows installer and verify packaged resources
+        run: npm run dist:win
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LiteSeal-Windows-x64
+          path: |
+            release/*.exe
+            release/*.blockmap
+          if-no-files-found: error

@@ -11,6 +11,7 @@ use crate::{auth::service, state::AppState};
 pub struct RegisterRequest {
     pub username: String,
     pub password: String,
+    #[serde(default)]
     pub invite_code: String,
     #[serde(default = "default_device_name")]
     pub device_name: String,
@@ -32,6 +33,10 @@ pub async fn register(
     ConnectInfo(remote_addr): ConnectInfo<std::net::SocketAddr>,
     Json(req): Json<RegisterRequest>,
 ) -> Result<Json<RegisterResponse>, StatusCode> {
+    // Checked before any database access so a missing code can never create users.
+    if !state.accepts_invite(&req.invite_code) {
+        return Err(StatusCode::FORBIDDEN);
+    }
     let username = req.username.trim();
     if username.is_empty() {
         return Err(StatusCode::BAD_REQUEST);
@@ -48,10 +53,9 @@ pub async fn register(
     let refresh_token = service::generate_token();
     let (user, device) = state
         .db
-        .register_with_invite(
+        .register_user(
             username,
             &password_hash,
-            &service::hash_token(req.invite_code.trim()),
             req.device_name.trim(),
             &public_key,
             &ed25519_pk,
@@ -70,8 +74,7 @@ pub async fn register(
             } else {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
-        })?
-        .ok_or(StatusCode::FORBIDDEN)?;
+        })?;
 
     tracing::info!("User registered: {} ({})", username, user.id);
     let _ = state
@@ -356,4 +359,87 @@ async fn enforce_auth_rate_limit(
 
 fn default_device_name() -> String {
     "Windows desktop".to_string()
+}
+
+#[derive(Deserialize)]
+pub struct InviteRequest {
+    pub invite_code: String,
+}
+
+pub async fn validate_invite(
+    State(state): State<AppState>,
+    Json(req): Json<InviteRequest>,
+) -> Json<bool> {
+    Json(state.accepts_invite(&req.invite_code))
+}
+
+#[cfg(test)]
+mod invite_tests {
+    use super::*;
+    use axum::{routing::post, Router};
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn invitation_gate_is_reusable_and_cannot_be_bypassed_over_http() {
+        // A lazy pool deliberately has no database: rejected requests must never create users.
+        let db = crate::db::Db::connect_lazy("postgres://localhost/liteseal_invite_test").unwrap();
+        let mut state = AppState::new(db);
+        assert!(!state.accepts_invite("LITESEAL-WIN-ALPHA"));
+        assert!(!state.accepts_invite(""));
+        state.invite_codes = Arc::new(vec!["LITESEAL-WIN-ALPHA".into()]);
+        let app = Router::new()
+            .route("/auth/invite/validate", post(validate_invite))
+            .route("/auth/register", post(register))
+            .with_state(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let task = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            .unwrap()
+        });
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        for _ in 0..3 {
+            let valid = client
+                .post(format!("{base}/auth/invite/validate"))
+                .json(&serde_json::json!({"invite_code": " LITESEAL-WIN-ALPHA "}))
+                .send()
+                .await
+                .unwrap()
+                .json::<bool>()
+                .await
+                .unwrap();
+            assert!(valid, "validation must not consume reusable invitations");
+        }
+        for code in ["", "invalid", "liteseal-win-alpha"] {
+            let valid = client
+                .post(format!("{base}/auth/invite/validate"))
+                .json(&serde_json::json!({"invite_code": code}))
+                .send()
+                .await
+                .unwrap()
+                .json::<bool>()
+                .await
+                .unwrap();
+            assert!(!valid);
+            let response = client
+                .post(format!("{base}/auth/register"))
+                .json(&serde_json::json!({"username": "test", "password": "password123", "invite_code": code}))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        }
+        let response = client
+            .post(format!("{base}/auth/register"))
+            .json(&serde_json::json!({"username": "test", "password": "password123"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        task.abort();
+    }
 }

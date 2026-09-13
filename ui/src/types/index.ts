@@ -53,41 +53,6 @@ export interface SendMessageResult {
   message_id: string;
 }
 
-export interface SessionView {
-  user_id: string;
-  username: string;
-  device_id: string;
-  server_url: string;
-  connected: boolean;
-}
-
-export interface BootstrapState {
-  session: SessionView | null;
-  offline: boolean;
-}
-
-export type AuthOutcome =
-  | { outcome: "authenticated"; session: SessionView }
-  | { outcome: "device_replacement_required" };
-
-export interface DisplayMessage {
-  id: string;
-  conversation_id: string;
-  sender_id: string;
-  sender_device_id: string;
-  sender_seq: number;
-  timestamp: number;
-  plaintext: string;
-  local_state: string;
-  protocol_version: number;
-  verification_state: string;
-}
-
-export interface PollEventsResult {
-  messages: DisplayMessage[];
-  events: RelayEvent[];
-}
-
 export interface EncryptedPayload {
   recipient_user_id: string;
   recipient_device_id: string;
@@ -165,3 +130,14 @@ export interface StorageStats {
   conversation_count: number;
   total_bytes: number;
 }
+
+export interface ConversationSummary {
+  conversation_id: string;
+  latest: Message;
+  unread_count: number;
+}
+
+export interface ConversationPreference { peer_id: string; pinned: boolean; archived: boolean; draft: number[] }
+export interface Draft { text: string; messageId?: string; reply?: import("../lib/messageContent").MessageReference; forwarded?: import("../lib/messageContent").MessageReference }
+
+export interface MessageOperation { id: string; target_id: string; kind: "edit" | "revoke"; revision: number; status: "pending" | "accepted" | "rejected" | "unverified"; content: string | null; error: string | null }

@@ -26,6 +26,7 @@ pub struct AppState {
     connections: Arc<DashMap<String, Connection>>,
     next_generation: Arc<AtomicU64>,
     pub db: Db,
+    pub invite_codes: Arc<Vec<String>>,
 }
 
 impl AppState {
@@ -34,7 +35,13 @@ impl AppState {
             connections: Arc::new(DashMap::new()),
             next_generation: Arc::new(AtomicU64::new(1)),
             db,
+            invite_codes: Arc::new(Vec::new()),
         }
+    }
+
+    pub fn accepts_invite(&self, code: &str) -> bool {
+        let code = code.trim();
+        !code.is_empty() && self.invite_codes.iter().any(|allowed| allowed == code)
     }
 
     pub fn register(&self, device_id: String, sender: MessageSender) -> u64 {

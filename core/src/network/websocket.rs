@@ -1,5 +1,5 @@
 use futures_util::{SinkExt, StreamExt};
-use liteseal_shared::protocol::{ClientMessage, EncryptedPayload, ServerMessage, SignedEnvelopeV2};
+use liteseal_shared::protocol::{AckOutcome, ClientMessage, ServerMessage, SignedEnvelopeV2};
 use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex};
@@ -13,6 +13,8 @@ pub struct WebSocketClient {
     write: Arc<
         Mutex<futures_util::stream::SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>,
     >,
+    user_id: String,
+    device_id: String,
     recv_task: Option<tokio::task::JoinHandle<()>>,
 }
 
@@ -23,8 +25,9 @@ impl WebSocketClient {
         token: String,
         device_id: String,
     ) -> Result<(Self, MessageReceiver), String> {
-        let (ws_stream, _) = connect_async(url)
+        let (ws_stream, _) = timeout(Duration::from_secs(10), connect_async(url))
             .await
+            .map_err(|_| "WebSocket connection timed out".to_string())?
             .map_err(|e| format!("WebSocket connect failed: {}", e))?;
 
         info!("Connected to relay server: {}", url);
@@ -65,64 +68,65 @@ impl WebSocketClient {
 
         let (tx, rx) = mpsc::unbounded_channel::<ServerMessage>();
 
+        let heartbeat_write = write.clone();
         let recv_task = tokio::spawn(async move {
-            while let Some(Ok(msg)) = read.next().await {
-                match msg {
-                    Message::Text(text) => match serde_json::from_str::<ServerMessage>(&text) {
-                        Ok(server_msg) => {
-                            if tx.send(server_msg).is_err() {
-                                break;
-                            }
-                        }
-                        Err(e) => {
-                            error!("Failed to parse server message: {}", e);
-                        }
-                    },
-                    Message::Close(_) => {
-                        info!("WebSocket closed by server");
-                        break;
+            let mut heartbeat = tokio::time::interval_at(
+                tokio::time::Instant::now() + Duration::from_secs(15),
+                Duration::from_secs(15),
+            );
+            let mut last_received = tokio::time::Instant::now();
+            loop {
+                tokio::select! {
+                    _ = heartbeat.tick() => {
+                        if last_received.elapsed() > Duration::from_secs(45) { break; }
+                        let ping = timeout(Duration::from_secs(5), async {
+                            heartbeat_write.lock().await.send(Message::Ping(Vec::new())).await
+                        }).await;
+                        if !matches!(ping, Ok(Ok(()))) { break; }
                     }
-                    _ => {}
+                    message = read.next() => {
+                        let Some(Ok(message)) = message else { break };
+                        last_received = tokio::time::Instant::now();
+                        match message {
+                            Message::Text(text) => match serde_json::from_str::<ServerMessage>(&text) {
+                                Ok(message) => { if tx.send(message).is_err() { break; } }
+                                Err(_) => { error!("Invalid relay message"); break; }
+                            },
+                            Message::Close(_) => break,
+                            _ => {}
+                        }
+                    }
                 }
             }
+            // Dropping tx lets the foreground poll detect disconnected sockets.
         });
 
         Ok((
             Self {
                 write,
+                user_id,
+                device_id,
                 recv_task: Some(recv_task),
             },
             rx,
         ))
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub async fn send_message(
-        &self,
-        message_id: String,
-        conversation_id: String,
-        ciphertext: Vec<u8>,
-        signature: Vec<u8>,
-        sender_device_id: String,
-        sender_seq: i64,
-        prev_hash: Vec<u8>,
-        payloads: Vec<EncryptedPayload>,
-    ) -> Result<(), String> {
-        if payloads.is_empty() {
+    /// The identity this connection authenticated as.
+    pub fn user_id(&self) -> &str {
+        &self.user_id
+    }
+
+    pub fn device_id(&self) -> &str {
+        &self.device_id
+    }
+
+    pub async fn send_v2(&self, envelopes: Vec<SignedEnvelopeV2>) -> Result<(), String> {
+        if envelopes.is_empty() {
             return Err("Message has no recipient payloads".to_string());
         }
-        let msg = ClientMessage::Send {
-            message_id,
-            conversation_id,
-            ciphertext,
-            signature,
-            sender_device_id,
-            sender_seq,
-            prev_hash,
-            payloads,
-        };
-        let json = serde_json::to_string(&msg).map_err(|e| e.to_string())?;
-
+        let json = serde_json::to_string(&ClientMessage::SendV2 { envelopes })
+            .map_err(|e| e.to_string())?;
         self.write
             .lock()
             .await
@@ -131,23 +135,10 @@ impl WebSocketClient {
             .map_err(|e| format!("Failed to send message: {}", e))
     }
 
-    pub async fn send_v2(&self, envelope: SignedEnvelopeV2) -> Result<(), String> {
-        let json = serde_json::to_string(&ClientMessage::SendV2 {
-            envelopes: vec![envelope],
-        })
-        .map_err(|e| e.to_string())?;
-        self.write
-            .lock()
-            .await
-            .send(Message::Text(json))
-            .await
-            .map_err(|e| format!("Failed to send message: {e}"))
-    }
-
-    pub async fn send_ack(&self, message_id: String) -> Result<(), String> {
+    pub async fn send_ack(&self, message_id: String, outcome: AckOutcome) -> Result<(), String> {
         let msg = ClientMessage::AckV2 {
             message_id,
-            outcome: Default::default(),
+            outcome,
         };
         let json = serde_json::to_string(&msg).map_err(|e| e.to_string())?;
 
@@ -160,7 +151,18 @@ impl WebSocketClient {
     }
 
     pub async fn disconnect(&mut self) {
-        let _ = self.write.lock().await.send(Message::Close(None)).await;
+        let _ = timeout(Duration::from_secs(2), async {
+            self.write.lock().await.send(Message::Close(None)).await
+        })
+        .await;
+        if let Some(task) = self.recv_task.take() {
+            task.abort();
+        }
+    }
+}
+
+impl Drop for WebSocketClient {
+    fn drop(&mut self) {
         if let Some(task) = self.recv_task.take() {
             task.abort();
         }

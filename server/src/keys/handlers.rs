@@ -148,3 +148,33 @@ pub async fn list_user_devices(
             .collect(),
     ))
 }
+
+#[derive(Deserialize)]
+pub struct TrustContactRequest {
+    pub fingerprint: String,
+    pub state: String,
+}
+
+pub async fn trust_contact(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(contact_user_id): Path<String>,
+    Json(req): Json<TrustContactRequest>,
+) -> Result<StatusCode, StatusCode> {
+    match req.state.as_str() {
+        "unverified" | "verified" | "key_changed" => {}
+        _ => return Err(StatusCode::BAD_REQUEST),
+    }
+    let owner_user_id = crate::auth::handlers::user_from_bearer(&state, &headers).await?;
+    state
+        .db
+        .upsert_trusted_contact(
+            &owner_user_id,
+            &contact_user_id,
+            req.fingerprint.trim(),
+            &req.state,
+        )
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(StatusCode::NO_CONTENT)
+}

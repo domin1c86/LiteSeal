@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useTauri } from "../hooks/useTauri";
+import { useDesktop } from "../hooks/useDesktop";
 import type { StorageStats } from "../types";
 
 interface StorageManagerProps {
@@ -19,7 +19,7 @@ export default function StorageManager({ onClose }: StorageManagerProps) {
   const [clearing, setClearing] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const { getStorageStats, clearExpiredMessages, clearDownloadedAttachments } =
-    useTauri();
+    useDesktop();
 
   useEffect(() => {
     getStorageStats()

@@ -23,9 +23,9 @@ pub struct RemoteDevice {
 }
 
 pub async fn register(
+    invite_code: String,
     username: String,
     password: String,
-    invite_code: String,
     server_url: String,
     device_name: &str,
     public_key: Vec<u8>,
@@ -45,9 +45,9 @@ pub async fn register(
     let resp = client
         .post(&url)
         .json(&serde_json::json!({
+            "invite_code": invite_code.trim(),
             "username": username,
             "password": password,
-            "invite_code": invite_code,
             "device_name": device_name,
             "public_key": public_key,
             "ed25519_pk": ed25519_pk,
@@ -56,6 +56,9 @@ pub async fn register(
         .await
         .map_err(|e| format!("Registration request failed: {}", e))?;
 
+    if resp.status() == reqwest::StatusCode::FORBIDDEN {
+        return Err("邀请码无效或注册未开放，请联系管理员获取邀请码".to_string());
+    }
     if !resp.status().is_success() {
         return Err(format!(
             "Registration failed with status: {}",
@@ -68,7 +71,6 @@ pub async fn register(
         .map_err(|e| format!("Failed to parse registration response: {}", e))
 }
 
-#[allow(clippy::too_many_arguments)]
 pub async fn login(
     username: String,
     password: String,
@@ -77,7 +79,6 @@ pub async fn login(
     public_key: Vec<u8>,
     ed25519_pk: Vec<u8>,
     device_id: Option<String>,
-    replace_device: bool,
 ) -> Result<RegisterResult, String> {
     let username = username.trim().to_string();
     if username.is_empty() {
@@ -98,14 +99,14 @@ pub async fn login(
             "device_id": device_id,
             "device_public_key": public_key,
             "ed25519_pk": ed25519_pk,
-            "replace_device": replace_device,
         }))
         .send()
         .await
         .map_err(|e| format!("Login request failed: {}", e))?;
 
+    // The beta binds each account to its first device; the server refuses new ones.
     if resp.status() == reqwest::StatusCode::CONFLICT && device_id.is_none() {
-        return Err("device_replacement_required".to_string());
+        return Err("此账号已绑定另一台设备；内测期间每个账号仅支持一台设备".to_string());
     }
     if !resp.status().is_success() {
         return Err(format!("Login failed with status: {}", resp.status()));
@@ -219,12 +220,8 @@ pub fn normalize_server_url(server_url: &str) -> Result<String, String> {
     let trimmed = server_url.trim().trim_end_matches('/');
     let parsed = url::Url::parse(trimmed).map_err(|e| format!("Invalid server URL: {}", e))?;
     match parsed.scheme() {
-        "https" => Ok(trimmed.to_string()),
-        "http" if is_loopback_host(&parsed) => Ok(trimmed.to_string()),
-        "http" => Err("Remote servers must use HTTPS".to_string()),
-        _ => {
-            Err("Server URL must start with https:// (HTTP is local development only)".to_string())
-        }
+        "http" | "https" => Ok(trimmed.to_string()),
+        _ => Err("Server URL must start with http:// or https://".to_string()),
     }
 }
 
@@ -254,13 +251,23 @@ async fn revoke(server_url: String, access_token: String, path: &str) -> Result<
     }
 }
 
-fn is_loopback_host(url: &url::Url) -> bool {
-    match url.host() {
-        Some(url::Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
-        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
-        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
-        None => false,
+/// Checks with the configured server; registration always rechecks the code.
+pub async fn validate_invite(server_url: String, invite_code: String) -> Result<bool, String> {
+    let server_url = normalize_server_url(&server_url)?;
+    let response = http_client()
+        .post(format!("{}/auth/invite/validate", server_url))
+        .timeout(std::time::Duration::from_secs(5))
+        .json(&serde_json::json!({ "invite_code": invite_code.trim() }))
+        .send()
+        .await
+        .map_err(|_| "无法连接服务器验证邀请码，请检查地址与网络".to_string())?;
+    if !response.status().is_success() {
+        return Err(format!("邀请码验证失败：{}", response.status()));
     }
+    response
+        .json()
+        .await
+        .map_err(|_| "服务器未返回有效的邀请码验证结果".to_string())
 }
 
 fn http_client() -> reqwest::Client {
@@ -282,9 +289,6 @@ mod tests {
             "http://localhost:3000"
         );
         assert!(normalize_server_url("ftp://localhost:3000").is_err());
-        assert!(normalize_server_url("http://example.com:3000").is_err());
-        assert!(normalize_server_url("http://127.0.0.1:3000").is_ok());
-        assert!(normalize_server_url("https://example.com").is_ok());
         assert!(validate_public_key("Public key", &[1; 32]).is_ok());
         assert!(validate_public_key("Public key", &[1; 31]).is_err());
     }

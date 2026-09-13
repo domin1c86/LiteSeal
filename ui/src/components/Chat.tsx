@@ -1,41 +1,229 @@
-import { useState, useEffect, useRef, useCallback } from "react";
-import { useTauri } from "../hooks/useTauri";
+import { latestOperations } from "../lib/messageOperations";
+import { decodeContent, encodeContent } from "../lib/messageContent";
+import { useState, useEffect, useRef, useLayoutEffect } from "react";
+import { useDesktop } from "../hooks/useDesktop";
+import { dmConversationId } from "../lib/conversation";
 import { trustLabel } from "./ContactList";
 import type { RelayBatch } from "../App";
-import type { DisplayMessage, Contact, RelayEvent } from "../types";
+import type { Draft, MessageOperation, Message, IncomingMessage, Contact, RelayEvent } from "../types";
 
 interface ChatProps {
+  draft: Draft;
+  onForward: (peerId: string, draft: Draft) => Promise<void>;
+  onDraftChange: (draft: Draft) => Promise<void>;
+  online: boolean;
   conversationId: string | null;
   userId: string;
+  deviceId: string;
+  token: string;
+  serverUrl: string;
+  secretKey: number[];
+  signingKey: number[];
   contacts: Contact[];
   relayBatch: RelayBatch | null;
   onContactsChanged: () => void;
 }
 
-export default function Chat({ conversationId, userId, contacts, relayBatch, onContactsChanged }: ChatProps) {
-  const [messages, setMessages] = useState<DisplayMessage[]>([]);
-  const [input, setInput] = useState("");
+export default function Chat({ draft, onDraftChange, onForward, online, conversationId, userId, deviceId, token, serverUrl, secretKey, signingKey, contacts, relayBatch, onContactsChanged }: ChatProps) {
+  const [messages, setMessages] = useState<Message[]>([]);
+  const input = draft.text;
+  const [operationsLoaded, setOperationsLoaded] = useState(false);
+  const [operations, setOperations] = useState<MessageOperation[]>([]);
+  const [operationError, setOperationError] = useState<string | null>(null);
+  const [operationRefresh, setOperationRefresh] = useState(0);
+  const [operationBusy, setOperationBusy] = useState(false);
+  const [operationDialog, setOperationDialog] = useState<{ targetId: string; kind: "edit" | "revoke"; content: ReturnType<typeof decodeContent>; revision: number } | null>(null);
+  const [editedText, setEditedText] = useState("");
+  const { getMessageOperations, submitMessageOperation, syncMessageOperations } = useDesktop();
+  const latest = latestOperations(operations);
+  const deletedIds = useRef(new Set<string>());
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const { deleteMessageLocally, getLocallyDeletedIds } = useDesktop();
+  const { copyMessageText } = useDesktop();
+  const [actionStatus, setActionStatus] = useState<string | null>(null);
+  const [forwardDraft, setForwardDraft] = useState<Draft | null>(null);
+  const [forwardTarget, setForwardTarget] = useState("");
+  const [forwarding, setForwarding] = useState(false);
+  const alive = useRef(true);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+  const [hasOlder, setHasOlder] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const cursor = useRef<{ timestamp: number; id: string } | null>(null);
+  const historyGeneration = useRef(0);
+  const scrollArea = useRef<HTMLDivElement>(null);
+  const scrollRestore = useRef<{ height: number; top: number } | null>(null);
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const { sendText, getMessages, setContactTrust } = useTauri();
+  const { retryMessage, sendMessage, getUserDevices, getLocalMessagePage, encryptMessage, decryptMessage, signMessage, setContactTrust } = useDesktop();
   const activeContact = contacts.find((c) => c.user_id === conversationId);
+  // conversationId prop is the peer's user id; storage/relay use the canonical DM id.
+  const storageConversationId = conversationId ? dmConversationId(userId, conversationId) : null;
+
+  const { markMessagesRead } = useDesktop();
+  const [readError, setReadError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!operationsLoaded) return;
+    let active = true;
+    let busy = false;
+    const mark = async () => {
+      if (busy || !document.hasFocus() || document.visibilityState !== "visible") return;
+      busy = true;
+      try {
+        const ids = messages.filter(message => message.sender_id !== userId).map(message => message.id);
+        for (let offset = 0; offset < ids.length && active; offset += 1000) {
+          await markMessagesRead(userId, ids.slice(offset, offset + 1000));
+        }
+        if (active) setReadError(null);
+      } catch (error) { if (active) setReadError(`未读状态保存失败：${String(error)}`); }
+      finally { busy = false; }
+    };
+    void mark();
+    window.addEventListener("focus", mark);
+    document.addEventListener("visibilitychange", mark);
+    return () => { active = false; window.removeEventListener("focus", mark); document.removeEventListener("visibilitychange", mark); };
+  }, [messages, userId, operationsLoaded]);
 
   useEffect(() => {
-    if (!conversationId) return;
-    setLoading(true);
-    setSendError(null);
-    getMessages(conversationId, 50, 0)
-      .then(setMessages)
-      .catch(console.error)
-      .finally(() => setLoading(false));
-  }, [conversationId, getMessages]);
+    if (!storageConversationId) return;
+    let active = true;
+    getMessageOperations(storageConversationId).then(result => {
+      if (active) { setOperations(result); setOperationError(null); setOperationsLoaded(true); }
+    }).catch(error => { if (active) { setOperationError(String(error)); setOperationsLoaded(false); } });
+    return () => { active = false; };
+  }, [storageConversationId, relayBatch, contacts, operationRefresh, messages.length]);
 
-  const applyRelayEvents = useCallback((events: RelayEvent[]) => {
+  function incomingToMessage(m: IncomingMessage, ciphertext: number[]): Message {
+    return {
+      id: m.message_id,
+      conversation_id: m.conversation_id,
+      sender_id: m.from,
+      sender_device_id: m.sender_device_id,
+      sender_seq: m.sender_seq,
+      timestamp: m.timestamp,
+      message_type: "text",
+      ciphertext,
+      signature: m.signature,
+      prev_hash: m.prev_hash ?? [],
+      local_state: m.local_state ?? "received",
+    };
+  }
+
+  async function decodeHistory(items: Message[]) {
+    return Promise.all(items.map(async (message) => {
+      const peer = contacts.find(contact => contact.user_id === (message.sender_id === userId ? conversationId : message.sender_id));
+      if (!peer) return { ...message, ciphertext: Array.from(new TextEncoder().encode("[sender not in contacts]")) };
+      try {
+        const plaintext = await decryptMessage(message.ciphertext, peer.public_key, secretKey);
+        return { ...message, ciphertext: plaintext };
+      } catch { return { ...message, ciphertext: Array.from(new TextEncoder().encode("[encrypted]")) }; }
+    }));
+  }
+
+  useEffect(() => {
+    if (!storageConversationId) return;
+    let active = true;
+    historyGeneration.current += 1;
+    setLoadingOlder(false);
+    setLoading(true); setHistoryError(null); cursor.current = null;
+    Promise.all([getLocalMessagePage(storageConversationId, 51, undefined, undefined, userId), getLocallyDeletedIds(userId, storageConversationId)]).then(async ([rows, removed]) => {
+      if (!active) return;
+      for (const id of removed) deletedIds.current.add(id);
+      const page = rows.slice(0, 50);
+      const decoded = await decodeHistory([...page].reverse());
+      if (!active) return;
+      cursor.current = page.length ? page[page.length - 1] : null;
+      setHasOlder(rows.length > 50);
+      setMessages(previous => {
+        const known = new Set(decoded.map(item => item.id));
+        return [...decoded, ...previous.filter(item => !known.has(item.id))].filter(item => !deletedIds.current.has(item.id)).sort((a, b) => a.timestamp - b.timestamp || a.id.localeCompare(b.id));
+      });
+    }).catch(error => { if (active) setHistoryError(String(error)); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [storageConversationId, secretKey, userId, contacts]);
+
+  async function loadOlder() {
+    if (!storageConversationId || !cursor.current || loadingOlder || loading) return;
+    const generation = historyGeneration.current;
+    setLoadingOlder(true); setHistoryError(null);
+    try {
+      const rows = await getLocalMessagePage(storageConversationId, 51, cursor.current.timestamp, cursor.current.id, userId);
+      const page = rows.slice(0, 50);
+      const decoded = await decodeHistory([...page].reverse());
+      if (!alive.current || generation !== historyGeneration.current) return;
+      cursor.current = page.length ? page[page.length - 1] : cursor.current;
+      setHasOlder(rows.length > 50);
+      const area = scrollArea.current;
+      if (area) scrollRestore.current = { height: area.scrollHeight, top: area.scrollTop };
+      setMessages(previous => {
+        const known = new Set(previous.map(item => item.id));
+        return [...decoded.filter(item => !known.has(item.id)), ...previous].filter(item => !deletedIds.current.has(item.id));
+      });
+    } catch (error) { if (alive.current && generation === historyGeneration.current) setHistoryError(String(error)); }
+    finally { if (alive.current && generation === historyGeneration.current) setLoadingOlder(false); }
+  }
+
+  useEffect(() => {
+    if (!conversationId || !relayBatch) return;
+    (async () => {
+      try {
+        applyRelayEvents(relayBatch.events);
+        const incoming: IncomingMessage[] = relayBatch.messages;
+        if (incoming.length > 0 && storageConversationId) {
+          const removed = await getLocallyDeletedIds(userId, storageConversationId);
+          if (!alive.current) return;
+          for (const id of removed) deletedIds.current.add(id);
+          const decoded = await Promise.all(
+            incoming
+              .filter((m) => m.conversation_id === storageConversationId && !deletedIds.current.has(m.message_id))
+              .map(async (m) => {
+                const sender = contacts.find((c) => c.user_id === m.from);
+                if (!sender) {
+                  return incomingToMessage(
+                    m,
+                    Array.from(new TextEncoder().encode("[sender not in contacts]"))
+                  );
+                }
+
+                // Rust verified the signed envelope before storing and relaying it here.
+                if (m.local_state === "integrity_failed") {
+                  return incomingToMessage(
+                    m,
+                    Array.from(new TextEncoder().encode("[integrity check failed]"))
+                  );
+                }
+
+                try {
+                  const plaintext = await decryptMessage(m.ciphertext, sender.public_key, secretKey);
+                  return incomingToMessage(m, plaintext);
+                } catch {
+                  return incomingToMessage(
+                    m,
+                    Array.from(new TextEncoder().encode("[decryption failed]"))
+                  );
+                }
+              })
+          );
+          setMessages((prev) => {
+            const seen = new Set(prev.map((msg) => msg.id));
+            const updates = new Map(decoded.map((msg) => [msg.id, msg]));
+            return [...prev.map((msg) => updates.get(msg.id) ?? msg), ...decoded.filter((msg) => !seen.has(msg.id))].filter(msg => !deletedIds.current.has(msg.id));
+          });
+        }
+      } catch {
+        // ignore batch processing errors
+      }
+    })();
+  }, [relayBatch]);
+
+  function applyRelayEvents(events: RelayEvent[]) {
     if (events.length === 0) return;
 
-    const stateByMessage = new Map<string, string>();
+    const stateByMessage = new Map<string, Message["local_state"]>();
     for (const event of events) {
       if (event.type === "delivered") {
         stateByMessage.set(event.message_id, "delivered");
@@ -52,54 +240,84 @@ export default function Chat({ conversationId, userId, contacts, relayBatch, onC
       setMessages((prev) =>
         prev.map((msg) =>
           stateByMessage.has(msg.id)
-            ? { ...msg, local_state: stateByMessage.get(msg.id) ?? msg.local_state }
+            ? { ...msg, local_state: stateByMessage.get(msg.id) }
             : msg
         )
       );
     }
-  }, []);
+  }
 
-  useEffect(() => {
-    if (!conversationId || !relayBatch) return;
-    applyRelayEvents(relayBatch.events);
-    const incoming = relayBatch.messages.filter(
-      (message) => message.sender_id === conversationId
-    );
-    setMessages((previous) => {
-      const seen = new Set(previous.map((message) => message.id));
-      return [...previous, ...incoming.filter((message) => !seen.has(message.id))];
-    });
-  }, [relayBatch, conversationId, applyRelayEvents]);
-
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  useLayoutEffect(() => {
+    const area = scrollArea.current;
+    if (area && scrollRestore.current) {
+      area.scrollTop = scrollRestore.current.top + area.scrollHeight - scrollRestore.current.height;
+      scrollRestore.current = null;
+    } else { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }
   }, [messages]);
 
   async function handleSend(e: React.FormEvent) {
     e.preventDefault();
-    if (!input.trim() || !conversationId) return;
+    if (!online || sending || !input.trim() || !conversationId) return;
 
     const text = input.trim();
-    setInput("");
+    const messageId = draft.messageId ?? crypto.randomUUID();
     setSendError(null);
     setSending(true);
 
     try {
-      const result = await sendText(conversationId, text);
+      await onDraftChange({ ...draft, text: input, messageId });
+      const contact = contacts.find((c) => c.user_id === conversationId);
+      if (!contact) throw new Error("Recipient not found in contacts");
 
+      const devices = (await getUserDevices(serverUrl, conversationId, token)).filter(
+        (d) => !d.revoked && d.public_key.length === 32
+      );
+      if (devices.length === 0) throw new Error("Recipient has no active devices");
+
+      const encoder = new TextEncoder();
+      const plaintext = Array.from(encoder.encode(encodeContent({ text, reply: draft.reply, forwarded: draft.forwarded })));
+
+      // Local copy encrypted to the contact's stored key so history stays readable.
+      const ciphertext = await encryptMessage(plaintext, contact.public_key, secretKey);
+      const signature = await signMessage(ciphertext, signingKey);
+
+      const payloads = [];
+      for (const device of devices) {
+        const deviceCiphertext = await encryptMessage(plaintext, device.public_key, secretKey);
+        const deviceSignature = await signMessage(deviceCiphertext, signingKey);
+        payloads.push({
+          recipient_user_id: conversationId,
+          recipient_device_id: device.id,
+          ciphertext: deviceCiphertext,
+          signature: deviceSignature,
+        });
+      }
+
+      const result = await sendMessage(
+        userId,
+        ciphertext,
+        signature,
+        deviceId,
+        payloads,
+        messageId
+      );
+
+      await onDraftChange({ text: "" });
+      if (!alive.current) return;
       setMessages((prev) => [
-        ...prev,
+        ...prev.filter(message => message.id !== result.message_id),
         {
           id: result.message_id,
-          conversation_id: conversationId,
+          conversation_id: storageConversationId ?? conversationId,
           sender_id: userId,
-          sender_device_id: "local",
+          sender_device_id: deviceId,
           sender_seq: 0,
           timestamp: Date.now(),
-          plaintext: text,
-          local_state: "pending_v2",
-          protocol_version: 2,
-          verification_state: "authored_v2",
+          message_type: "text",
+          local_state: "pending",
+          ciphertext: plaintext,
+          signature: [],
+          prev_hash: [],
         },
       ]);
     } catch (err) {
@@ -153,12 +371,31 @@ export default function Chat({ conversationId, userId, contacts, relayBatch, onC
           )}
         </div>
       </div>
-      <div className="chat-messages" style={styles.messages}>
+      <div ref={scrollArea} className="chat-messages" style={styles.messages}>
+        {hasOlder && <button disabled={loadingOlder || loading} onClick={loadOlder}>{loadingOlder ? "正在加载…" : "加载更早消息"}</button>}
+        {historyError && <div role="alert">历史加载失败：{historyError}</div>}
         {loading && <p style={styles.loadingText}>loading…</p>}
-        {messages.map((msg) => {
+        {!operationsLoaded && <p role="status">正在读取本机消息变更…</p>}
+        {operationsLoaded && messages.map((msg) => {
           const isMine = msg.sender_id === userId;
+          let text = "";
+          try {
+            text = new TextDecoder().decode(new Uint8Array(msg.ciphertext));
+          } catch {
+            text = "[encrypted]";
+          }
+          const operation = latest.get(msg.id);
+          const revoked = operation?.kind === "revoke";
+          const content = decodeContent(operation?.kind === "edit" && operation.content !== null ? operation.content : text);
+          const pending = operations.some(item => item.target_id === msg.id && item.status === "pending");
+          const notices = operations.filter(item => item.target_id === msg.id && item.status !== "accepted" && item.revision >= (operation?.revision ?? 0));
+          const canModify = isMine && msg.sender_device_id === deviceId && Date.now() - msg.timestamp <= 48 * 60 * 60 * 1000
+            && !revoked && !pending && online && !operationBusy && !sending && !["pending", "failed"].includes(msg.local_state ?? "");
+          const sender = isMine ? userId : contacts.find(contact => contact.user_id === msg.sender_id)?.username ?? msg.sender_id;
+          const reference = { messageId: msg.id, sender: sender.slice(0, 256), text: content.text.slice(0, 500) };
           return (
             <div
+              id={`message-${msg.id}`}
               key={msg.id}
               style={{
                 ...styles.messageRow,
@@ -171,19 +408,40 @@ export default function Chat({ conversationId, userId, contacts, relayBatch, onC
                   ...(isMine ? styles.bubbleMine : styles.bubbleTheirs),
                 }}
               >
-                <span style={styles.messageText}>{msg.plaintext}</span>
-                {msg.protocol_version === 1 && (
-                  <span style={styles.protocolLabel}>legacy v1 · ciphertext signature only</span>
-                )}
-                {msg.verification_state.includes("invalid") && (
-                  <span style={styles.protocolLabel}>{msg.verification_state}</span>
-                )}
+                {!revoked && content.reply && <button style={{ display: "block", maxWidth: "100%", textAlign: "left", whiteSpace: "pre-wrap" }} onClick={() => {
+                  const target = document.getElementById(`message-${content.reply!.messageId}`);
+                  if (target) target.scrollIntoView({ block: "center", behavior: "smooth" });
+                  else setActionStatus("原消息未加载，请先加载更早消息；引用快照仍可查看。");
+                }}>回复 {content.reply.sender}：{content.reply.text}</button>}
+                {!revoked && content.forwarded && <div style={{ fontSize: 12 }}>转发内容（来源由转发者提供）：{content.forwarded.sender}</div>}
+                <span style={styles.messageText}>{revoked ? "此消息已被发送者撤回" : content.text}</span>
+                {operation?.kind === "edit" && <span style={styles.timestamp}>已编辑 · 版本 {operation.revision}</span>}
+                {notices.map(item => <div key={item.id} role="status">{item.status === "pending" ? "变更等待服务端确认，将自动重试" : item.error ?? "变更未通过校验"}</div>)}
+                <div style={{ display: "flex", gap: 6 }}>
+                  {!revoked && <button onClick={() => { void copyMessageText(content.text).then(() => setActionStatus("已复制消息正文")).catch(error => setActionStatus(String(error))); }}>复制</button>}
+                  {!revoked && <button disabled={sending || !!draft.messageId} onClick={() => { void onDraftChange({ ...draft, reply: reference }).catch(error => setActionStatus(String(error))); }}>回复</button>}
+                  <button disabled={sending || deleting || draft.messageId === msg.id} onClick={() => setDeleteTarget(msg.id)}>从本机删除</button>
+                  {!revoked && <button onClick={() => { setForwardDraft({ text: content.text, forwarded: reference }); setForwardTarget(""); }}>转发</button>}
+                  {isMine && !revoked && <>
+                    <button disabled={!canModify} title="原发送设备可在服务器首次接收后的 48 小时内编辑" onClick={() => { setOperationDialog({ targetId: msg.id, kind: "edit", content, revision: operation?.revision ?? 0 }); setEditedText(content.text); }}>编辑</button>
+                    <button disabled={!canModify} title="原发送设备可在服务器首次接收后的 48 小时内撤回" onClick={() => setOperationDialog({ targetId: msg.id, kind: "revoke", content, revision: operation?.revision ?? 0 })}>撤回</button>
+                  </>}
+                </div>
+                {msg.local_state === "integrity_failed" && <span role="alert">消息顺序或完整性链异常，请核对来源</span>}
                 <span style={styles.timestamp}>
                   {new Date(msg.timestamp).toLocaleTimeString([], {
                     hour: "2-digit",
                     minute: "2-digit",
                   })}
-                  {isMine && msg.local_state ? ` · ${msg.local_state}` : ""}
+                  {isMine && msg.local_state ? ` · ${({ pending: "等待确认", queued: "服务器已保存，等待设备确认", stored_offline: "服务器已保存，设备离线", received: "全部目标设备已保存（非已读）", partially_received: "部分设备已保存", delivered: "旧版投递状态（非已读）", failed: "投递失败，可重试" } as Record<string, string>)[msg.local_state] ?? msg.local_state}` : ""}
+                  {isMine && ["failed", "pending"].includes(msg.local_state ?? "") && (
+                    <button disabled={!online || sending} onClick={async () => {
+                      setSending(true);
+                      try { await retryMessage(msg.id); setSendError(null); }
+                      catch (error) { setSendError(String(error)); }
+                      finally { setSending(false); }
+                    }}>重试原消息</button>
+                  )}
                 </span>
               </div>
             </div>
@@ -191,7 +449,68 @@ export default function Chat({ conversationId, userId, contacts, relayBatch, onC
         })}
         <div ref={messagesEndRef} />
       </div>
+      {operationError && <div role="alert">消息变更更新失败：{operationError} <button onClick={() => setOperationRefresh(value => value + 1)}>重新读取</button></div>}
+      {operations.some(item => item.status === "pending") && <button disabled={operationBusy || !online} onClick={async () => {
+        setOperationBusy(true);
+        try { await syncMessageOperations(); }
+        catch (error) { setActionStatus(String(error)); }
+        finally { if (alive.current) { setOperationBusy(false); setOperationRefresh(value => value + 1); } }
+      }}>立即重试待确认变更</button>}
+      {operationDialog && <div role="dialog" aria-modal="true" aria-label={operationDialog.kind === "edit" ? "编辑消息" : "撤回消息"}>
+        <p>{operationDialog.kind === "edit" ? "保存后同步更新双方正文，保留已编辑标记。" : "确认后同步显示撤回提示，不能恢复编辑；对方此前已查看、复制或转发的内容不会被擦除。"}仅原发送设备可在服务器首次接收后的 48 小时内操作。</p>
+        {operationDialog.kind === "edit" && <textarea aria-label="编辑后的正文" disabled={operationBusy} value={editedText} onChange={event => setEditedText(event.target.value)} />}
+        <button disabled={operationBusy || !online || (operationDialog.kind === "edit" && !editedText.trim()) || operations.some(item => item.target_id === operationDialog.targetId && item.status === "pending")} onClick={async () => {
+          setOperationBusy(true);
+          try {
+            await submitMessageOperation(operationDialog.targetId, operationDialog.kind,
+              operationDialog.kind === "edit" ? encodeContent({ ...operationDialog.content, text: editedText.trim() }) : "", operationDialog.revision);
+            if (alive.current) { setOperationsLoaded(false); setOperationDialog(null); setActionStatus("服务端已保存变更；对方离线时将在重新连接后补收。"); }
+          } catch (error) { if (alive.current) setActionStatus(String(error)); }
+          finally { if (alive.current) { setOperationBusy(false); setOperationRefresh(value => value + 1); } }
+        }}>{operationBusy ? "正在提交…" : operationDialog.kind === "edit" ? "保存编辑" : "确认撤回"}</button>
+        <button disabled={operationBusy} onClick={() => setOperationDialog(null)}>关闭</button>
+      </div>}
+      {deleteTarget && <div role="dialog" aria-modal="true" aria-label="从本机删除消息">
+        <p>从本机聊天、摘要和未读计数中移除此消息。为保持消息链校验，加密记录仍保留；对方的消息、已经生成的引用/转发和正在进行的投递不受影响。这不是撤回或彻底擦除。</p>
+        <button disabled={deleting} onClick={async () => {
+          if (!storageConversationId) return;
+          const id = deleteTarget;
+          setDeleting(true);
+          try {
+            await deleteMessageLocally(userId, storageConversationId, id);
+            deletedIds.current.add(id);
+            if (!alive.current) return;
+            setMessages(previous => previous.filter(message => message.id !== id));
+            setDeleteTarget(null);
+            setActionStatus("已从本机聊天中删除；未撤回对方消息。");
+          } catch (error) { if (alive.current) setActionStatus(String(error)); }
+          finally { if (alive.current) setDeleting(false); }
+        }}>确认从本机删除</button>
+        <button disabled={deleting} onClick={() => setDeleteTarget(null)}>取消</button>
+      </div>}
+      {actionStatus && <div role="status">{actionStatus}</div>}
+      {forwardDraft && <div role="dialog" aria-label="转发消息">
+        <label>目标联系人 <select value={forwardTarget} disabled={forwarding} onChange={event => setForwardTarget(event.target.value)}>
+          <option value="">请选择</option>{contacts.map(contact => <option key={contact.user_id} value={contact.user_id}>{contact.username}</option>)}
+        </select></label>
+        <button disabled={!forwardTarget || forwarding} onClick={async () => {
+          setForwarding(true);
+          try { await onForward(forwardTarget, forwardDraft); if (alive.current) setForwardDraft(null); }
+          catch (error) { if (alive.current) setActionStatus(String(error)); }
+          finally { if (alive.current) setForwarding(false); }
+        }}>生成转发草稿</button>
+        <button disabled={forwarding} onClick={() => setForwardDraft(null)}>取消</button>
+      </div>}
+      {(draft.reply || draft.forwarded) && <div>
+        {draft.reply && <div>回复 {draft.reply.sender}：{draft.reply.text}</div>}
+        {draft.forwarded && <div>转发：{draft.forwarded.sender}</div>}
+        <button disabled={sending || !!draft.messageId} onClick={() => { void onDraftChange({ ...draft, reply: undefined, forwarded: undefined }).catch(error => setActionStatus(String(error))); }}>移除引用/转发标记</button>
+      </div>}
+      {readError && <p role="alert">{readError}</p>}
       {sendError && <div style={styles.sendError}>{sendError}</div>}
+      {draft.messageId && <div style={styles.sendError}>原消息内容已保留，重试沿用同一编号。
+        <button disabled={sending} onClick={() => { void onDraftChange({ text: "" }).catch(() => {}); }}>保留已提交消息，另写一条</button>
+      </div>}
       <form className="chat-composer" onSubmit={handleSend} style={styles.inputBar}>
         <span style={styles.prompt}>›</span>
         <input
@@ -199,16 +518,17 @@ export default function Chat({ conversationId, userId, contacts, relayBatch, onC
           type="text"
           placeholder="type a message…"
           value={input}
-          onChange={(e) => setInput(e.target.value)}
+          disabled={sending || !!draft.messageId}
+          onChange={(e) => { void onDraftChange({ ...draft, text: e.target.value }).catch(() => {}); }}
           style={styles.input}
         />
         <button
           className="composer-send"
           type="submit"
-          disabled={sending || !input.trim()}
+          disabled={!online || sending || !input.trim()}
           style={styles.sendBtn}
         >
-          {sending ? "Sending..." : "Send"}
+          {sending ? "Sending..." : draft.messageId ? "重试原消息" : "Send"}
         </button>
       </form>
     </div>
@@ -332,11 +652,6 @@ const styles: Record<string, React.CSSProperties> = {
   messageText: {
     fontSize: "14px",
     wordBreak: "break-word",
-  },
-  protocolLabel: {
-    fontFamily: "var(--font-mono)",
-    fontSize: "9px",
-    opacity: 0.75,
   },
   timestamp: {
     fontFamily: "var(--font-mono)",

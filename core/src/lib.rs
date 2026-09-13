@@ -1,4 +1,4 @@
-//! Platform-independent client core shared by the Tauri desktop app and the
+//! Platform-independent client core shared by the Electron desktop app and the
 //! React Native Android app. All business logic (local store, integrity
 //! chain, relay connection, server REST calls, keystore model) lives here;
 //! platform shells only adapt it to their IPC mechanism.
