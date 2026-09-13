@@ -12,7 +12,7 @@ flowchart LR
   C <-->|HTTP / WebSocket| S[Axum 服务端 / PostgreSQL]
 ```
 
-`electron/contracts.ts` 定义全部 29 个桌面命令的参数和结果类型，preload 为每个命令暴露单独方法，页面不能访问通用 ipcRenderer、文件系统或进程启动器。`useDesktop` 保持页面原有调用方式；联系人添加返回 `{ success: boolean }`，删除和信任更新的 hook 丢弃成功结果返回 void。
+`electron/contracts.ts` 定义全部 31 个桌面命令的参数和结果类型，preload 为每个命令暴露单独方法，页面不能访问通用 ipcRenderer、文件系统或进程启动器。`useDesktop` 保持页面原有调用方式；联系人添加返回 `{ success: boolean }`，删除和信任更新的 hook 丢弃成功结果返回 void。
 
 Rust 的 `desktop/src/protocol.rs` 使用 serde 枚举分发所有命令，并验证字段类型、必填项、未知字段及字节范围。顶层参数沿用 camelCase，嵌套业务模型和结果沿用核心的 snake_case；`Vec<u8>` 对应 JSON 数字数组，空返回值对应 null，错误转换为前端 Error。
 
@@ -71,3 +71,7 @@ Windows 数据路径和格式保持兼容：
 ### 消息链 V2
 
 共享协议新增 send_v2 / message_v2，Rust core 持久化每个会话、发送设备、收件设备的序号和前序哈希，重试复用原链与密文。接收记录保存协议版本，旧消息继续读取；旧离线队列与旧发件箱重试保持原格式。Electron 业务接口不变。客户端与服务端统一升级，不承诺新旧客户端持续互通。乱序记录在前序补齐后重新校验，校验结果通过现有消息批次更新界面。
+
+### 本机会话列表
+
+新增 get_conversation_summaries({ userId }) 与 mark_messages_read({ userId, ids }) 业务命令，后者每次最多 1000 个编号。SQLite local_message_reads 按用户及消息编号记录已读；会话汇总返回最新密文记录与未读数。前端串行定时刷新本地汇总，仅缓存当前摘要的解密文本，不将预览明文写入数据库。前台聊天对已加载记录更新已读，后台与联系人详情页不更新。

@@ -42,6 +42,29 @@ export default function Chat({ draft, onDraftChange, online, conversationId, use
   // conversationId prop is the peer's user id; storage/relay use the canonical DM id.
   const storageConversationId = conversationId ? dmConversationId(userId, conversationId) : null;
 
+  const { markMessagesRead } = useDesktop();
+  const [readError, setReadError] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    let busy = false;
+    const mark = async () => {
+      if (busy || !document.hasFocus() || document.visibilityState !== "visible") return;
+      busy = true;
+      try {
+        const ids = messages.filter(message => message.sender_id !== userId).map(message => message.id);
+        for (let offset = 0; offset < ids.length && active; offset += 1000) {
+          await markMessagesRead(userId, ids.slice(offset, offset + 1000));
+        }
+        if (active) setReadError(null);
+      } catch (error) { if (active) setReadError(`未读状态保存失败：${String(error)}`); }
+      finally { busy = false; }
+    };
+    void mark();
+    window.addEventListener("focus", mark);
+    document.addEventListener("visibilitychange", mark);
+    return () => { active = false; window.removeEventListener("focus", mark); document.removeEventListener("visibilitychange", mark); };
+  }, [messages, userId]);
+
   function incomingToMessage(m: IncomingMessage, ciphertext: number[]): Message {
     return {
       id: m.message_id,
@@ -375,6 +398,7 @@ export default function Chat({ draft, onDraftChange, online, conversationId, use
         })}
         <div ref={messagesEndRef} />
       </div>
+      {readError && <p role="alert">{readError}</p>}
       {sendError && <div style={styles.sendError}>{sendError}</div>}
       {draft.messageId && <div style={styles.sendError}>原消息内容已保留，重试沿用同一编号。
         <button disabled={sending} onClick={() => onDraftChange({ text: "" })}>保留已提交消息，另写一条</button>

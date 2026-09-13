@@ -219,6 +219,10 @@ export default function App() {
       </div>
     <div className="app-shell" style={{ ...styles.layout, flex: 1, minHeight: 0 }}>
       <ContactList
+        key={session.user_id}
+        userId={session.user_id}
+        secretKey={session.secretKey}
+        signingPublicKey={session.ed25519Pk}
         contacts={contacts}
         activeConversation={sidebarTab === "chats" ? activeConversation : selectedContact}
         tab={sidebarTab}

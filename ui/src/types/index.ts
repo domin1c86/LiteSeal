@@ -130,3 +130,9 @@ export interface StorageStats {
   conversation_count: number;
   total_bytes: number;
 }
+
+export interface ConversationSummary {
+  conversation_id: string;
+  latest: Message;
+  unread_count: number;
+}

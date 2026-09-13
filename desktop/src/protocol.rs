@@ -17,6 +17,17 @@ pub struct Request {
 #[derive(Deserialize)]
 #[serde(tag = "name", content = "args", deny_unknown_fields)]
 pub enum Command {
+    #[serde(rename = "get_conversation_summaries")]
+    GetConversationSummaries {
+        #[serde(rename = "userId")]
+        user_id: String,
+    },
+    #[serde(rename = "mark_messages_read")]
+    MarkMessagesRead {
+        #[serde(rename = "userId")]
+        user_id: String,
+        ids: Vec<String>,
+    },
     #[serde(rename = "send_message")]
     SendMessage {
         #[serde(rename = "messageId", default)]
@@ -236,6 +247,28 @@ impl Response {
 
 pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, String> {
     let result = match command {
+        Command::GetConversationSummaries { user_id } => serde_json::to_value(
+            state
+                .client
+                .db
+                .lock()
+                .map_err(|e| e.to_string())?
+                .conversation_summaries(&user_id)
+                .map_err(|e| e.to_string())?,
+        ),
+        Command::MarkMessagesRead { user_id, ids } => {
+            if ids.len() > 1000 {
+                return Err("Too many message ids".into());
+            }
+            state
+                .client
+                .db
+                .lock()
+                .map_err(|e| e.to_string())?
+                .mark_messages_read(&user_id, &ids)
+                .map_err(|e| e.to_string())?;
+            serde_json::to_value(())
+        }
         Command::GetLocalMessagePage {
             conversation_id,
             limit,

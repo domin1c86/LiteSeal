@@ -11,6 +11,13 @@ pub enum DbError {
     NotFound,
 }
 
+#[derive(serde::Serialize)]
+pub struct ConversationSummary {
+    pub conversation_id: String,
+    pub latest: MessageModel,
+    pub unread_count: i64,
+}
+
 pub struct MessageRepository {
     conn: Connection,
 }
@@ -45,6 +52,10 @@ impl MessageRepository {
                 prev_hash BLOB NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS local_message_reads (
+                user_id TEXT NOT NULL, message_id TEXT NOT NULL,
+                PRIMARY KEY(user_id, message_id)
+            );
             CREATE TABLE IF NOT EXISTS outgoing_chains (
                 message_id TEXT NOT NULL, device_id TEXT NOT NULL,
                 sender_seq INTEGER NOT NULL, prev_hash BLOB NOT NULL,
@@ -301,6 +312,48 @@ impl MessageRepository {
     pub fn incoming_chain_version(&self, message_id: &str) -> Result<i64, DbError> {
         Ok(self.conn.query_row("SELECT COALESCE((SELECT version FROM incoming_chain_versions WHERE message_id = ?1), 0)",
             [message_id], |row| row.get(0))?)
+    }
+
+    pub fn conversation_summaries(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<ConversationSummary>, DbError> {
+        let mut stmt = self.conn.prepare("SELECT conversation_id,
+            (SELECT id FROM messages latest WHERE latest.conversation_id = m.conversation_id ORDER BY timestamp DESC, id DESC LIMIT 1),
+            SUM(CASE WHEN sender_id != ?1 AND NOT EXISTS
+                (SELECT 1 FROM local_message_reads r WHERE r.user_id = ?1 AND r.message_id = m.id)
+                THEN 1 ELSE 0 END)
+            FROM messages m GROUP BY conversation_id ORDER BY MAX(timestamp) DESC, conversation_id")?;
+        let rows = stmt.query_map([user_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?;
+        let mut result = Vec::new();
+        for row in rows {
+            let (conversation_id, id, unread_count) = row?;
+            result.push(ConversationSummary {
+                conversation_id,
+                latest: self.get_message(&id)?.ok_or(DbError::NotFound)?,
+                unread_count,
+            });
+        }
+        Ok(result)
+    }
+
+    pub fn mark_messages_read(&self, user_id: &str, ids: &[String]) -> Result<(), DbError> {
+        let tx = self.conn.unchecked_transaction()?;
+        for id in ids {
+            tx.execute(
+                "INSERT OR IGNORE INTO local_message_reads(user_id, message_id)
+                SELECT ?1, id FROM messages WHERE id = ?2 AND sender_id != ?1",
+                params![user_id, id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn outgoing_payloads(&self, message_id: &str) -> Result<String, DbError> {

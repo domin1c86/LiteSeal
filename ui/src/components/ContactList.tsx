@@ -1,8 +1,12 @@
+import { useConversationSummaries } from "../hooks/useConversationSummaries";
 import type { Contact } from "../types";
 
 export type SidebarTab = "chats" | "contacts";
 
 interface ContactListProps {
+  userId: string;
+  secretKey: number[];
+  signingPublicKey: number[];
   contacts: Contact[];
   activeConversation: string | null;
   tab: SidebarTab;
@@ -24,7 +28,7 @@ export function trustLabel(contact: Contact): { text: string; color: string } {
 }
 
 export default function ContactList({
-  contacts,
+  contacts, userId, secretKey, signingPublicKey,
   activeConversation,
   tab,
   onTabChange,
@@ -33,6 +37,9 @@ export default function ContactList({
   onStorageClick,
   onLogout,
 }: ContactListProps) {
+  const { previews, error } = useConversationSummaries(userId, secretKey, signingPublicKey, contacts);
+  const ordered = tab === "chats" ? [...contacts].sort((a, b) =>
+    (previews[b.user_id]?.timestamp ?? 0) - (previews[a.user_id]?.timestamp ?? 0) || a.username.localeCompare(b.username)) : contacts;
   return (
     <div className="contact-sidebar" style={styles.container}>
       <div style={styles.header}>
@@ -70,11 +77,16 @@ export default function ContactList({
       {contacts.length === 0 && (
         <p style={styles.empty}>no contacts yet</p>
       )}
-      {contacts.map((contact) => {
+      {error && <p role="alert" style={styles.empty}>{error}</p>}
+      {ordered.map((contact) => {
         const isActive = contact.user_id === activeConversation;
         const trust = trustLabel(contact);
+        const preview = previews[contact.user_id];
         return (
           <div
+            role="button"
+            tabIndex={0}
+            onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onSelect(contact.user_id); } }}
             className="contact-row"
             key={contact.user_id}
             style={{
@@ -88,8 +100,17 @@ export default function ContactList({
             </div>
             <div style={styles.info}>
               <span className="contact-name" style={styles.name}>{contact.username}</span>
-              <span style={{ ...styles.trust, color: trust.color }}>{trust.text}</span>
+              {tab === "chats" ? <span style={styles.trust} title={preview?.text}>{preview?.text ?? "加载中…"}</span>
+                : <span style={{ ...styles.trust, color: trust.color }}>{trust.text}</span>}
             </div>
+            {tab === "chats" && preview && <div style={{ marginLeft: "auto", textAlign: "right", flexShrink: 0, fontSize: 11 }}>
+              {preview.timestamp > 0 && <time dateTime={new Date(preview.timestamp).toISOString()} title={new Date(preview.timestamp).toLocaleString()}>
+                {new Date(preview.timestamp).toLocaleDateString() === new Date().toLocaleDateString()
+                  ? new Date(preview.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+                  : new Date(preview.timestamp).toLocaleDateString()}
+              </time>}
+              {preview.unread > 0 && <div aria-label={`${preview.unread} 条未读消息`} style={{ color: "var(--accent)", fontWeight: 700 }}>{preview.unread > 99 ? "99+" : preview.unread}</div>}
+            </div>}
           </div>
         );
       })}
