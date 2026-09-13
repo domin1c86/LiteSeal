@@ -142,8 +142,9 @@ impl Db {
         device_id: &str,
     ) -> Result<Option<String>, sqlx::Error> {
         let row = sqlx::query(
-            "SELECT user_id FROM sessions
-             WHERE access_token_hash = $1 AND device_id = $2 AND revoked = false AND expires_at > now()",
+            "SELECT s.user_id FROM sessions s JOIN devices d ON d.id = s.device_id
+             WHERE s.access_token_hash = $1 AND s.device_id = $2 AND s.revoked = false
+             AND s.expires_at > now() AND d.revoked = false",
         )
         .bind(access_token_hash)
         .bind(device_id)
@@ -539,6 +540,16 @@ CREATE TABLE IF NOT EXISTS offline_messages (
     UNIQUE(message_id, recipient_device_id)
 );
 ALTER TABLE offline_messages ADD COLUMN IF NOT EXISTS chain_version INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE IF NOT EXISTS message_operations (
+    id TEXT PRIMARY KEY, target_id TEXT NOT NULL, kind TEXT NOT NULL,
+    revision BIGINT NOT NULL, accepted_at BIGINT NOT NULL, request TEXT NOT NULL,
+    UNIQUE(target_id, revision)
+);
+CREATE TABLE IF NOT EXISTS operation_deliveries (
+    operation_id TEXT NOT NULL REFERENCES message_operations(id), device_id TEXT NOT NULL,
+    body TEXT NOT NULL, acked BOOLEAN NOT NULL DEFAULT false, PRIMARY KEY(operation_id, device_id)
+);
+CREATE INDEX IF NOT EXISTS operation_pending_device ON operation_deliveries(device_id) WHERE acked = false;
 CREATE TABLE IF NOT EXISTS message_deliveries (
     id TEXT PRIMARY KEY,
     message_id TEXT NOT NULL,

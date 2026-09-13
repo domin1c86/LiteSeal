@@ -230,6 +230,9 @@ export function useDesktop() {
   }
 
   return {
+    submitMessageOperation: (targetId: string, kind: "edit" | "revoke", content: string, baseRevision: number) => invoke("submit_message_operation", { targetId, kind, content, baseRevision }),
+    syncMessageOperations: () => invoke("sync_message_operations", {}),
+    getMessageOperations: (conversationId?: string) => invoke("get_message_operations", { conversationId }),
     deleteMessageLocally: (userId: string, conversationId: string, messageId: string) => invoke("delete_message_locally", { userId, conversationId, messageId }),
     getLocallyDeletedIds: (userId: string, conversationId: string) => invoke("get_locally_deleted_ids", { userId, conversationId }),
     copyMessageText: (text: string) => invoke("copy_message_text", { text }),

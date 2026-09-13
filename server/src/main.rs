@@ -2,6 +2,7 @@ mod auth;
 mod config;
 mod db;
 mod keys;
+mod message_operations;
 mod relay;
 mod state;
 
@@ -65,6 +66,15 @@ async fn main() {
         .route(
             "/contacts/:user_id/trust",
             post(keys::handlers::trust_contact),
+        )
+        .route(
+            "/message-operations",
+            get(message_operations::pending).post(message_operations::submit),
+        )
+        .route("/message-operations/ack", post(message_operations::ack))
+        .route(
+            "/message-operations/targets/:id",
+            get(message_operations::targets),
         )
         .route("/ws", get(relay::handlers::ws_handler))
         .layer(cors)

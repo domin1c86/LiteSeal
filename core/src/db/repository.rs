@@ -26,6 +26,16 @@ pub struct ConversationPreference {
     pub draft: Vec<u8>,
 }
 
+#[derive(Clone, serde::Serialize)]
+pub struct LocalOperation {
+    pub id: String,
+    pub target_id: String,
+    pub conversation_id: String,
+    pub body: String,
+    pub status: String,
+    pub error: Option<String>,
+}
+
 pub struct MessageRepository {
     conn: Connection,
 }
@@ -65,6 +75,13 @@ impl MessageRepository {
                 pinned INTEGER NOT NULL DEFAULT 0, archived INTEGER NOT NULL DEFAULT 0,
                 draft BLOB NOT NULL DEFAULT X'', PRIMARY KEY(user_id, peer_id)
             );
+            CREATE TABLE IF NOT EXISTS local_message_operations (
+                user_id TEXT NOT NULL, device_id TEXT NOT NULL, id TEXT NOT NULL,
+                target_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
+                body TEXT NOT NULL, status TEXT NOT NULL, error TEXT,
+                PRIMARY KEY(user_id, device_id, id)
+            );
+            CREATE INDEX IF NOT EXISTS local_operations_conversation ON local_message_operations(user_id, device_id, conversation_id);
             CREATE TABLE IF NOT EXISTS locally_deleted_messages (
                 user_id TEXT NOT NULL, message_id TEXT NOT NULL,
                 PRIMARY KEY(user_id, message_id)
@@ -361,6 +378,39 @@ impl MessageRepository {
             pinned = COALESCE(?3, pinned), archived = COALESCE(?4, archived), draft = COALESCE(?5, draft)",
             params![user_id, peer_id, pinned, archived, draft])?;
         Ok(())
+    }
+
+    pub fn save_operation(
+        &self,
+        user_id: &str,
+        device_id: &str,
+        op: &LocalOperation,
+    ) -> Result<(), DbError> {
+        self.conn.execute("INSERT INTO local_message_operations(user_id, device_id, id, target_id, conversation_id, body, status, error)
+            VALUES (?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(user_id, device_id, id) DO UPDATE SET
+            body = excluded.body, status = excluded.status, error = excluded.error WHERE local_message_operations.status != 'accepted'",
+            params![user_id, device_id, op.id, op.target_id, op.conversation_id, op.body, op.status, op.error])?;
+        Ok(())
+    }
+    pub fn operations(
+        &self,
+        user_id: &str,
+        device_id: &str,
+        conversation_id: Option<&str>,
+    ) -> Result<Vec<LocalOperation>, DbError> {
+        let mut stmt = self.conn.prepare("SELECT id, target_id, conversation_id, body, status, error FROM local_message_operations
+            WHERE user_id = ?1 AND device_id = ?2 AND (?3 IS NULL OR conversation_id = ?3) ORDER BY id")?;
+        let rows = stmt.query_map(params![user_id, device_id, conversation_id], |r| {
+            Ok(LocalOperation {
+                id: r.get(0)?,
+                target_id: r.get(1)?,
+                conversation_id: r.get(2)?,
+                body: r.get(3)?,
+                status: r.get(4)?,
+                error: r.get(5)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
     pub fn delete_message_locally(

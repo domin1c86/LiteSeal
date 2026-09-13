@@ -1,8 +1,11 @@
 import type { RegisterResult, ConnectResult, SendMessageResult, PollMessagesResult,
-  ConversationPreference, ConversationSummary, Message, Contact, RemoteDevice, UserSearchResult, StorageStats, KeystoreData, EncryptedPayload
+  MessageOperation, ConversationPreference, ConversationSummary, Message, Contact, RemoteDevice, UserSearchResult, StorageStats, KeystoreData, EncryptedPayload
 } from "../ui/src/types";
 
 export interface CommandMap {
+  submit_message_operation: { args: { targetId: string; kind: "edit" | "revoke"; content: string; baseRevision: number }; result: string };
+  sync_message_operations: { args: {}; result: number };
+  get_message_operations: { args: { conversationId?: string }; result: MessageOperation[] };
   delete_message_locally: { args: { userId: string; conversationId: string; messageId: string }; result: void };
   get_locally_deleted_ids: { args: { userId: string; conversationId: string }; result: string[] };
   copy_message_text: { args: { text: string }; result: void };
@@ -45,6 +48,9 @@ export type DesktopApi = {
   [K in CommandName]: (args: CommandMap[K]["args"]) => Promise<CommandMap[K]["result"]>;
 };
 export const commandNames = [
+  "submit_message_operation",
+  "sync_message_operations",
+  "get_message_operations",
   "delete_message_locally",
   "get_locally_deleted_ids",
   "copy_message_text",

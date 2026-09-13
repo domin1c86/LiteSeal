@@ -17,6 +17,22 @@ pub struct Request {
 #[derive(Deserialize)]
 #[serde(tag = "name", content = "args", deny_unknown_fields)]
 pub enum Command {
+    #[serde(rename = "submit_message_operation")]
+    SubmitMessageOperation {
+        #[serde(rename = "targetId")]
+        target_id: String,
+        kind: String,
+        content: String,
+        #[serde(rename = "baseRevision")]
+        base_revision: i64,
+    },
+    #[serde(rename = "sync_message_operations")]
+    SyncMessageOperations {},
+    #[serde(rename = "get_message_operations")]
+    GetMessageOperations {
+        #[serde(rename = "conversationId", default)]
+        conversation_id: Option<String>,
+    },
     #[serde(rename = "delete_message_locally")]
     DeleteMessageLocally {
         #[serde(rename = "userId")]
@@ -280,6 +296,21 @@ impl Response {
 
 pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, String> {
     let result = match command {
+        Command::SubmitMessageOperation {
+            target_id,
+            kind,
+            content,
+            base_revision,
+        } => serde_json::to_value(
+            commands::message_operations::submit(target_id, kind, content, base_revision, state)
+                .await?,
+        ),
+        Command::SyncMessageOperations {} => {
+            serde_json::to_value(commands::message_operations::sync(state).await?)
+        }
+        Command::GetMessageOperations { conversation_id } => {
+            serde_json::to_value(commands::message_operations::views(conversation_id, state)?)
+        }
         Command::DeleteMessageLocally {
             user_id,
             conversation_id,

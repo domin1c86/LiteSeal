@@ -3,3 +3,4 @@ pub mod chat;
 pub mod contacts;
 pub mod keystore;
 pub mod storage;
+pub mod message_operations;

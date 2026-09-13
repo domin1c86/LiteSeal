@@ -1,10 +1,11 @@
+import { latestOperations } from "../lib/messageOperations";
 import { decodeContent, encodeContent } from "../lib/messageContent";
 import { useState, useEffect, useRef, useLayoutEffect } from "react";
 import { useDesktop } from "../hooks/useDesktop";
 import { dmConversationId } from "../lib/conversation";
 import { trustLabel } from "./ContactList";
 import type { RelayBatch } from "../App";
-import type { Draft, Message, IncomingMessage, Contact, RelayEvent } from "../types";
+import type { Draft, MessageOperation, Message, IncomingMessage, Contact, RelayEvent } from "../types";
 
 interface ChatProps {
   draft: Draft;
@@ -26,6 +27,15 @@ interface ChatProps {
 export default function Chat({ draft, onDraftChange, onForward, online, conversationId, userId, deviceId, serverUrl, secretKey, signingKey, contacts, relayBatch, onContactsChanged }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const input = draft.text;
+  const [operationsLoaded, setOperationsLoaded] = useState(false);
+  const [operations, setOperations] = useState<MessageOperation[]>([]);
+  const [operationError, setOperationError] = useState<string | null>(null);
+  const [operationRefresh, setOperationRefresh] = useState(0);
+  const [operationBusy, setOperationBusy] = useState(false);
+  const [operationDialog, setOperationDialog] = useState<{ targetId: string; kind: "edit" | "revoke"; content: ReturnType<typeof decodeContent>; revision: number } | null>(null);
+  const [editedText, setEditedText] = useState("");
+  const { getMessageOperations, submitMessageOperation, syncMessageOperations } = useDesktop();
+  const latest = latestOperations(operations);
   const deletedIds = useRef(new Set<string>());
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -56,6 +66,7 @@ export default function Chat({ draft, onDraftChange, onForward, online, conversa
   const { markMessagesRead } = useDesktop();
   const [readError, setReadError] = useState<string | null>(null);
   useEffect(() => {
+    if (!operationsLoaded) return;
     let active = true;
     let busy = false;
     const mark = async () => {
@@ -74,7 +85,16 @@ export default function Chat({ draft, onDraftChange, onForward, online, conversa
     window.addEventListener("focus", mark);
     document.addEventListener("visibilitychange", mark);
     return () => { active = false; window.removeEventListener("focus", mark); document.removeEventListener("visibilitychange", mark); };
-  }, [messages, userId]);
+  }, [messages, userId, operationsLoaded]);
+
+  useEffect(() => {
+    if (!storageConversationId) return;
+    let active = true;
+    getMessageOperations(storageConversationId).then(result => {
+      if (active) { setOperations(result); setOperationError(null); setOperationsLoaded(true); }
+    }).catch(error => { if (active) { setOperationError(String(error)); setOperationsLoaded(false); } });
+    return () => { active = false; };
+  }, [storageConversationId, relayBatch, contacts, operationRefresh, messages.length]);
 
   function incomingToMessage(m: IncomingMessage, ciphertext: number[]): Message {
     return {
@@ -369,7 +389,8 @@ export default function Chat({ draft, onDraftChange, onForward, online, conversa
         {hasOlder && <button disabled={loadingOlder || loading} onClick={loadOlder}>{loadingOlder ? "正在加载…" : "加载更早消息"}</button>}
         {historyError && <div role="alert">历史加载失败：{historyError}</div>}
         {loading && <p style={styles.loadingText}>loading…</p>}
-        {messages.map((msg) => {
+        {!operationsLoaded && <p role="status">正在读取本机消息变更…</p>}
+        {operationsLoaded && messages.map((msg) => {
           const isMine = msg.sender_id === userId;
           let text = "";
           try {
@@ -377,7 +398,13 @@ export default function Chat({ draft, onDraftChange, onForward, online, conversa
           } catch {
             text = "[encrypted]";
           }
-          const content = decodeContent(text);
+          const operation = latest.get(msg.id);
+          const revoked = operation?.kind === "revoke";
+          const content = decodeContent(operation?.kind === "edit" && operation.content !== null ? operation.content : text);
+          const pending = operations.some(item => item.target_id === msg.id && item.status === "pending");
+          const notices = operations.filter(item => item.target_id === msg.id && item.status !== "accepted" && item.revision >= (operation?.revision ?? 0));
+          const canModify = isMine && msg.sender_device_id === deviceId && Date.now() - msg.timestamp <= 48 * 60 * 60 * 1000
+            && !revoked && !pending && online && !operationBusy && !sending && !["pending", "failed"].includes(msg.local_state ?? "");
           const sender = isMine ? userId : contacts.find(contact => contact.user_id === msg.sender_id)?.username ?? msg.sender_id;
           const reference = { messageId: msg.id, sender: sender.slice(0, 256), text: content.text.slice(0, 500) };
           return (
@@ -395,18 +422,24 @@ export default function Chat({ draft, onDraftChange, onForward, online, conversa
                   ...(isMine ? styles.bubbleMine : styles.bubbleTheirs),
                 }}
               >
-                {content.reply && <button style={{ display: "block", maxWidth: "100%", textAlign: "left", whiteSpace: "pre-wrap" }} onClick={() => {
+                {!revoked && content.reply && <button style={{ display: "block", maxWidth: "100%", textAlign: "left", whiteSpace: "pre-wrap" }} onClick={() => {
                   const target = document.getElementById(`message-${content.reply!.messageId}`);
                   if (target) target.scrollIntoView({ block: "center", behavior: "smooth" });
                   else setActionStatus("原消息未加载，请先加载更早消息；引用快照仍可查看。");
                 }}>回复 {content.reply.sender}：{content.reply.text}</button>}
-                {content.forwarded && <div style={{ fontSize: 12 }}>转发内容（来源由转发者提供）：{content.forwarded.sender}</div>}
-                <span style={styles.messageText}>{content.text}</span>
+                {!revoked && content.forwarded && <div style={{ fontSize: 12 }}>转发内容（来源由转发者提供）：{content.forwarded.sender}</div>}
+                <span style={styles.messageText}>{revoked ? "此消息已被发送者撤回" : content.text}</span>
+                {operation?.kind === "edit" && <span style={styles.timestamp}>已编辑 · 版本 {operation.revision}</span>}
+                {notices.map(item => <div key={item.id} role="status">{item.status === "pending" ? "变更等待服务端确认，将自动重试" : item.error ?? "变更未通过校验"}</div>)}
                 <div style={{ display: "flex", gap: 6 }}>
-                  <button onClick={() => { void copyMessageText(content.text).then(() => setActionStatus("已复制消息正文")).catch(error => setActionStatus(String(error))); }}>复制</button>
-                  <button disabled={sending || !!draft.messageId} onClick={() => { void onDraftChange({ ...draft, reply: reference }).catch(error => setActionStatus(String(error))); }}>回复</button>
+                  {!revoked && <button onClick={() => { void copyMessageText(content.text).then(() => setActionStatus("已复制消息正文")).catch(error => setActionStatus(String(error))); }}>复制</button>}
+                  {!revoked && <button disabled={sending || !!draft.messageId} onClick={() => { void onDraftChange({ ...draft, reply: reference }).catch(error => setActionStatus(String(error))); }}>回复</button>}
                   <button disabled={sending || deleting || draft.messageId === msg.id} onClick={() => setDeleteTarget(msg.id)}>从本机删除</button>
-                  <button onClick={() => { setForwardDraft({ text: content.text, forwarded: reference }); setForwardTarget(""); }}>转发</button>
+                  {!revoked && <button onClick={() => { setForwardDraft({ text: content.text, forwarded: reference }); setForwardTarget(""); }}>转发</button>}
+                  {isMine && !revoked && <>
+                    <button disabled={!canModify} title="原发送设备可在服务器首次接收后的 48 小时内编辑" onClick={() => { setOperationDialog({ targetId: msg.id, kind: "edit", content, revision: operation?.revision ?? 0 }); setEditedText(content.text); }}>编辑</button>
+                    <button disabled={!canModify} title="原发送设备可在服务器首次接收后的 48 小时内撤回" onClick={() => setOperationDialog({ targetId: msg.id, kind: "revoke", content, revision: operation?.revision ?? 0 })}>撤回</button>
+                  </>}
                 </div>
                 {msg.local_state === "integrity_failed" && <span role="alert">消息顺序或完整性链异常，请核对来源</span>}
                 <span style={styles.timestamp}>
@@ -430,6 +463,27 @@ export default function Chat({ draft, onDraftChange, onForward, online, conversa
         })}
         <div ref={messagesEndRef} />
       </div>
+      {operationError && <div role="alert">消息变更更新失败：{operationError} <button onClick={() => setOperationRefresh(value => value + 1)}>重新读取</button></div>}
+      {operations.some(item => item.status === "pending") && <button disabled={operationBusy || !online} onClick={async () => {
+        setOperationBusy(true);
+        try { await syncMessageOperations(); }
+        catch (error) { setActionStatus(String(error)); }
+        finally { if (alive.current) { setOperationBusy(false); setOperationRefresh(value => value + 1); } }
+      }}>立即重试待确认变更</button>}
+      {operationDialog && <div role="dialog" aria-modal="true" aria-label={operationDialog.kind === "edit" ? "编辑消息" : "撤回消息"}>
+        <p>{operationDialog.kind === "edit" ? "保存后同步更新双方正文，保留已编辑标记。" : "确认后同步显示撤回提示，不能恢复编辑；对方此前已查看、复制或转发的内容不会被擦除。"}仅原发送设备可在服务器首次接收后的 48 小时内操作。</p>
+        {operationDialog.kind === "edit" && <textarea aria-label="编辑后的正文" disabled={operationBusy} value={editedText} onChange={event => setEditedText(event.target.value)} />}
+        <button disabled={operationBusy || !online || (operationDialog.kind === "edit" && !editedText.trim()) || operations.some(item => item.target_id === operationDialog.targetId && item.status === "pending")} onClick={async () => {
+          setOperationBusy(true);
+          try {
+            await submitMessageOperation(operationDialog.targetId, operationDialog.kind,
+              operationDialog.kind === "edit" ? encodeContent({ ...operationDialog.content, text: editedText.trim() }) : "", operationDialog.revision);
+            if (alive.current) { setOperationsLoaded(false); setOperationDialog(null); setActionStatus("服务端已保存变更；对方离线时将在重新连接后补收。"); }
+          } catch (error) { if (alive.current) setActionStatus(String(error)); }
+          finally { if (alive.current) { setOperationBusy(false); setOperationRefresh(value => value + 1); } }
+        }}>{operationBusy ? "正在提交…" : operationDialog.kind === "edit" ? "保存编辑" : "确认撤回"}</button>
+        <button disabled={operationBusy} onClick={() => setOperationDialog(null)}>关闭</button>
+      </div>}
       {deleteTarget && <div role="dialog" aria-modal="true" aria-label="从本机删除消息">
         <p>从本机聊天、摘要和未读计数中移除此消息。为保持消息链校验，加密记录仍保留；对方的消息、已经生成的引用/转发和正在进行的投递不受影响。这不是撤回或彻底擦除。</p>
         <button disabled={deleting} onClick={async () => {

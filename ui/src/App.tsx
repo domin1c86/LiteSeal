@@ -40,7 +40,7 @@ export default function App() {
   const [selectedContact, setSelectedContact] = useState<string | null>(null);
   const [showAddContact, setShowAddContact] = useState(false);
   const [showStorage, setShowStorage] = useState(false);
-  const { getContacts, loadKeypair, saveKeypair, refreshSession, connectRelay, signOut, disconnect, pollMessages } = useDesktop();
+  const { getContacts, loadKeypair, saveKeypair, refreshSession, connectRelay, signOut, disconnect, pollMessages, syncMessageOperations } = useDesktop();
   const [loading, setLoading] = useState(true);
   const [connection, setConnection] = useState("connecting");
   const [connectionError, setConnectionError] = useState<string | null>(null);
@@ -95,8 +95,12 @@ export default function App() {
         }
         const result = await pollMessages();
         if (!active) return;
-        setConnection("online"); setConnectionError(null); failures = 0;
+        // Deliver the persisted message batch even when operation sync later fails.
         if (result.messages.length || result.events.length) setRelayBatch({ seq: ++seq, ...result });
+        const operationChanges = await syncMessageOperations();
+        if (!active) return;
+        setConnection("online"); setConnectionError(null); failures = 0;
+        if (operationChanges) setRelayBatch({ seq: ++seq, ...result });
         schedule(1000);
       } catch (error) {
         if (!active) return;
