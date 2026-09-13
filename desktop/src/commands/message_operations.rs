@@ -1,8 +1,6 @@
 use crate::AppState;
 use liteseal_core::{
-    api::normalize_server_url,
-    db::repository::LocalOperation,
-    keystore::{load_keypair, KeystoreData},
+    api::normalize_server_url, db::repository::LocalOperation, keystore::KeystoreData,
 };
 use liteseal_shared::{crypto, message_operation::*};
 use serde::Serialize;
@@ -125,7 +123,7 @@ pub async fn submit(
         .get_or_init(|| tokio::sync::Mutex::new(()))
         .lock()
         .await;
-    let saved = load_keypair()?;
+    let saved = state.identity()?;
     if saved.token.is_empty() {
         return Err("请先登录".into());
     }
@@ -244,7 +242,7 @@ pub async fn sync(state: &AppState) -> Result<usize, String> {
         .get_or_init(|| tokio::sync::Mutex::new(()))
         .lock()
         .await;
-    let saved = load_keypair()?;
+    let saved = state.identity()?;
     if saved.token.is_empty() {
         return Ok(0);
     }
@@ -317,7 +315,7 @@ pub fn views(
     conversation_id: Option<String>,
     state: &AppState,
 ) -> Result<Vec<OperationView>, String> {
-    let saved = load_keypair()?;
+    let saved = state.identity()?;
     let (sk, _) = keys(&saved)?;
     let mut result = Vec::new();
     for row in rows(state, &saved, conversation_id.as_deref())? {

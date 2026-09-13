@@ -3,7 +3,7 @@ import type { CommandMap, CommandName } from "../../../electron/contracts";
 import type {
   RegisterResult,
   ConnectResult,
-  KeystoreData,
+  Identity,
   SendMessageResult,
   PollMessagesResult,
   Message,
@@ -158,35 +158,23 @@ export function useDesktop() {
     return invoke("search_users", { query, serverUrl, accessToken });
   }
 
+  // Encryption, decryption and signing use the identity saved in Rust.
   async function encryptMessage(
     plaintext: number[],
-    recipientPublicKey: number[],
-    senderSecretKey: number[]
+    recipientPublicKey: number[]
   ): Promise<number[]> {
-    return invoke("encrypt_message", {
-      plaintext,
-      recipientPublicKey,
-      senderSecretKey,
-    });
+    return invoke("encrypt_message", { plaintext, recipientPublicKey });
   }
 
   async function decryptMessage(
     ciphertext: number[],
-    senderPublicKey: number[],
-    recipientSecretKey: number[]
+    senderPublicKey: number[]
   ): Promise<number[]> {
-    return invoke("decrypt_message", {
-      ciphertext,
-      senderPublicKey,
-      recipientSecretKey,
-    });
+    return invoke("decrypt_message", { ciphertext, senderPublicKey });
   }
 
-  async function signMessage(
-    message: number[],
-    signingKey: number[]
-  ): Promise<number[]> {
-    return invoke("sign_message", { message, signingKey });
+  async function signMessage(message: number[]): Promise<number[]> {
+    return invoke("sign_message", { message });
   }
 
   async function verifyMessage(
@@ -201,12 +189,6 @@ export function useDesktop() {
     });
   }
 
-  async function generateKeypair(): Promise<
-    [number[], number[], number[], number[]]
-  > {
-    return invoke("generate_keypair_cmd", {});
-  }
-
   async function getStorageStats(): Promise<StorageStats> {
     return invoke("get_storage_stats", {});
   }
@@ -219,12 +201,17 @@ export function useDesktop() {
     return invoke("clear_downloaded_attachments", {});
   }
 
-  async function saveKeypair(data: KeystoreData): Promise<void> {
-    await invoke("save_keypair", { data });
+  /** The saved identity, or freshly generated keys (`saved: false`) for a new account. */
+  async function prepareIdentity(): Promise<Identity> {
+    return invoke("prepare_identity", {});
   }
 
-  async function loadKeypair(): Promise<KeystoreData> {
-    return invoke("load_keypair", {});
+  async function loadIdentity(): Promise<Identity> {
+    return invoke("load_identity", {});
+  }
+
+  async function saveSession(args: CommandMap["save_session"]["args"]): Promise<Identity> {
+    return invoke("save_session", args);
   }
 
   async function clearKeypair(): Promise<void> {
@@ -263,12 +250,12 @@ export function useDesktop() {
     decryptMessage,
     signMessage,
     verifyMessage,
-    generateKeypair,
     getStorageStats,
     clearExpiredMessages,
     clearDownloadedAttachments,
-    saveKeypair,
-    loadKeypair,
+    prepareIdentity,
+    loadIdentity,
+    saveSession,
     clearKeypair,
   };
 }

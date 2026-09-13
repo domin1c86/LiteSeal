@@ -17,7 +17,7 @@ pub struct KeystoreData {
     pub ed25519_sk: Vec<u8>,
 }
 
-fn keystore_path() -> Result<std::path::PathBuf, String> {
+pub fn keystore_path() -> Result<std::path::PathBuf, String> {
     let base = dirs::data_local_dir().ok_or("Cannot find local data directory")?;
     let dir = base.join("liteseal");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -30,9 +30,13 @@ fn legacy_keystore_path() -> Result<std::path::PathBuf, String> {
 }
 
 pub fn save_keypair(data: KeystoreData) -> Result<(), String> {
+    save_keypair_to(&keystore_path()?, data)
+}
+
+pub fn save_keypair_to(path: &std::path::Path, data: KeystoreData) -> Result<(), String> {
     validate_keystore_data(&data)?;
     let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
-    crate::secret_store::secret_store(keystore_path()?).save(json.as_bytes())
+    crate::secret_store::secret_store(path.to_path_buf()).save(json.as_bytes())
 }
 
 pub fn load_keypair() -> Result<KeystoreData, String> {
@@ -40,10 +44,14 @@ pub fn load_keypair() -> Result<KeystoreData, String> {
     if !path.exists() {
         migrate_legacy_keystore()?;
     }
+    load_keypair_from(&path)
+}
+
+pub fn load_keypair_from(path: &std::path::Path) -> Result<KeystoreData, String> {
     if !path.exists() {
         return Err("No saved keypair found".to_string());
     }
-    let json = String::from_utf8(crate::secret_store::secret_store(path).load()?)
+    let json = String::from_utf8(crate::secret_store::secret_store(path.to_path_buf()).load()?)
         .map_err(|e| e.to_string())?;
     let data: KeystoreData = serde_json::from_str(&json).map_err(|e| e.to_string())?;
     validate_keystore_data(&data)?;
@@ -51,7 +59,11 @@ pub fn load_keypair() -> Result<KeystoreData, String> {
 }
 
 pub fn clear_keypair() -> Result<(), String> {
-    crate::secret_store::secret_store(keystore_path()?).clear()
+    clear_keypair_at(&keystore_path()?)
+}
+
+pub fn clear_keypair_at(path: &std::path::Path) -> Result<(), String> {
+    crate::secret_store::secret_store(path.to_path_buf()).clear()
 }
 
 fn migrate_legacy_keystore() -> Result<(), String> {

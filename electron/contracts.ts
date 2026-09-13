@@ -1,5 +1,5 @@
 import type { RegisterResult, ConnectResult, SendMessageResult, PollMessagesResult,
-  MessageOperation, ConversationPreference, ConversationSummary, Message, Contact, RemoteDevice, UserSearchResult, StorageStats, KeystoreData, EncryptedPayload
+  MessageOperation, ConversationPreference, ConversationSummary, Message, Contact, RemoteDevice, UserSearchResult, StorageStats, Identity, EncryptedPayload
 } from "../ui/src/types";
 
 export interface CommandMap {
@@ -19,13 +19,14 @@ export interface CommandMap {
   send_message: { args: { messageId?: string; senderId: string; ciphertext: number[]; signature: number[]; senderDeviceId: string; payloads: EncryptedPayload[] }; result: SendMessageResult };
   poll_messages: { args: {  }; result: PollMessagesResult };
   get_local_messages: { args: { conversationId: string; limit: number; offset: number }; result: Message[] };
-  encrypt_message: { args: { plaintext: number[]; recipientPublicKey: number[]; senderSecretKey: number[] }; result: number[] };
-  decrypt_message: { args: { ciphertext: number[]; senderPublicKey: number[]; recipientSecretKey: number[] }; result: number[] };
-  sign_message: { args: { message: number[]; signingKey: number[] }; result: number[] };
+  // Secret keys never cross this bridge: crypto uses the identity saved in Rust.
+  encrypt_message: { args: { plaintext: number[]; recipientPublicKey: number[] }; result: number[] };
+  decrypt_message: { args: { ciphertext: number[]; senderPublicKey: number[] }; result: number[] };
+  sign_message: { args: { message: number[] }; result: number[] };
   verify_message: { args: { message: number[]; signature: number[]; senderPublicKey: number[] }; result: boolean };
-  generate_keypair_cmd: { args: {  }; result: [number[], number[], number[], number[]] };
-  save_keypair: { args: { data: KeystoreData }; result: null };
-  load_keypair: { args: {  }; result: KeystoreData };
+  prepare_identity: { args: {  }; result: Identity };
+  load_identity: { args: {  }; result: Identity };
+  save_session: { args: { userId: string; token: string; refreshToken: string; deviceId: string; serverUrl: string }; result: Identity };
   clear_keypair: { args: {  }; result: null };
   register: { args: { inviteCode: string; username: string; password: string; serverUrl: string; publicKey: number[]; ed25519Pk: number[] }; result: RegisterResult };
   login: { args: { username: string; password: string; serverUrl: string; publicKey: number[]; ed25519Pk: number[]; deviceId?: string | null }; result: RegisterResult };
@@ -68,9 +69,9 @@ export const commandNames = [
   "decrypt_message",
   "sign_message",
   "verify_message",
-  "generate_keypair_cmd",
-  "save_keypair",
-  "load_keypair",
+  "prepare_identity",
+  "load_identity",
+  "save_session",
   "clear_keypair",
   "register",
   "login",

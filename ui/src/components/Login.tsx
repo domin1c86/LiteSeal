@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { useDesktop, validateInvite } from "../hooks/useDesktop";
-import type { RegisterResult } from "../types";
+import type { Identity, RegisterResult } from "../types";
 
 interface LoginProps {
-  onLogin: (result: RegisterResult & { serverUrl: string; publicKey: number[]; secretKey: number[]; ed25519Pk: number[]; ed25519Sk: number[] }) => void;
+  onLogin: (result: RegisterResult & { serverUrl: string; publicKey: number[]; ed25519Pk: number[] }) => void;
 }
 
 export default function Login({ onLogin }: LoginProps) {
@@ -17,7 +17,7 @@ export default function Login({ onLogin }: LoginProps) {
   const [serverUrl, setServerUrl] = useState("http://localhost:3000");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { register, login, generateKeypair, saveKeypair, loadKeypair } = useDesktop();
+  const { register, login, prepareIdentity, saveSession } = useDesktop();
 
   const registering = mode === "register";
   const validUrl = isServerUrl(serverUrl);
@@ -62,33 +62,25 @@ export default function Login({ onLogin }: LoginProps) {
     try {
       // Reuse the saved keypair + device on login so contacts keep a stable
       // public key for us; fresh keys only for register or first login here.
-      let keys: { publicKey: number[]; secretKey: number[]; ed25519Pk: number[]; ed25519Sk: number[] } | null = null;
+      // Rust holds the secret halves; only public keys reach this page.
+      let identity: Identity;
+      try { identity = await prepareIdentity(); }
+      catch (error) { throw new Error(`无法读取原有密钥，请先恢复密钥文件，避免覆盖历史：${String(error)}`); }
       let savedDeviceId: string | undefined;
-      let savedIdentity: Awaited<ReturnType<typeof loadKeypair>> | null = null;
-      try { savedIdentity = await loadKeypair(); }
-      catch (error) {
-        if (!String(error).includes("No saved keypair")) throw new Error(`无法读取原有密钥，请先恢复密钥文件，避免覆盖历史：${String(error)}`);
-      }
-      if (savedIdentity) {
+      if (identity.saved) {
         if (mode === "register") throw new Error("本机已有聊天身份，请登录原账号；注册其他账号请使用独立 Windows 用户环境。");
-        if ((savedIdentity.server_url || "http://localhost:3000").replace(/\/+$/, "") !== serverUrl.trim().replace(/\/+$/, "")) {
+        if ((identity.server_url || "http://localhost:3000").replace(/\/+$/, "") !== serverUrl.trim().replace(/\/+$/, "")) {
           throw new Error("当前密钥属于另一服务器，请使用原服务器地址登录。");
         }
-        keys = { publicKey: savedIdentity.public_key, secretKey: savedIdentity.secret_key,
-          ed25519Pk: savedIdentity.ed25519_pk, ed25519Sk: savedIdentity.ed25519_sk };
-        savedDeviceId = savedIdentity.device_id || undefined;
-      }
-      if (!keys) {
-        const [publicKey, secretKey, ed25519Pk, ed25519Sk] = await generateKeypair();
-        keys = { publicKey, secretKey, ed25519Pk, ed25519Sk };
+        savedDeviceId = identity.device_id || undefined;
       }
 
       let result: RegisterResult;
       if (mode === "register") {
-        result = await register(username.trim(), password, serverUrl, keys.publicKey, keys.ed25519Pk, inviteCode.trim());
+        result = await register(username.trim(), password, serverUrl, identity.public_key, identity.ed25519_pk, inviteCode.trim());
       } else {
         try {
-          result = await login(username.trim(), password, serverUrl, keys.publicKey, keys.ed25519Pk, savedDeviceId);
+          result = await login(username.trim(), password, serverUrl, identity.public_key, identity.ed25519_pk, savedDeviceId);
         } catch (err) {
           if (savedDeviceId && String(err).includes("403")) {
             throw new Error("原设备已被撤销或账号不匹配。已保留原密钥，请确认账号或恢复设备；不会自动覆盖旧身份。");
@@ -97,28 +89,22 @@ export default function Login({ onLogin }: LoginProps) {
         }
       }
 
-      if (savedIdentity && result.user_id !== savedIdentity.user_id) throw new Error("账号与本机历史不匹配，原密钥未修改。");
+      if (identity.saved && result.user_id !== identity.user_id) throw new Error("账号与本机历史不匹配，原密钥未修改。");
       const token = result.access_token ?? result.token;
       const deviceId = result.device_id ?? "";
-      await saveKeypair({
-        user_id: result.user_id,
+      await saveSession({
+        userId: result.user_id,
         token,
-        refresh_token: result.refresh_token ?? "",
-        device_id: deviceId,
-        server_url: serverUrl,
-        public_key: keys.publicKey,
-        secret_key: keys.secretKey,
-        ed25519_pk: keys.ed25519Pk,
-        ed25519_sk: keys.ed25519Sk,
+        refreshToken: result.refresh_token ?? "",
+        deviceId,
+        serverUrl,
       });
       onLogin({
         ...result,
         token,
         serverUrl,
-        publicKey: keys.publicKey,
-        secretKey: keys.secretKey,
-        ed25519Pk: keys.ed25519Pk,
-        ed25519Sk: keys.ed25519Sk,
+        publicKey: identity.public_key,
+        ed25519Pk: identity.ed25519_pk,
       });
     } catch (err) {
       setError(String(err));

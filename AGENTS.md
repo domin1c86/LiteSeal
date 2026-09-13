@@ -29,6 +29,7 @@ cargo run -p liteseal-server
 - Preserve `%APPDATA%/liteseal/data.db` and `%LOCALAPPDATA%/liteseal/keystore.bin`. Do not touch real user data during tests. Non-Windows secret storage remains unsupported.
 - Keep blocking SQLite mutexes out of await scopes. Async WebSocket handles use Tokio mutexes.
 - IPC exposes only business commands. Never expose raw ipcRenderer, generic filesystem/shell operations or secret-bearing logs to pages.
+- Secret keys never cross the Electron bridge: the sidecar keeps the identity (`AppState::identity`), returns only public keys and session fields, and performs encrypt/decrypt/sign itself. Tests pass `--keystore-path` so the real keystore is never touched.
 - Protocol details: `shared/src/protocol.rs` (server wire), `desktop/src/protocol.rs` (stdio), `electron/contracts.ts` (TypeScript).
 - New messages travel as `send_v2` / `message_v2` / `ack_v2` carrying `SignedEnvelopeV2`. Its `signing_bytes()` covers identity, routing, ordering, time, type and ciphertext; changing envelope fields means updating signing, client handling, relay validation and protocol tests together. Rust signs outgoing envelopes and verifies incoming ones before storage; ACK only after local persistence.
 - The relay keeps durable receipts (`beta_receipts`) after ACK deletes ciphertext; message operations find originals through them. Beta accounts are bound to one device: login without the original device and key, device registration and key rotation are refused.

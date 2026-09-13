@@ -1,7 +1,6 @@
 use crate::AppState;
 use liteseal_core::chat::{self, PollMessagesResult, SendMessageResult};
 use liteseal_core::db::models::MessageModel;
-use liteseal_core::keystore;
 use liteseal_shared::protocol::EncryptedPayload;
 
 pub async fn send_message(
@@ -31,7 +30,7 @@ pub async fn send_message(
     let signing_key = if persisted {
         None
     } else {
-        let saved = keystore::load_keypair()?;
+        let saved = state.identity()?;
         if saved.user_id != sender_id || saved.device_id != sender_device_id {
             return Err("The signed-in identity does not match the sender".to_string());
         }
@@ -66,24 +65,30 @@ pub async fn get_local_messages(
         .get_local_messages(&conversation_id, limit, offset)
 }
 
+// Crypto uses the saved identity; the renderer never holds secret keys.
+
 pub async fn encrypt_message(
     plaintext: Vec<u8>,
     recipient_public_key: Vec<u8>,
-    sender_secret_key: Vec<u8>,
+    state: &AppState,
 ) -> Result<Vec<u8>, String> {
-    chat::encrypt_message(plaintext, recipient_public_key, sender_secret_key)
+    chat::encrypt_message(
+        plaintext,
+        recipient_public_key,
+        state.identity()?.secret_key,
+    )
 }
 
 pub async fn decrypt_message(
     ciphertext: Vec<u8>,
     sender_public_key: Vec<u8>,
-    recipient_secret_key: Vec<u8>,
+    state: &AppState,
 ) -> Result<Vec<u8>, String> {
-    chat::decrypt_message(ciphertext, sender_public_key, recipient_secret_key)
+    chat::decrypt_message(ciphertext, sender_public_key, state.identity()?.secret_key)
 }
 
-pub async fn sign_message(message: Vec<u8>, signing_key: Vec<u8>) -> Result<Vec<u8>, String> {
-    chat::sign_message(message, signing_key)
+pub async fn sign_message(message: Vec<u8>, state: &AppState) -> Result<Vec<u8>, String> {
+    chat::sign_message(message, state.identity()?.ed25519_sk)
 }
 
 pub async fn verify_message(
@@ -92,10 +97,6 @@ pub async fn verify_message(
     sender_public_key: Vec<u8>,
 ) -> Result<bool, String> {
     chat::verify_message(message, signature, sender_public_key)
-}
-
-pub async fn generate_keypair_cmd() -> Result<chat::ExportedKeypair, String> {
-    chat::generate_keypair()
 }
 
 pub async fn retry_message(

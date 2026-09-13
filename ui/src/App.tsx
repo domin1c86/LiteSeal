@@ -23,9 +23,7 @@ interface Session {
   deviceId: string;
   serverUrl: string;
   publicKey: number[];
-  secretKey: number[];
   ed25519Pk: number[];
-  ed25519Sk: number[];
 }
 
 export default function App() {
@@ -40,7 +38,7 @@ export default function App() {
   const [selectedContact, setSelectedContact] = useState<string | null>(null);
   const [showAddContact, setShowAddContact] = useState(false);
   const [showStorage, setShowStorage] = useState(false);
-  const { getContacts, loadKeypair, saveKeypair, refreshSession, connectRelay, signOut, disconnect, pollMessages, syncMessageOperations } = useDesktop();
+  const { getContacts, loadIdentity, saveSession, refreshSession, connectRelay, signOut, disconnect, pollMessages, syncMessageOperations } = useDesktop();
   const [loading, setLoading] = useState(true);
   const [connection, setConnection] = useState("connecting");
   const [connectionError, setConnectionError] = useState<string | null>(null);
@@ -82,10 +80,8 @@ export default function App() {
             if (!active) return;
             current = { ...current, token: refreshed.access_token ?? refreshed.token,
               refreshToken: refreshed.refresh_token ?? current.refreshToken };
-            await saveKeypair({ user_id: current.user_id, token: current.token,
-              refresh_token: current.refreshToken, device_id: current.deviceId, server_url: current.serverUrl,
-              public_key: current.publicKey, secret_key: current.secretKey,
-              ed25519_pk: current.ed25519Pk, ed25519_sk: current.ed25519Sk });
+            await saveSession({ userId: current.user_id, token: current.token,
+              refreshToken: current.refreshToken, deviceId: current.deviceId, serverUrl: current.serverUrl });
             if (!active) return;
             setSession(previous => previous?.user_id === current.user_id ? current : previous);
             await connectRelay(current.serverUrl, current.user_id, current.token, current.deviceId);
@@ -119,7 +115,7 @@ export default function App() {
     return () => { active = false; clearTimeout(timer); };
   }, [session?.user_id, session?.deviceId, session?.serverUrl, retry]);
 
-  function handleLogin(result: RegisterResult & { serverUrl: string; publicKey: number[]; secretKey: number[]; ed25519Pk: number[]; ed25519Sk: number[] }) {
+  function handleLogin(result: RegisterResult & { serverUrl: string; publicKey: number[]; ed25519Pk: number[] }) {
     setSession({
       user_id: result.user_id,
       token: result.access_token ?? result.token,
@@ -127,14 +123,12 @@ export default function App() {
       deviceId: result.device_id ?? "",
       serverUrl: result.serverUrl,
       publicKey: result.publicKey,
-      secretKey: result.secretKey,
       ed25519Pk: result.ed25519Pk,
-      ed25519Sk: result.ed25519Sk,
     });
   }
 
   useEffect(() => {
-    loadKeypair()
+    loadIdentity()
       .then(async (saved) => {
         const serverUrl = saved.server_url || "http://localhost:3000";
         const base: Session = {
@@ -144,9 +138,7 @@ export default function App() {
           deviceId: saved.device_id,
           serverUrl,
           publicKey: saved.public_key,
-          secretKey: saved.secret_key,
           ed25519Pk: saved.ed25519_pk,
-          ed25519Sk: saved.ed25519_sk,
         };
         if (!saved.token || !saved.device_id) {
           // Legacy keystore without a device binding cannot reconnect; force login.
@@ -230,7 +222,6 @@ export default function App() {
       <ContactList
         key={session.user_id}
         userId={session.user_id}
-        secretKey={session.secretKey}
         signingPublicKey={session.ed25519Pk}
         contacts={contacts}
         flags={preferences.flags}
@@ -280,8 +271,6 @@ export default function App() {
           deviceId={session.deviceId}
           token={session.token}
           serverUrl={session.serverUrl}
-          secretKey={session.secretKey}
-          signingKey={session.ed25519Sk}
           contacts={contacts}
           relayBatch={relayBatch}
           onContactsChanged={refreshContacts}

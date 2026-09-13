@@ -1,5 +1,4 @@
 use crate::{commands, AppState};
-use liteseal_core::keystore::KeystoreData;
 use liteseal_shared::protocol::EncryptedPayload;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -124,8 +123,6 @@ pub enum Command {
         plaintext: Vec<u8>,
         #[serde(rename = "recipientPublicKey")]
         recipient_public_key: Vec<u8>,
-        #[serde(rename = "senderSecretKey")]
-        sender_secret_key: Vec<u8>,
     },
     #[serde(rename = "decrypt_message")]
     DecryptMessage {
@@ -133,15 +130,11 @@ pub enum Command {
         ciphertext: Vec<u8>,
         #[serde(rename = "senderPublicKey")]
         sender_public_key: Vec<u8>,
-        #[serde(rename = "recipientSecretKey")]
-        recipient_secret_key: Vec<u8>,
     },
     #[serde(rename = "sign_message")]
     SignMessage {
         #[serde(rename = "message")]
         message: Vec<u8>,
-        #[serde(rename = "signingKey")]
-        signing_key: Vec<u8>,
     },
     #[serde(rename = "verify_message")]
     VerifyMessage {
@@ -152,17 +145,24 @@ pub enum Command {
         #[serde(rename = "senderPublicKey")]
         sender_public_key: Vec<u8>,
     },
-    #[serde(rename = "generate_keypair_cmd")]
-    GenerateKeypairCmd {},
     #[serde(rename = "sign_out")]
     SignOut {},
-    #[serde(rename = "save_keypair")]
-    SaveKeypair {
-        #[serde(rename = "data")]
-        data: KeystoreData,
+    #[serde(rename = "prepare_identity")]
+    PrepareIdentity {},
+    #[serde(rename = "load_identity")]
+    LoadIdentity {},
+    #[serde(rename = "save_session")]
+    SaveSession {
+        #[serde(rename = "userId")]
+        user_id: String,
+        token: String,
+        #[serde(rename = "refreshToken")]
+        refresh_token: String,
+        #[serde(rename = "deviceId")]
+        device_id: String,
+        #[serde(rename = "serverUrl")]
+        server_url: String,
     },
-    #[serde(rename = "load_keypair")]
-    LoadKeypair {},
     #[serde(rename = "clear_keypair")]
     ClearKeypair {},
     #[serde(rename = "register")]
@@ -417,7 +417,7 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
             )
             .await?,
         ),
-        Command::SignOut {} => serde_json::to_value(commands::keystore::sign_out().await?),
+        Command::SignOut {} => serde_json::to_value(commands::keystore::sign_out(state).await?),
         Command::RetryMessage { message_id } => {
             serde_json::to_value(commands::chat::retry_message(message_id, state).await?)
         }
@@ -453,23 +453,18 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
         Command::EncryptMessage {
             plaintext,
             recipient_public_key,
-            sender_secret_key,
         } => serde_json::to_value(
-            commands::chat::encrypt_message(plaintext, recipient_public_key, sender_secret_key)
-                .await?,
+            commands::chat::encrypt_message(plaintext, recipient_public_key, state).await?,
         ),
         Command::DecryptMessage {
             ciphertext,
             sender_public_key,
-            recipient_secret_key,
         } => serde_json::to_value(
-            commands::chat::decrypt_message(ciphertext, sender_public_key, recipient_secret_key)
-                .await?,
+            commands::chat::decrypt_message(ciphertext, sender_public_key, state).await?,
         ),
-        Command::SignMessage {
-            message,
-            signing_key,
-        } => serde_json::to_value(commands::chat::sign_message(message, signing_key).await?),
+        Command::SignMessage { message } => {
+            serde_json::to_value(commands::chat::sign_message(message, state).await?)
+        }
         Command::VerifyMessage {
             message,
             signature,
@@ -477,14 +472,25 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
         } => serde_json::to_value(
             commands::chat::verify_message(message, signature, sender_public_key).await?,
         ),
-        Command::GenerateKeypairCmd {} => {
-            serde_json::to_value(commands::chat::generate_keypair_cmd().await?)
+        Command::PrepareIdentity {} => {
+            serde_json::to_value(commands::keystore::prepare_identity(state)?)
         }
-        Command::SaveKeypair { data } => {
-            serde_json::to_value(commands::keystore::save_keypair(data)?)
-        }
-        Command::LoadKeypair {} => serde_json::to_value(commands::keystore::load_keypair()?),
-        Command::ClearKeypair {} => serde_json::to_value(commands::keystore::clear_keypair()?),
+        Command::LoadIdentity {} => serde_json::to_value(commands::keystore::load_identity(state)?),
+        Command::SaveSession {
+            user_id,
+            token,
+            refresh_token,
+            device_id,
+            server_url,
+        } => serde_json::to_value(commands::keystore::save_session(
+            user_id,
+            token,
+            refresh_token,
+            device_id,
+            server_url,
+            state,
+        )?),
+        Command::ClearKeypair {} => serde_json::to_value(commands::keystore::clear_keypair(state)?),
         Command::Register {
             invite_code,
             username,

@@ -17,14 +17,12 @@ interface ChatProps {
   deviceId: string;
   token: string;
   serverUrl: string;
-  secretKey: number[];
-  signingKey: number[];
   contacts: Contact[];
   relayBatch: RelayBatch | null;
   onContactsChanged: () => void;
 }
 
-export default function Chat({ draft, onDraftChange, onForward, online, conversationId, userId, deviceId, token, serverUrl, secretKey, signingKey, contacts, relayBatch, onContactsChanged }: ChatProps) {
+export default function Chat({ draft, onDraftChange, onForward, online, conversationId, userId, deviceId, token, serverUrl, contacts, relayBatch, onContactsChanged }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const input = draft.text;
   const [operationsLoaded, setOperationsLoaded] = useState(false);
@@ -117,7 +115,7 @@ export default function Chat({ draft, onDraftChange, onForward, online, conversa
       const peer = contacts.find(contact => contact.user_id === (message.sender_id === userId ? conversationId : message.sender_id));
       if (!peer) return { ...message, ciphertext: Array.from(new TextEncoder().encode("[sender not in contacts]")) };
       try {
-        const plaintext = await decryptMessage(message.ciphertext, peer.public_key, secretKey);
+        const plaintext = await decryptMessage(message.ciphertext, peer.public_key);
         return { ...message, ciphertext: plaintext };
       } catch { return { ...message, ciphertext: Array.from(new TextEncoder().encode("[encrypted]")) }; }
     }));
@@ -144,7 +142,7 @@ export default function Chat({ draft, onDraftChange, onForward, online, conversa
     }).catch(error => { if (active) setHistoryError(String(error)); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [storageConversationId, secretKey, userId, contacts]);
+  }, [storageConversationId, userId, contacts]);
 
   async function loadOlder() {
     if (!storageConversationId || !cursor.current || loadingOlder || loading) return;
@@ -198,7 +196,7 @@ export default function Chat({ draft, onDraftChange, onForward, online, conversa
                 }
 
                 try {
-                  const plaintext = await decryptMessage(m.ciphertext, sender.public_key, secretKey);
+                  const plaintext = await decryptMessage(m.ciphertext, sender.public_key);
                   return incomingToMessage(m, plaintext);
                 } catch {
                   return incomingToMessage(
@@ -278,13 +276,13 @@ export default function Chat({ draft, onDraftChange, onForward, online, conversa
       const plaintext = Array.from(encoder.encode(encodeContent({ text, reply: draft.reply, forwarded: draft.forwarded })));
 
       // Local copy encrypted to the contact's stored key so history stays readable.
-      const ciphertext = await encryptMessage(plaintext, contact.public_key, secretKey);
-      const signature = await signMessage(ciphertext, signingKey);
+      const ciphertext = await encryptMessage(plaintext, contact.public_key);
+      const signature = await signMessage(ciphertext);
 
       const payloads = [];
       for (const device of devices) {
-        const deviceCiphertext = await encryptMessage(plaintext, device.public_key, secretKey);
-        const deviceSignature = await signMessage(deviceCiphertext, signingKey);
+        const deviceCiphertext = await encryptMessage(plaintext, device.public_key);
+        const deviceSignature = await signMessage(deviceCiphertext);
         payloads.push({
           recipient_user_id: conversationId,
           recipient_device_id: device.id,

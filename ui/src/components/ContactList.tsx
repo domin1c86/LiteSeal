@@ -6,7 +6,6 @@ export type SidebarTab = "chats" | "contacts";
 
 interface ContactListProps {
   userId: string;
-  secretKey: number[];
   signingPublicKey: number[];
   contacts: Contact[];
   flags: Record<string, { pinned: boolean; archived: boolean }>;
@@ -33,7 +32,7 @@ export function trustLabel(contact: Contact): { text: string; color: string } {
 }
 
 export default function ContactList({
-  contacts, userId, secretKey, signingPublicKey, flags, drafts, preferencesReady, onFlagsChange,
+  contacts, userId, signingPublicKey, flags, drafts, preferencesReady, onFlagsChange,
   activeConversation,
   tab,
   onTabChange,
@@ -42,7 +41,7 @@ export default function ContactList({
   onStorageClick,
   onLogout,
 }: ContactListProps) {
-  const { previews, error } = useConversationSummaries(userId, secretKey, signingPublicKey, contacts);
+  const { previews, error } = useConversationSummaries(userId, signingPublicKey, contacts);
   const [showArchived, setShowArchived] = useState(false);
   const archiveCount = contacts.filter(contact => flags[contact.user_id]?.archived).length;
   const ordered = tab === "chats" ? contacts.filter(contact => !!flags[contact.user_id]?.archived === showArchived).sort((a, b) =>

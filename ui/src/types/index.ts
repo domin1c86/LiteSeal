@@ -37,16 +37,17 @@ export interface ConnectResult {
   connected: boolean;
 }
 
-export interface KeystoreData {
+/** The saved identity as the renderer sees it; secret keys stay in Rust. */
+export interface Identity {
   user_id: string;
   token: string;
   refresh_token: string;
   device_id: string;
   server_url: string;
   public_key: number[];
-  secret_key: number[];
   ed25519_pk: number[];
-  ed25519_sk: number[];
+  /** False for newly generated keys not yet bound to an account. */
+  saved: boolean;
 }
 
 export interface SendMessageResult {

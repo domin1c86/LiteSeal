@@ -35,24 +35,34 @@ async fn run() -> Result<(), String> {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .init();
-    // This override is only accepted on the executable command line, never via renderer IPC.
+    // These overrides are only accepted on the executable command line, never via renderer IPC.
+    let mut db_path = None;
+    let mut keystore_path = None;
     let mut args = std::env::args().skip(1);
-    let db_path = match args.next().as_deref() {
-        Some("--db-path") => PathBuf::from(args.next().ok_or("Missing database path")?),
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--db-path" if db_path.is_none() => {
+                db_path = Some(PathBuf::from(args.next().ok_or("Missing database path")?))
+            }
+            "--keystore-path" if keystore_path.is_none() => {
+                keystore_path = Some(PathBuf::from(args.next().ok_or("Missing keystore path")?))
+            }
+            _ => return Err("Unknown desktop argument".into()),
+        }
+    }
+    let db_path = match db_path {
+        Some(path) => path,
         None => dirs::data_dir()
             .ok_or("Cannot find data directory")?
             .join("liteseal")
             .join("data.db"),
-        _ => return Err("Unknown desktop argument".into()),
     };
-    if args.next().is_some() {
-        return Err("Unexpected desktop argument".into());
-    }
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let state = Arc::new(AppState::new(
+    let state = Arc::new(AppState::with_keystore(
         db_path.to_str().ok_or("Invalid database path")?,
+        keystore_path,
     )?);
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(128);
     let mut writer = tokio::spawn(async move {

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useDesktop } from "./useDesktop";
 import type { Draft } from "../types";
 
-type Identity = { user_id: string; publicKey: number[]; secretKey: number[] };
+type Identity = { user_id: string; publicKey: number[] };
 type Flags = { pinned: boolean; archived: boolean };
 
 export function useConversationPreferences(session: Identity | null) {
@@ -28,7 +28,7 @@ export function useConversationPreferences(session: Identity | null) {
         const decoded = await Promise.all(rows.map(async row => {
           let draft: Draft = { text: "" };
           if (row.draft.length) {
-            const bytes = await decryptMessage(row.draft, identity.publicKey, identity.secretKey);
+            const bytes = await decryptMessage(row.draft, identity.publicKey);
             const saved = JSON.parse(new TextDecoder().decode(new Uint8Array(bytes)));
             if (saved.version !== 1 || saved.peerId !== row.peer_id || typeof saved.text !== "string"
                 || (saved.messageId !== undefined && typeof saved.messageId !== "string")) throw new Error("草稿格式不正确");
@@ -80,7 +80,7 @@ export function useConversationPreferences(session: Identity | null) {
     if (draft.text || draft.messageId || draft.reply || draft.forwarded) setDrafts(previous => ({ ...previous, [peerId]: draft }));
     return enqueue(`draft:${peerId}`, async () => {
       const encrypted = draft.text || draft.messageId || draft.reply || draft.forwarded
-        ? await encryptMessage(Array.from(new TextEncoder().encode(JSON.stringify({ version: 1, peerId, ...draft }))), identity.publicKey, identity.secretKey)
+        ? await encryptMessage(Array.from(new TextEncoder().encode(JSON.stringify({ version: 1, peerId, ...draft }))), identity.publicKey)
         : [];
       await saveConversationPreference({ userId: identity.user_id, peerId, draft: encrypted });
       if (draftVersions.current.get(peerId) === draft) setDrafts(previous => ({ ...previous, [peerId]: draft }));

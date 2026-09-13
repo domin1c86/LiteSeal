@@ -7,7 +7,7 @@ import type { Contact } from "../types";
 
 export interface ConversationPreview { text: string; timestamp: number; unread: number }
 
-export function useConversationSummaries(userId: string, secretKey: number[], signingPublicKey: number[], contacts: Contact[]) {
+export function useConversationSummaries(userId: string, signingPublicKey: number[], contacts: Contact[]) {
   const [previews, setPreviews] = useState<Record<string, ConversationPreview>>({});
   const [error, setError] = useState<string | null>(null);
   const { getConversationSummaries, decryptMessage, verifyMessage, getMessageOperations } = useDesktop();
@@ -38,7 +38,7 @@ export function useConversationSummaries(userId: string, secretKey: number[], si
                 || (signingPublicKey.length > 0 && await verifyMessage(message.ciphertext, message.signature, signingPublicKey));
               if (message.local_state === "integrity_failed") text = "[消息完整性异常]";
               else if (verified) {
-                const plaintext = await decryptMessage(message.ciphertext, contact.public_key, secretKey);
+                const plaintext = await decryptMessage(message.ciphertext, contact.public_key);
                 text = `${message.sender_id === userId ? "我：" : ""}${decodeContent(new TextDecoder().decode(new Uint8Array(plaintext))).text.replace(/\s+/g, " ").slice(0, 120)}`;
               }
             } catch { /* Keep an explicit encrypted placeholder. */ }
@@ -52,6 +52,6 @@ export function useConversationSummaries(userId: string, secretKey: number[], si
     }
     void refresh();
     return () => { active = false; clearTimeout(timer); };
-  }, [userId, secretKey, signingPublicKey, contacts]);
+  }, [userId, signingPublicKey, contacts]);
   return { previews, error };
 }
