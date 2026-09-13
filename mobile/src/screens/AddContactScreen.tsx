@@ -34,7 +34,7 @@ export default function AddContactScreen({ navigation }: Props) {
     setSearching(true);
     setError(null);
     try {
-      const found = await searchUsers(session.serverUrl, query.trim());
+      const found = await searchUsers(session.serverUrl, query.trim(), session.token);
       setResults(found.filter(r => r.userId !== session.userId));
     } catch (err) {
       setError(String(err));

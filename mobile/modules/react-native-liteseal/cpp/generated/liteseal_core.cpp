@@ -196,7 +196,8 @@ extern "C" {
         RustBuffer ciphertext, 
         RustBuffer signature, 
         RustBuffer sender_device_id, 
-        RustBuffer payloads
+        RustBuffer payloads, 
+        RustBuffer signing_key
     );
     void uniffi_liteseal_core_fn_method_litesealcore_set_contact_trust(
         /*handle*/ uint64_t ptr, 
@@ -225,7 +226,8 @@ extern "C" {
     );
     /*handle*/ uint64_t uniffi_liteseal_core_fn_func_get_user_devices(
         RustBuffer server_url, 
-        RustBuffer user_id
+        RustBuffer user_id, 
+        RustBuffer access_token
     );
     RustBuffer uniffi_liteseal_core_fn_func_key_fingerprint(
         RustBuffer key, 
@@ -254,7 +256,8 @@ extern "C" {
     );
     /*handle*/ uint64_t uniffi_liteseal_core_fn_func_search_users(
         RustBuffer server_url, 
-        RustBuffer query
+        RustBuffer query, 
+        RustBuffer access_token
     );
     RustBuffer uniffi_liteseal_core_fn_func_sign_message(
         RustBuffer message, 
@@ -2081,7 +2084,7 @@ NativeLitesealCore::NativeLitesealCore(
     props["ubrn_uniffi_liteseal_core_fn_method_litesealcore_send_message"] = jsi::Function::createFromHostFunction(
         rt,
         jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_fn_method_litesealcore_send_message"),
-        6,
+        7,
         [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
             return this->cpp_uniffi_liteseal_core_fn_method_litesealcore_send_message(rt, thisVal, args, count);
         }
@@ -2129,7 +2132,7 @@ NativeLitesealCore::NativeLitesealCore(
     props["ubrn_uniffi_liteseal_core_fn_func_get_user_devices"] = jsi::Function::createFromHostFunction(
         rt,
         jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_fn_func_get_user_devices"),
-        2,
+        3,
         [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
             return this->cpp_uniffi_liteseal_core_fn_func_get_user_devices(rt, thisVal, args, count);
         }
@@ -2169,7 +2172,7 @@ NativeLitesealCore::NativeLitesealCore(
     props["ubrn_uniffi_liteseal_core_fn_func_search_users"] = jsi::Function::createFromHostFunction(
         rt,
         jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_fn_func_search_users"),
-        2,
+        3,
         [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
             return this->cpp_uniffi_liteseal_core_fn_func_search_users(rt, thisVal, args, count);
         }
@@ -3061,7 +3064,7 @@ jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_method_litesealcore_r
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_method_litesealcore_send_message(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
-        auto value = uniffi_liteseal_core_fn_method_litesealcore_send_message(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[1]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[2]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[3]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[4]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[5])
+        auto value = uniffi_liteseal_core_fn_method_litesealcore_send_message(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[1]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[2]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[3]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[4]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[5]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[6])
         );
 
         
@@ -3117,7 +3120,7 @@ jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_func_generate_keypair
         return uniffi::liteseal_core::Bridging<RustBuffer>::toJs(rt, callInvoker, value);
 }
 jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_func_get_user_devices(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
-        auto value = uniffi_liteseal_core_fn_func_get_user_devices(uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[1])
+        auto value = uniffi_liteseal_core_fn_func_get_user_devices(uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[1]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[2])
         );
 
         
@@ -3155,7 +3158,7 @@ jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_func_register(jsi::Ru
         return uniffi_jsi::Bridging</*handle*/ uint64_t>::toJs(rt, callInvoker, value);
 }
 jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_func_search_users(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
-        auto value = uniffi_liteseal_core_fn_func_search_users(uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[1])
+        auto value = uniffi_liteseal_core_fn_func_search_users(uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[1]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[2])
         );
 
         

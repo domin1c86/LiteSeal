@@ -195,6 +195,7 @@ interface NativeModuleInterface {
   ubrn_uniffi_liteseal_core_fn_func_get_user_devices(
     serverUrl: Uint8Array,
     userId: Uint8Array,
+    accessToken: Uint8Array,
   ): bigint;
   ubrn_uniffi_liteseal_core_fn_func_key_fingerprint(
     key: Uint8Array,
@@ -224,6 +225,7 @@ interface NativeModuleInterface {
   ubrn_uniffi_liteseal_core_fn_func_search_users(
     serverUrl: Uint8Array,
     query: Uint8Array,
+    accessToken: Uint8Array,
   ): bigint;
   ubrn_uniffi_liteseal_core_fn_func_sign_message(
     message: Uint8Array,
@@ -296,6 +298,7 @@ interface NativeModuleInterface {
     signature: Uint8Array,
     senderDeviceId: Uint8Array,
     payloads: Uint8Array,
+    signingKey: Uint8Array,
   ): bigint;
   ubrn_uniffi_liteseal_core_fn_method_litesealcore_set_contact_trust(
     uniffiSelf: bigint,

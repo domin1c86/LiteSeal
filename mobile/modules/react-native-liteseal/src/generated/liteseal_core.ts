@@ -172,6 +172,7 @@ export function generateKeypair(): FfiKeypair /*throws*/ {
 export async function getUserDevices(
   serverUrl: string,
   userId: string,
+  accessToken: string,
   asyncOpts_?: { signal: AbortSignal },
 ): Promise<Array<FfiRemoteDevice>> /*throws*/ {
   const __stack = uniffiIsDebug ? new Error().stack : undefined;
@@ -182,6 +183,10 @@ export async function getUserDevices(
         return nativeModule().ubrn_uniffi_liteseal_core_fn_func_get_user_devices(
           FfiConverterString.lower(serverUrl, nativeModule().rustbuffer_alloc),
           FfiConverterString.lower(userId, nativeModule().rustbuffer_alloc),
+          FfiConverterString.lower(
+            accessToken,
+            nativeModule().rustbuffer_alloc,
+          ),
         );
       },
       /*pollFunc:*/ nativeModule()
@@ -412,6 +417,7 @@ export async function register(
 export async function searchUsers(
   serverUrl: string,
   query: string,
+  accessToken: string,
   asyncOpts_?: { signal: AbortSignal },
 ): Promise<Array<FfiUserSearchResult>> /*throws*/ {
   const __stack = uniffiIsDebug ? new Error().stack : undefined;
@@ -422,6 +428,10 @@ export async function searchUsers(
         return nativeModule().ubrn_uniffi_liteseal_core_fn_func_search_users(
           FfiConverterString.lower(serverUrl, nativeModule().rustbuffer_alloc),
           FfiConverterString.lower(query, nativeModule().rustbuffer_alloc),
+          FfiConverterString.lower(
+            accessToken,
+            nativeModule().rustbuffer_alloc,
+          ),
         );
       },
       /*pollFunc:*/ nativeModule()
@@ -1570,6 +1580,7 @@ export interface LitesealCoreLike {
     signature: ArrayBuffer,
     senderDeviceId: string,
     payloads: Array<FfiEncryptedPayload>,
+    signingKey: ArrayBuffer,
     asyncOpts_?: { signal: AbortSignal },
   ): /*throws*/ Promise<string>;
   setContactTrust(userId: string, trustState: string): /*throws*/ void;
@@ -1888,6 +1899,7 @@ export class LitesealCore
     signature: ArrayBuffer,
     senderDeviceId: string,
     payloads: Array<FfiEncryptedPayload>,
+    signingKey: ArrayBuffer,
     asyncOpts_?: { signal: AbortSignal },
   ): Promise<string> /*throws*/ {
     const __stack = uniffiIsDebug ? new Error().stack : undefined;
@@ -1912,6 +1924,10 @@ export class LitesealCore
             ),
             FfiConverterSequenceTypeFfiEncryptedPayload.lower(
               payloads,
+              nativeModule().rustbuffer_alloc,
+            ),
+            FfiConverterArrayBuffer.lower(
+              signingKey,
               nativeModule().rustbuffer_alloc,
             ),
           );
@@ -2143,7 +2159,7 @@ function uniffiEnsureInitialized() {
   }
   if (
     nativeModule().ubrn_uniffi_liteseal_core_checksum_func_get_user_devices() !==
-    11744
+    32329
   ) {
     throw new UniffiInternalError.ApiChecksumMismatch(
       'uniffi_liteseal_core_checksum_func_get_user_devices',
@@ -2181,7 +2197,7 @@ function uniffiEnsureInitialized() {
   }
   if (
     nativeModule().ubrn_uniffi_liteseal_core_checksum_func_search_users() !==
-    5107
+    59048
   ) {
     throw new UniffiInternalError.ApiChecksumMismatch(
       'uniffi_liteseal_core_checksum_func_search_users',
@@ -2293,7 +2309,7 @@ function uniffiEnsureInitialized() {
   }
   if (
     nativeModule().ubrn_uniffi_liteseal_core_checksum_method_litesealcore_send_message() !==
-    14255
+    56633
   ) {
     throw new UniffiInternalError.ApiChecksumMismatch(
       'uniffi_liteseal_core_checksum_method_litesealcore_send_message',

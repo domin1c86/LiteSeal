@@ -269,9 +269,9 @@ pub async fn refresh_session(
 pub async fn get_user_devices(
     server_url: String,
     user_id: String,
+    access_token: String,
 ) -> FfiResult<Vec<FfiRemoteDevice>> {
-    // The mobile surface has no session token yet; the server requires one.
-    let devices = api::get_user_devices(server_url, user_id, String::new()).await?;
+    let devices = api::get_user_devices(server_url, user_id, access_token).await?;
     Ok(devices
         .into_iter()
         .map(|d| FfiRemoteDevice {
@@ -288,8 +288,9 @@ pub async fn get_user_devices(
 pub async fn search_users(
     server_url: String,
     query: String,
+    access_token: String,
 ) -> FfiResult<Vec<FfiUserSearchResult>> {
-    let results = api::search_users(server_url, query, String::new()).await?;
+    let results = api::search_users(server_url, query, access_token).await?;
     Ok(results
         .into_iter()
         .map(|r| FfiUserSearchResult {
@@ -396,11 +397,24 @@ impl LitesealCore {
         signature: Vec<u8>,
         sender_device_id: String,
         payloads: Vec<FfiEncryptedPayload>,
+        signing_key: Vec<u8>,
     ) -> FfiResult<String> {
         let payloads = payloads.into_iter().map(Into::into).collect();
+        // Signs the relay envelope; each payload's own signature is replaced.
+        let signing_key: [u8; 64] = signing_key
+            .try_into()
+            .map_err(|_| "Invalid signing key length".to_string())?;
         let result = self
             .inner
-            .send_message(sender_id, ciphertext, signature, sender_device_id, payloads)
+            .send_message_with_id(
+                sender_id,
+                ciphertext,
+                signature,
+                sender_device_id,
+                payloads,
+                None,
+                Some(&signing_key),
+            )
             .await?;
         Ok(result.message_id)
     }

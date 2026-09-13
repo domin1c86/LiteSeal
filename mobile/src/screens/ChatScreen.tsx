@@ -13,7 +13,6 @@ import {
   encryptMessage,
   getUserDevices,
   signMessage,
-  verifyMessage,
   decryptMessage,
   type FfiEncryptedPayload,
   type FfiIncomingMessage,
@@ -148,17 +147,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     if (!contact) {
       return { ...base, text: '[sender not in contacts]' };
     }
-    try {
-      if (!contact.ed25519Pk || contact.ed25519Pk.byteLength === 0) {
-        return { ...base, text: '[no ed25519 key, verification skipped]' };
-      }
-      const valid = verifyMessage(m.ciphertext, m.signature, contact.ed25519Pk);
-      if (!valid) {
-        return { ...base, text: '[signature invalid]' };
-      }
-    } catch {
-      return { ...base, text: '[signature invalid]' };
-    }
+    // The Rust core verified the signed envelope before storing it.
     return { ...base, text: decryptWithPeer(m.ciphertext) };
   }
 
@@ -174,7 +163,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       if (!contact) {
         throw new Error('Recipient not found in contacts');
       }
-      const devices = (await getUserDevices(session.serverUrl, peerId)).filter(
+      const devices = (await getUserDevices(session.serverUrl, peerId, session.token)).filter(
         d => !d.revoked && d.publicKey.byteLength === 32,
       );
       if (devices.length === 0) {
@@ -206,6 +195,7 @@ export default function ChatScreen({ route, navigation }: Props) {
         signature,
         session.deviceId,
         payloads,
+        signingKey,
       );
 
       setMessages(prev => [
