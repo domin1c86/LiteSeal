@@ -104,6 +104,24 @@ pub enum Command {
     },
     #[serde(rename = "poll_messages")]
     PollMessages {},
+    #[serde(rename = "select_attachment")]
+    SelectAttachment { path: String, #[serde(rename="peerId")] peer_id: String },
+    #[serde(rename = "list_attachment_tasks")]
+    ListAttachmentTasks {},
+    #[serde(rename = "attachment_step")]
+    AttachmentStep { id: String },
+    #[serde(rename = "publish_attachment")]
+    PublishAttachment { id: String },
+    #[serde(rename = "begin_attachment_download")]
+    BeginAttachmentDownload { #[serde(rename="messageId")] message_id: String },
+    #[serde(rename = "export_attachment")]
+    ExportAttachment { #[serde(rename="messageId")] message_id: String, path: String },
+    #[serde(rename = "forget_attachment_task")]
+    ForgetAttachmentTask { id: String },
+    #[serde(rename = "attachment_cache_stats")]
+    AttachmentCacheStats {},
+    #[serde(rename = "clear_attachment_cache")]
+    ClearAttachmentCache { #[serde(rename="peerId")] peer_id: Option<String> },
     #[serde(rename = "get_personal_organizer")]
     GetPersonalOrganizer {},
     #[serde(rename = "save_personal_organizer")]
@@ -321,6 +339,27 @@ impl Response {
 
 pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, String> {
     let result = match command {
+        Command::SelectAttachment {path,peer_id} => serde_json::to_value(commands::attachments::stage(state,path,peer_id).await?),
+        Command::ListAttachmentTasks {} => serde_json::to_value(commands::attachments::pending(state)?),
+        Command::AttachmentStep {id} => serde_json::to_value(commands::attachments::step(state,id).await?),
+        Command::PublishAttachment {id} => serde_json::to_value(commands::attachments::publish(state,id).await?),
+        Command::BeginAttachmentDownload {message_id} => serde_json::to_value(commands::attachments::begin_download(state,message_id).await?),
+        Command::ExportAttachment {message_id,path} => serde_json::to_value(commands::attachments::export(state,message_id,path)?),
+        Command::ForgetAttachmentTask {id} => {
+            let user=state.identity()?.user_id;
+            state.client.db.lock().map_err(|e|e.to_string())?.forget_attachment_transfer(&user,&id).map_err(|e|e.to_string())?;
+            serde_json::to_value(())
+        }
+        Command::AttachmentCacheStats {} => {
+            let user=state.identity()?.user_id;
+            let db=state.client.db.lock().map_err(|e|e.to_string())?;
+            let (allocated,free)=db.database_disk_stats().map_err(|e|e.to_string())?;
+            serde_json::to_value(serde_json::json!({"cache_bytes":db.attachment_cache_bytes(&user).map_err(|e|e.to_string())?,"database_allocated":allocated,"database_reusable":free,"limit":256*1024*1024}))
+        }
+        Command::ClearAttachmentCache {peer_id} => {
+            let user=state.identity()?.user_id;
+            serde_json::to_value(state.client.db.lock().map_err(|e|e.to_string())?.clear_attachment_cache(&user,peer_id.as_deref()).map_err(|e|e.to_string())?)
+        }
         Command::GetPersonalOrganizer {} => {
             let saved = state.identity()?;
             let bytes = state.client.db.lock().map_err(|e| e.to_string())?.personal_organizer(&saved.user_id).map_err(|e| e.to_string())?;

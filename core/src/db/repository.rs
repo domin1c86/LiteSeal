@@ -43,6 +43,12 @@ pub struct MessageRepository {
     conn: Connection,
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct AttachmentTransfer {
+    pub id: String, pub user_id: String, pub peer_id: String, pub message_id: String,
+    pub metadata: Vec<u8>, pub ciphertext: Vec<u8>, pub offset: i64, pub direction: String,
+}
+
 impl MessageRepository {
     pub fn new(db_path: &str) -> Result<Self, DbError> {
         let conn = Connection::open(db_path)?;
@@ -84,6 +90,11 @@ impl MessageRepository {
             );
             CREATE TABLE IF NOT EXISTS personal_organizer (
                 user_id TEXT PRIMARY KEY, ciphertext BLOB NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS attachment_transfers (
+                id TEXT NOT NULL, user_id TEXT NOT NULL, peer_id TEXT NOT NULL, message_id TEXT NOT NULL,
+                metadata BLOB NOT NULL, ciphertext BLOB NOT NULL, offset INTEGER NOT NULL DEFAULT 0,
+                direction TEXT NOT NULL, PRIMARY KEY(user_id,id)
             );
             CREATE TABLE IF NOT EXISTS local_message_operations (
                 user_id TEXT NOT NULL, device_id TEXT NOT NULL, id TEXT NOT NULL,
@@ -394,6 +405,37 @@ impl MessageRepository {
             pinned = COALESCE(?3, pinned), archived = COALESCE(?4, archived), draft = COALESCE(?5, draft)",
             params![user_id, peer_id, pinned, archived, draft])?;
         Ok(())
+    }
+
+    pub fn attachment_transfer(&self, user: &str, id: &str) -> Result<AttachmentTransfer, DbError> {
+        Ok(self.conn.query_row("SELECT id,user_id,peer_id,message_id,metadata,ciphertext,offset,direction FROM attachment_transfers WHERE user_id=?1 AND id=?2", params![user,id], |r| Ok(AttachmentTransfer {
+            id:r.get(0)?,user_id:r.get(1)?,peer_id:r.get(2)?,message_id:r.get(3)?,metadata:r.get(4)?,ciphertext:r.get(5)?,offset:r.get(6)?,direction:r.get(7)?
+        }))?)
+    }
+    pub fn save_attachment_transfer(&self, item: &AttachmentTransfer) -> Result<(), DbError> {
+        self.conn.execute("INSERT INTO attachment_transfers(id,user_id,peer_id,message_id,metadata,ciphertext,offset,direction) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
+            ON CONFLICT(user_id,id) DO UPDATE SET metadata=excluded.metadata,ciphertext=excluded.ciphertext,offset=excluded.offset,direction=excluded.direction",
+            params![item.id,item.user_id,item.peer_id,item.message_id,item.metadata,item.ciphertext,item.offset,item.direction])?;
+        Ok(())
+    }
+    pub fn attachment_transfer_ids(&self, user: &str) -> Result<Vec<String>, DbError> {
+        let mut stmt=self.conn.prepare("SELECT id FROM attachment_transfers WHERE user_id=?1 AND direction='upload'")?;
+        let rows=stmt.query_map([user],|r|r.get(0))?.collect::<Result<Vec<_>,_>>()?; Ok(rows)
+    }
+    pub fn attachment_cache_bytes(&self, user: &str) -> Result<i64, DbError> {
+        Ok(self.conn.query_row("SELECT COALESCE(SUM(length(ciphertext)),0) FROM attachment_transfers WHERE user_id=?1", [user], |r|r.get(0))?)
+    }
+    pub fn clear_attachment_cache(&self, user: &str, peer: Option<&str>) -> Result<usize, DbError> {
+        Ok(self.conn.execute("DELETE FROM attachment_transfers WHERE user_id=?1 AND direction='download' AND (?2 IS NULL OR peer_id=?2)",params![user,peer])?)
+    }
+    pub fn forget_attachment_transfer(&self, user: &str, id: &str) -> Result<(), DbError> {
+        self.conn.execute("DELETE FROM attachment_transfers WHERE user_id=?1 AND id=?2",params![user,id])?; Ok(())
+    }
+    pub fn database_disk_stats(&self) -> Result<(i64,i64),DbError> {
+        let pages:i64=self.conn.query_row("PRAGMA page_count",[],|r|r.get(0))?;
+        let free:i64=self.conn.query_row("PRAGMA freelist_count",[],|r|r.get(0))?;
+        let size:i64=self.conn.query_row("PRAGMA page_size",[],|r|r.get(0))?;
+        Ok((pages*size,free*size))
     }
 
     pub fn personal_organizer(&self, user_id: &str) -> Result<Vec<u8>, DbError> {

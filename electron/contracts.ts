@@ -3,6 +3,15 @@ import type { RegisterResult, ConnectResult, SendMessageResult, PollMessagesResu
 } from "../ui/src/types";
 
 export interface CommandMap {
+  select_attachment: { args: { peerId: string }; result: AttachmentTask | null };
+  list_attachment_tasks: { args: {}; result: AttachmentTask[] };
+  attachment_step: { args: { id: string }; result: AttachmentTask };
+  publish_attachment: { args: { id: string }; result: string };
+  begin_attachment_download: { args: { messageId: string }; result: AttachmentTask };
+  export_attachment: { args: { messageId: string; preview?: boolean }; result: string | null };
+  forget_attachment_task: { args: { id: string }; result: void };
+  attachment_cache_stats: { args: {}; result: { cache_bytes: number; database_allocated: number; database_reusable: number; limit: number } };
+  clear_attachment_cache: { args: { peerId?: string }; result: number };
   get_personal_organizer: { args: {}; result: string };
   save_personal_organizer: { args: { content: string }; result: void };
   get_message_context: { args: { userId: string; conversationId: string; messageId: string }; result: Message[] };
@@ -51,10 +60,12 @@ export interface CommandMap {
   clear_downloaded_attachments: { args: {  }; result: number };
 }
 export type CommandName = keyof CommandMap;
+export interface AttachmentTask { id: string; peer_id: string; message_id: string; name: string; size: number; mime: string; offset: number; total: number; direction: string }
 export type DesktopApi = {
   [K in CommandName]: (args: CommandMap[K]["args"]) => Promise<CommandMap[K]["result"]>;
 };
 export const commandNames = [
+  "select_attachment", "list_attachment_tasks", "attachment_step", "publish_attachment", "begin_attachment_download", "export_attachment", "forget_attachment_task", "attachment_cache_stats", "clear_attachment_cache",
   "get_personal_organizer",
   "save_personal_organizer",
   "get_message_context",

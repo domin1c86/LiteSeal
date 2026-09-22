@@ -188,3 +188,25 @@ fn generate_nonce() -> Result<[u8; 24], CryptoError> {
     }
     Ok(nonce)
 }
+
+/// Per-object random secretbox key. Nonce and MAC are included in the returned ciphertext.
+pub fn encrypt_attachment(plaintext: &[u8]) -> Result<(Vec<u8>, Vec<u8>), CryptoError> {
+    init_sodium()?;
+    let mut key = vec![0u8; 32];
+    let nonce = generate_nonce()?;
+    unsafe { libsodium_sys::randombytes_buf(key.as_mut_ptr().cast(), key.len()); }
+    let mut output = vec![0u8; 24 + 16 + plaintext.len()];
+    output[..24].copy_from_slice(&nonce);
+    let result = unsafe { libsodium_sys::crypto_secretbox_easy(output[24..].as_mut_ptr(), plaintext.as_ptr(), plaintext.len() as u64, nonce.as_ptr(), key.as_ptr()) };
+    if result != 0 { return Err(CryptoError::EncryptionError); }
+    Ok((output, key))
+}
+
+pub fn decrypt_attachment(ciphertext: &[u8], key: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    init_sodium()?;
+    if key.len() != 32 || ciphertext.len() < 40 { return Err(CryptoError::DecryptionError); }
+    let mut plain = vec![0u8; ciphertext.len()-40];
+    let result = unsafe { libsodium_sys::crypto_secretbox_open_easy(plain.as_mut_ptr(), ciphertext[24..].as_ptr(), (ciphertext.len()-24) as u64, ciphertext.as_ptr(), key.as_ptr()) };
+    if result != 0 { return Err(CryptoError::DecryptionError); }
+    Ok(plain)
+}

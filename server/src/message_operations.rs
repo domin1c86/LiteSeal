@@ -22,7 +22,7 @@ fn reject(message: &str) -> Failure {
 pub struct DeviceQuery {
     device_id: String,
 }
-async fn authorize(state: &AppState, headers: &HeaderMap, device: &str) -> Result<String, Failure> {
+pub(crate) async fn authorize(state: &AppState, headers: &HeaderMap, device: &str) -> Result<String, Failure> {
     let token = headers
         .get("authorization")
         .and_then(|h| h.to_str().ok())

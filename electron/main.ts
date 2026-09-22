@@ -1,6 +1,7 @@
 import { app, clipboard, BrowserWindow, dialog, ipcMain, Menu, net, powerMonitor, protocol, session, Tray } from "electron";
 import { ChatNotifications } from "./notifications";
 import path from "node:path";
+import fs from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { DesktopBridge } from "./bridge";
 import { commandNames } from "./contracts";
@@ -87,6 +88,35 @@ else {
           return { ok: false, error: "不允许的桌面接口来源" };
         }
         try {
+          if (name === "select_attachment") {
+            const peerId = (args as { peerId: string }).peerId;
+            if (typeof peerId !== "string" || peerId.length > 128) throw new Error("无效联系人");
+            const selected = await dialog.showOpenDialog(mainWindow, { title: "选择文件（最大 20 MiB）", properties: ["openFile"] });
+            if (selected.canceled || !selected.filePaths[0]) return { ok: true, result: null };
+            return { ok: true, result: await bridge.call("select_attachment", { peerId, path: selected.filePaths[0] } as never) };
+          }
+          if (name === "export_attachment") {
+            const input = args as { messageId: string; preview?: boolean };
+            if (typeof input.messageId !== "string" || input.messageId.length > 128) throw new Error("无效附件消息");
+            let destination: string | undefined;
+            if (!input.preview) {
+              const result = await dialog.showSaveDialog(mainWindow, { title: "附件另存为", defaultPath: "attachment" });
+              if (result.canceled || !result.filePath) return { ok: true, result: null };
+              destination = result.filePath;
+            }
+            const directory = await fs.mkdtemp(path.join(destination ? path.dirname(destination) : app.getPath("temp"), ".liteseal-export-"));
+            const temporary = path.join(directory, "verified");
+            try {
+              await bridge.call("export_attachment", { messageId: input.messageId, path: temporary } as never);
+              if (destination) { await fs.rename(temporary, destination); return { ok: true, result: "已保存" }; }
+              const bytes = await fs.readFile(temporary);
+              const mime = bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10])) ? "image/png"
+                : bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255 ? "image/jpeg"
+                : bytes.subarray(0,4).toString() === "RIFF" && bytes.subarray(8,12).toString() === "WEBP" ? "image/webp" : null;
+              if (!mime) throw new Error("不支持此文件的图片预览");
+              return { ok: true, result: `data:${mime};base64,${bytes.toString("base64")}` };
+            } finally { await fs.rm(directory, { recursive: true, force: true }); }
+          }
           if (name === "set_notification_context") {
             const input = args as { userId: string | null; activePeerId: string | null };
             if (input.userId !== null) {

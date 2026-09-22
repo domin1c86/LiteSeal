@@ -2,6 +2,7 @@ import { latestOperations } from "../lib/messageOperations";
 import { deliveryStatusLabel } from "../lib/deliveryStatus";
 import { projectMessage } from "../lib/messageProjection";
 import MessageSearch from "./MessageSearch";
+import { AttachmentCard, AttachmentComposer } from "./Attachments";
 import { decodeContent, encodeContent } from "../lib/messageContent";
 import { useState, useEffect, useRef, useLayoutEffect } from "react";
 import { useDesktop } from "../hooks/useDesktop";
@@ -30,6 +31,7 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
   const [messages, setMessages] = useState<Message[]>([]);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchRevision, setSearchRevision] = useState(0);
+  const [attachmentRevision, setAttachmentRevision] = useState(0);
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const [contextMessages, setContextMessages] = useState<Message[] | null>(null);
   const input = draft.text;
@@ -176,7 +178,7 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
     }).catch(error => { if (active) setHistoryError(String(error)); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [storageConversationId, userId, contacts]);
+  }, [storageConversationId, userId, contacts, attachmentRevision]);
 
   async function loadOlder() {
     if (!storageConversationId || !cursor.current || loadingOlder || loading) return;
@@ -452,6 +454,7 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
                 }}>回复 {content.reply.sender}：{content.reply.text}</button>}
                 {!revoked && content.forwarded && <div style={{ fontSize: 12 }}>转发内容（来源由转发者提供）：{content.forwarded.sender}</div>}
                 <span style={styles.messageText}>{revoked ? "此消息已被发送者撤回" : content.text}</span>
+                {!revoked && content.attachment && <AttachmentCard messageId={msg.id} name={content.attachment.name} image={content.attachment.mime.startsWith("image/")} />}
                 {operation?.kind === "edit" && <span style={styles.timestamp}>已编辑 · 版本 {operation.revision}</span>}
                 {notices.map(item => <div key={item.id} role="status">{item.status === "pending" ? "变更等待服务端确认，将自动重试" : item.error ?? "变更未通过校验"}</div>)}
                 <div style={{ display: "flex", gap: 6 }}>
@@ -461,7 +464,7 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
                   <button disabled={sending || deleting || draft.messageId === msg.id} onClick={() => setDeleteTarget(msg.id)}>从本机删除</button>
                   {!revoked && <button onClick={() => { setForwardDraft({ text: content.text, forwarded: reference }); setForwardTarget(""); }}>转发</button>}
                   {isMine && !revoked && <>
-                    <button disabled={!canModify} title="原发送设备可在服务器首次接收后的 48 小时内编辑" onClick={() => { setOperationDialog({ targetId: msg.id, kind: "edit", content, revision: operation?.revision ?? 0 }); setEditedText(content.text); }}>编辑</button>
+                    <button disabled={!canModify || !!content.attachment} title="原发送设备可在服务器首次接收后的 48 小时内编辑文字消息" onClick={() => { setOperationDialog({ targetId: msg.id, kind: "edit", content, revision: operation?.revision ?? 0 }); setEditedText(content.text); }}>编辑</button>
                     <button disabled={!canModify} title="原发送设备可在服务器首次接收后的 48 小时内撤回" onClick={() => setOperationDialog({ targetId: msg.id, kind: "revoke", content, revision: operation?.revision ?? 0 })}>撤回</button>
                   </>}
                 </div>
@@ -597,6 +600,7 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
           {sending ? "Sending..." : draft.messageId ? "重试原消息" : "Send"}
         </button>
       </form>
+      <AttachmentComposer peerId={conversationId} online={online} onSent={() => setAttachmentRevision(value => value + 1)} />
     </div>
   );
 }

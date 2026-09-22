@@ -1,4 +1,5 @@
 mod auth;
+mod attachments;
 mod config;
 mod db;
 #[cfg(test)]
@@ -56,6 +57,8 @@ fn build_router(state: AppState, allowed_origin: HeaderValue) -> Router {
         .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]);
 
     Router::new()
+        .route("/attachments", post(attachments::create))
+        .route("/attachments/:id/:part", get(attachments::download).put(attachments::upload))
         .route("/healthz", get(|| async { "ok" }))
         .route(
             "/readyz",

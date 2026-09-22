@@ -84,7 +84,7 @@ pub async fn decrypt_message(
     sender_public_key: Vec<u8>,
     state: &AppState,
 ) -> Result<Vec<u8>, String> {
-    chat::decrypt_message(ciphertext, sender_public_key, state.identity()?.secret_key)
+    super::attachments::public_plaintext(chat::decrypt_message(ciphertext, sender_public_key, state.identity()?.secret_key)?)
 }
 
 pub async fn sign_message(message: Vec<u8>, state: &AppState) -> Result<Vec<u8>, String> {
