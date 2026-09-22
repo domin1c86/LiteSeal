@@ -729,6 +729,24 @@ impl MessageRepository {
         Ok(messages)
     }
 
+    pub fn message_context(&self, user_id: &str, conversation_id: &str, message_id: &str) -> Result<Vec<MessageModel>, DbError> {
+        let target = self.get_message(message_id)?.ok_or(DbError::NotFound)?;
+        if target.conversation_id != conversation_id || self.locally_deleted_ids(user_id, conversation_id)?.contains(&target.id) {
+            return Err(DbError::NotFound);
+        }
+        let mut older = self.get_visible_message_page(conversation_id, 20, user_id, Some(target.timestamp), Some(&target.id))?;
+        older.reverse();
+        let mut stmt = self.conn.prepare("SELECT id FROM messages m WHERE conversation_id = ?1
+            AND (timestamp > ?2 OR (timestamp = ?2 AND id > ?3))
+            AND NOT EXISTS (SELECT 1 FROM locally_deleted_messages d WHERE d.user_id = ?4 AND d.message_id = m.id)
+            ORDER BY timestamp, id LIMIT 20")?;
+        let ids = stmt.query_map(params![conversation_id, target.timestamp, target.id, user_id], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        older.push(target);
+        for id in ids { if let Some(message) = self.get_message(&id)? { older.push(message); } }
+        Ok(older)
+    }
+
     pub fn get_latest_message_for_sender(
         &self,
         conversation_id: &str,

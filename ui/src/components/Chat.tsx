@@ -1,5 +1,7 @@
 import { latestOperations } from "../lib/messageOperations";
 import { deliveryStatusLabel } from "../lib/deliveryStatus";
+import { projectMessage } from "../lib/messageProjection";
+import MessageSearch from "./MessageSearch";
 import { decodeContent, encodeContent } from "../lib/messageContent";
 import { useState, useEffect, useRef, useLayoutEffect } from "react";
 import { useDesktop } from "../hooks/useDesktop";
@@ -25,6 +27,10 @@ interface ChatProps {
 
 export default function Chat({ draft, onDraftChange, onForward, online, conversationId, userId, deviceId, token, serverUrl, contacts, relayBatch, onContactsChanged }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchRevision, setSearchRevision] = useState(0);
+  const [highlightId, setHighlightId] = useState<string | null>(null);
+  const [contextMessages, setContextMessages] = useState<Message[] | null>(null);
   const input = draft.text;
   const [operationsLoaded, setOperationsLoaded] = useState(false);
   const [operations, setOperations] = useState<MessageOperation[]>([]);
@@ -61,6 +67,28 @@ export default function Chat({ draft, onDraftChange, onForward, online, conversa
   const activeContact = contacts.find((c) => c.user_id === conversationId);
   // conversationId prop is the peer's user id; storage/relay use the canonical DM id.
   const storageConversationId = conversationId ? dmConversationId(userId, conversationId) : null;
+
+  useEffect(() => {
+    const shortcut = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f" && conversationId) {
+        event.preventDefault(); setSearchOpen(true);
+      }
+    };
+    window.addEventListener("keydown", shortcut);
+    return () => window.removeEventListener("keydown", shortcut);
+  }, [conversationId]);
+
+  useLayoutEffect(() => {
+    if (highlightId) document.getElementById(`message-${highlightId}`)?.scrollIntoView({ block: "center" });
+  }, [contextMessages, highlightId]);
+
+  async function locateMessage(messageId: string) {
+    if (!storageConversationId) return;
+    const rows = await window.desktop.get_message_context({ userId, conversationId: storageConversationId, messageId });
+    const decoded = await decodeHistory(rows);
+    if (!alive.current) return;
+    setContextMessages(decoded); setHighlightId(messageId);
+  }
 
   const { markMessagesRead } = useDesktop();
   const [readError, setReadError] = useState<string | null>(null);
@@ -370,12 +398,17 @@ export default function Chat({ draft, onDraftChange, onForward, online, conversa
           )}
         </div>
       </div>
+      {activeContact && <button onClick={() => setSearchOpen(value => !value)}>搜索历史（Ctrl+F）</button>}
+      {searchOpen && storageConversationId && activeContact && operationsLoaded && <MessageSearch
+        userId={userId} conversationId={storageConversationId} peerKey={activeContact.public_key}
+        operations={operations} revision={searchRevision} onSelect={locateMessage} onClose={() => setSearchOpen(false)} />}
       <div ref={scrollArea} className="chat-messages" style={styles.messages}>
-        {hasOlder && <button disabled={loadingOlder || loading} onClick={loadOlder}>{loadingOlder ? "正在加载…" : "加载更早消息"}</button>}
+        {contextMessages ? <button onClick={() => { setContextMessages(null); setHighlightId(null); }}>返回最新消息</button>
+          : hasOlder && <button disabled={loadingOlder || loading} onClick={loadOlder}>{loadingOlder ? "正在加载…" : "加载更早消息"}</button>}
         {historyError && <div role="alert">历史加载失败：{historyError}</div>}
         {loading && <p style={styles.loadingText}>loading…</p>}
         {!operationsLoaded && <p role="status">正在读取本机消息变更…</p>}
-        {operationsLoaded && messages.map((msg) => {
+        {operationsLoaded && (contextMessages ?? messages).filter(msg => !deletedIds.current.has(msg.id)).map((msg) => {
           const isMine = msg.sender_id === userId;
           let text = "";
           try {
@@ -384,8 +417,7 @@ export default function Chat({ draft, onDraftChange, onForward, online, conversa
             text = "[encrypted]";
           }
           const operation = latest.get(msg.id);
-          const revoked = operation?.kind === "revoke";
-          const content = decodeContent(operation?.kind === "edit" && operation.content !== null ? operation.content : text);
+          const { revoked, content } = projectMessage(text, operation);
           const pending = operations.some(item => item.target_id === msg.id && item.status === "pending");
           const notices = operations.filter(item => item.target_id === msg.id && item.status !== "accepted" && item.revision >= (operation?.revision ?? 0));
           const canModify = isMine && msg.sender_device_id === deviceId && Date.now() - msg.timestamp <= 48 * 60 * 60 * 1000
@@ -398,6 +430,7 @@ export default function Chat({ draft, onDraftChange, onForward, online, conversa
               key={msg.id}
               style={{
                 ...styles.messageRow,
+                outline: highlightId === msg.id ? "2px solid var(--accent)" : undefined,
                 justifyContent: isMine ? "flex-end" : "flex-start",
               }}
             >
@@ -480,6 +513,7 @@ export default function Chat({ draft, onDraftChange, onForward, online, conversa
             deletedIds.current.add(id);
             if (!alive.current) return;
             setMessages(previous => previous.filter(message => message.id !== id));
+            setSearchRevision(value => value + 1);
             setDeleteTarget(null);
             setActionStatus("已从本机聊天中删除；未撤回对方消息。");
           } catch (error) { if (alive.current) setActionStatus(String(error)); }

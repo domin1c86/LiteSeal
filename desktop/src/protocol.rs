@@ -116,6 +116,15 @@ pub enum Command {
         #[serde(rename = "beforeId", default)]
         before_id: Option<String>,
     },
+    #[serde(rename = "get_message_context")]
+    GetMessageContext {
+        #[serde(rename = "userId")]
+        user_id: String,
+        #[serde(rename = "conversationId")]
+        conversation_id: String,
+        #[serde(rename = "messageId")]
+        message_id: String,
+    },
     #[serde(rename = "get_local_messages")]
     GetLocalMessages {
         #[serde(rename = "conversationId")]
@@ -308,6 +317,11 @@ impl Response {
 
 pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, String> {
     let result = match command {
+        Command::GetMessageContext { user_id, conversation_id, message_id } => {
+            if state.identity()?.user_id != user_id { return Err("Account mismatch".into()); }
+            serde_json::to_value(state.client.db.lock().map_err(|e| e.to_string())?
+                .message_context(&user_id, &conversation_id, &message_id).map_err(|e| e.to_string())?)
+        }
         Command::SubmitMessageOperation {
             target_id,
             kind,

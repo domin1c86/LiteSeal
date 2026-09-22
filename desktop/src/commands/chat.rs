@@ -117,6 +117,7 @@ pub async fn get_local_message_page(
     if !(1..=101).contains(&limit) || before_timestamp.is_some() != before_id.is_some() {
         return Err("Invalid pagination cursor or limit".into());
     }
+    if state.identity()?.user_id != user_id { return Err("Account mismatch".into()); }
     state
         .client
         .db
