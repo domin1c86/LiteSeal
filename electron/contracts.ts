@@ -3,6 +3,9 @@ import type { RegisterResult, ConnectResult, SendMessageResult, PollMessagesResu
 } from "../ui/src/types";
 
 export interface CommandMap {
+  submit_reaction: { args: { targetId: string; peerId: string; emoji: string }; result: void };
+  sync_reactions: { args: {}; result: number };
+  get_reactions: { args: { conversationId: string }; result: { target_id: string; actor: string; emoji: string }[] };
   list_contact_requests: { args: {}; result: { peer_id: string; username: string; status: string }[] };
   set_contact_policy: { args: { peerId: string; status: "accepted" | "blocked" | "rejected" | "pending" }; result: void };
   list_account_sessions: { args: {}; result: { id: string; device_id: string; name: string; revoked: boolean; current: boolean; expires_at: string }[] };
@@ -69,6 +72,7 @@ export type DesktopApi = {
   [K in CommandName]: (args: CommandMap[K]["args"]) => Promise<CommandMap[K]["result"]>;
 };
 export const commandNames = [
+  "submit_reaction", "sync_reactions", "get_reactions",
   "list_contact_requests", "set_contact_policy", "list_account_sessions", "logout_all_sessions",
   "select_attachment", "list_attachment_tasks", "attachment_step", "publish_attachment", "begin_attachment_download", "export_attachment", "forget_attachment_task", "attachment_cache_stats", "clear_attachment_cache",
   "get_personal_organizer",

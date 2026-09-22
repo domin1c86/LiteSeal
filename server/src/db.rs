@@ -102,6 +102,7 @@ impl Db {
             (3, OPERATION_MIGRATIONS),
             (4, crate::attachments::MIGRATION),
             (5, crate::contact_policy::MIGRATION),
+            (6, crate::reactions::MIGRATION),
         ] {
             let applied = sqlx::query("SELECT 1 FROM schema_migrations WHERE version = $1")
                 .bind(version)

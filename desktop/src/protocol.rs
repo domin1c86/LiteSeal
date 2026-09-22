@@ -104,6 +104,12 @@ pub enum Command {
     },
     #[serde(rename = "poll_messages")]
     PollMessages {},
+    #[serde(rename="submit_reaction")]
+    SubmitReaction { #[serde(rename="targetId")] target_id:String, #[serde(rename="peerId")] peer_id:String, emoji:String },
+    #[serde(rename="sync_reactions")]
+    SyncReactions {},
+    #[serde(rename="get_reactions")]
+    GetReactions { #[serde(rename="conversationId")] conversation_id:String },
     #[serde(rename="list_contact_requests")]
     ListContactRequests {},
     #[serde(rename="set_contact_policy")]
@@ -347,6 +353,9 @@ impl Response {
 
 pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, String> {
     let result = match command {
+        Command::SubmitReaction {target_id,peer_id,emoji} => serde_json::to_value(commands::reactions::submit(state,target_id,peer_id,emoji).await?),
+        Command::SyncReactions {} => serde_json::to_value(commands::reactions::sync(state).await?),
+        Command::GetReactions {conversation_id} => serde_json::to_value(commands::reactions::views(state,conversation_id)?),
         Command::ListContactRequests {} => serde_json::to_value(commands::account::policies(state).await?),
         Command::SetContactPolicy {peer_id,status} => serde_json::to_value(commands::account::policy(state,peer_id,status).await?),
         Command::ListAccountSessions {} => serde_json::to_value(commands::account::sessions(state).await?),

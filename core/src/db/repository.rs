@@ -91,6 +91,10 @@ impl MessageRepository {
             CREATE TABLE IF NOT EXISTS personal_organizer (
                 user_id TEXT PRIMARY KEY, ciphertext BLOB NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS local_reactions (
+                user_id TEXT NOT NULL,id TEXT NOT NULL,seq INTEGER NOT NULL,body TEXT NOT NULL,
+                PRIMARY KEY(user_id,id)
+            );
             CREATE TABLE IF NOT EXISTS attachment_transfers (
                 id TEXT NOT NULL, user_id TEXT NOT NULL, peer_id TEXT NOT NULL, message_id TEXT NOT NULL,
                 metadata BLOB NOT NULL, ciphertext BLOB NOT NULL, offset INTEGER NOT NULL DEFAULT 0,
@@ -438,6 +442,13 @@ impl MessageRepository {
         Ok((pages*size,free*size))
     }
 
+    pub fn reaction_rows(&self,user:&str)->Result<Vec<(i64,String)>,DbError>{
+        let mut stmt=self.conn.prepare("SELECT seq,body FROM local_reactions WHERE user_id=?1 ORDER BY seq")?;
+        let rows=stmt.query_map([user],|r|Ok((r.get(0)?,r.get(1)?)))?.collect::<Result<Vec<_>,_>>()?;Ok(rows)
+    }
+    pub fn save_reaction(&self,user:&str,id:&str,seq:i64,body:&str)->Result<(),DbError>{
+        self.conn.execute("INSERT INTO local_reactions(user_id,id,seq,body) VALUES(?1,?2,?3,?4) ON CONFLICT(user_id,id) DO UPDATE SET seq=excluded.seq,body=excluded.body",params![user,id,seq,body])?;Ok(())
+    }
     pub fn personal_organizer(&self, user_id: &str) -> Result<Vec<u8>, DbError> {
         use rusqlite::OptionalExtension;
         Ok(self.conn.query_row("SELECT ciphertext FROM personal_organizer WHERE user_id = ?1", [user_id], |row| row.get(0)).optional()?.unwrap_or_default())

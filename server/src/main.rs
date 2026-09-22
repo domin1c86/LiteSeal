@@ -1,6 +1,7 @@
 mod auth;
 mod attachments;
 mod contact_policy;
+mod reactions;
 mod config;
 mod db;
 #[cfg(test)]
@@ -58,6 +59,7 @@ fn build_router(state: AppState, allowed_origin: HeaderValue) -> Router {
         .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]);
 
     Router::new()
+        .route("/reactions", get(reactions::list).post(reactions::submit))
         .route("/contact-policy", get(contact_policy::list).post(contact_policy::change))
         .route("/attachments", post(attachments::create))
         .route("/attachments/:id/:part", get(attachments::download).put(attachments::upload))

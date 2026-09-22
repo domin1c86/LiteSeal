@@ -117,9 +117,10 @@ export default function App() {
         // Deliver the persisted message batch even when operation sync later fails.
         if (result.messages.length || result.events.length) setRelayBatch({ seq: ++seq, ...result });
         const operationChanges = await syncMessageOperations();
+        const reactionChanges = await window.desktop.sync_reactions({});
         if (!active) return;
         setConnection("online"); setConnectionError(null); failures = 0;
-        if (operationChanges) setRelayBatch({ seq: ++seq, ...result });
+        if (operationChanges || reactionChanges) setRelayBatch({ seq: ++seq, ...result });
         schedule(1000);
       } catch (error) {
         if (!active) return;

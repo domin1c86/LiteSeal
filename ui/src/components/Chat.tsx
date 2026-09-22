@@ -29,6 +29,8 @@ interface ChatProps {
 
 export default function Chat({ onFavorite, draft, onDraftChange, onForward, online, conversationId, userId, deviceId, token, serverUrl, contacts, relayBatch, onContactsChanged }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
+  const [reactions, setReactions] = useState<{ target_id: string; actor: string; emoji: string }[]>([]);
+  const [reactionBusy, setReactionBusy] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchRevision, setSearchRevision] = useState(0);
   const [attachmentRevision, setAttachmentRevision] = useState(0);
@@ -74,6 +76,12 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
   const activeContact = contacts.find((c) => c.user_id === conversationId);
   // conversationId prop is the peer's user id; storage/relay use the canonical DM id.
   const storageConversationId = conversationId ? dmConversationId(userId, conversationId) : null;
+
+  useEffect(() => {
+    let active = true;
+    if (storageConversationId) void window.desktop.get_reactions({ conversationId: storageConversationId }).then(value => { if (active) setReactions(value); }).catch(error => { if (active) setActionStatus(String(error)); });
+    return () => { active = false; };
+  }, [storageConversationId, relayBatch, reactionBusy]);
 
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
@@ -455,6 +463,15 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
                 {!revoked && content.forwarded && <div style={{ fontSize: 12 }}>转发内容（来源由转发者提供）：{content.forwarded.sender}</div>}
                 <span style={styles.messageText}>{revoked ? "此消息已被发送者撤回" : content.text}</span>
                 {!revoked && content.attachment && <AttachmentCard messageId={msg.id} name={content.attachment.name} image={content.attachment.mime.startsWith("image/")} />}
+                {!revoked && <div aria-label="消息回应">
+                  {reactions.filter(item => item.target_id === msg.id).map(item => <span key={item.actor} title={item.actor}>{item.emoji} {item.actor === userId ? "我" : contacts.find(peer => peer.user_id === item.actor)?.username ?? item.actor} </span>)}
+                  <select aria-label="回应或撤销回应" disabled={!online || reactionBusy} value={reactions.find(item => item.target_id === msg.id && item.actor === userId)?.emoji ?? ""} onChange={async event => {
+                    setReactionBusy(true);
+                    try { await window.desktop.submit_reaction({ targetId: msg.id, peerId: conversationId, emoji: event.target.value }); }
+                    catch (failure) { if (alive.current) setActionStatus(String(failure)); }
+                    finally { if (alive.current) setReactionBusy(false); }
+                  }}><option value="">无回应 / 撤销</option>{["👍", "❤️", "😂", "😮", "😢", "🙏"].map(emoji => <option key={emoji} value={emoji}>{emoji}</option>)}</select>
+                </div>}
                 {operation?.kind === "edit" && <span style={styles.timestamp}>已编辑 · 版本 {operation.revision}</span>}
                 {notices.map(item => <div key={item.id} role="status">{item.status === "pending" ? "变更等待服务端确认，将自动重试" : item.error ?? "变更未通过校验"}</div>)}
                 <div style={{ display: "flex", gap: 6 }}>
