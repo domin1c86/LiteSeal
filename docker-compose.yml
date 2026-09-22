@@ -21,6 +21,7 @@ services:
       dockerfile: server/Dockerfile
     environment:
       DATABASE_URL: postgres://liteseal:liteseal@postgres:5432/liteseal
+      LITESEAL_INVITE_CODES: ${LITESEAL_INVITE_CODES-LITESEAL-WIN-ALPHA,LITESEAL-WIN-BRAVO,LITESEAL-WIN-CHARLIE}
       LITESEAL_BIND: 0.0.0.0:3000
       LITESEAL_CORS_ALLOW_ORIGIN: http://localhost:1420
       RUST_LOG: info,tower_http=info,liteseal_server=debug

@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LiteSeal — Codex style redesign preview</title>
+<style>
+  /* ===== Design tokens: exactly what will land in ui/src/theme.css ===== */
+  :root, .dark {
+    color-scheme: dark;
+    --app-bg: #0f0f0f;
+    --workspace-bg: #0f0f0f;
+    --sidebar-bg: #161616;
+    --surface: #1c1c1c;
+    --surface-muted: #191919;
+    --surface-hover: #222222;
+    --surface-active: #262626;
+    --border: #262626;
+    --border-strong: #363636;
+    --text: #ececec;
+    --text-muted: #a3a3a3;
+    --text-subtle: #6f6f6f;
+    --accent: #ececec;
+    --accent-hover: #ffffff;
+    --accent-soft: rgba(255, 255, 255, 0.07);
+    --accent-contrast: #0f0f0f;
+    --ok: #62b47a;
+    --warn: #d4a054;
+    --danger: #e5484d;
+    --shadow-modal: 0 16px 48px rgba(0, 0, 0, 0.55);
+    --shadow-composer: 0 4px 20px rgba(0, 0, 0, 0.25);
+    --overlay: rgba(0, 0, 0, 0.65);
+    --radius-sm: 6px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --composer-radius: 12px;
+    --font-mono: ui-monospace, "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  }
+  .light {
+    color-scheme: light;
+    --app-bg: #ffffff;
+    --workspace-bg: #ffffff;
+    --sidebar-bg: #f7f7f7;
+    --surface: #ffffff;
+    --surface-muted: #f2f2f2;
+    --surface-hover: #ededed;
+    --surface-active: #e6e6e6;
+    --border: #e5e5e5;
+    --border-strong: #d4d4d4;
+    --text: #171717;
+    --text-muted: #666666;
+    --text-subtle: #999999;
+    --accent: #171717;
+    --accent-hover: #000000;
+    --accent-soft: rgba(0, 0, 0, 0.05);
+    --accent-contrast: #ffffff;
+    --ok: #1e9e50;
+    --warn: #b07c33;
+    --danger: #d13438;
+    --shadow-modal: 0 12px 36px rgba(0, 0, 0, 0.12);
+    --shadow-composer: 0 4px 20px rgba(0, 0, 0, 0.06);
+    --overlay: rgba(0, 0, 0, 0.35);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--app-bg);
+    color: var(--text);
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 14px;
+    transition: background 0.2s, color 0.2s;
+  }
+
+  /* ===== Preview page chrome (not part of the app design) ===== */
+  .preview-wrap { max-width: 1060px; margin: 0 auto; padding: 32px 24px 80px; }
+  .preview-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 8px; }
+  .preview-head h1 { font-family: var(--font-mono); font-weight: 600; font-size: 22px; margin: 0; }
+  .preview-head h1 .cursor { color: var(--text-subtle); }
+  .preview-note { color: var(--text-muted); font-size: 13px; margin: 0 0 28px; }
+  .theme-toggle {
+    font: inherit; font-size: 13px; font-family: var(--font-mono);
+    padding: 8px 14px; border-radius: var(--radius-md);
+    border: 1px solid var(--border-strong); background: var(--surface);
+    color: var(--text); cursor: pointer;
+  }
+  .theme-toggle:hover { background: var(--surface-hover); }
+  .section-label {
+    font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--text-subtle); margin: 44px 0 12px;
+  }
+  .frame {
+    border: 1px solid var(--border-strong); border-radius: 12px; overflow: hidden;
+    box-shadow: var(--shadow-modal); background: var(--workspace-bg);
+  }
+  .titlebar {
+    display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px;
+    background: var(--sidebar-bg); border-bottom: 1px solid var(--border);
+    font-size: 12px; color: var(--text-subtle); font-family: var(--font-mono);
+  }
+  .titlebar .dots { display: flex; gap: 6px; }
+  .titlebar .dots span { width: 10px; height: 10px; border-radius: 50%; background: var(--border-strong); }
+  .titlebar .win-title { flex: 1; text-align: center; }
+
+  /* ===== App design proper ===== */
+  .wordmark { font-family: var(--font-mono); font-weight: 600; color: var(--text); letter-spacing: -0.01em; }
+  .wordmark .cursor { color: var(--text-subtle); font-weight: 400; }
+  .mono { font-family: var(--font-mono); }
+
+  /* --- Main layout: sidebar + chat --- */
+  .app-shell { display: flex; height: 620px; background: var(--workspace-bg); }
+
+  .sidebar {
+    width: 280px; flex-shrink: 0; background: var(--sidebar-bg);
+    border-right: 1px solid var(--border); display: flex; flex-direction: column;
+  }
+  .sidebar-header {
+    min-height: 58px; padding: 0 14px 0 18px; display: flex; align-items: center;
+    justify-content: space-between; border-bottom: 1px solid var(--border);
+  }
+  .sidebar-header .wordmark { font-size: 15px; }
+  .sidebar-btns { display: flex; gap: 6px; }
+  .ghost-btn {
+    width: 26px; height: 26px; border-radius: var(--radius-sm); border: none;
+    background: transparent; color: var(--text-muted); font-size: 13px;
+    display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0;
+  }
+  .ghost-btn:hover { background: var(--surface-hover); color: var(--text); }
+  .add-btn {
+    width: 26px; height: 26px; border-radius: var(--radius-sm); border: none;
+    background: var(--accent); color: var(--accent-contrast); font-size: 15px; line-height: 1;
+    display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0;
+  }
+  .add-btn:hover { background: var(--accent-hover); }
+
+  /* Sidebar tabs: chats | contacts (contacts + groups land later; the shell ships now) */
+  .sidebar-tabs {
+    display: flex; gap: 4px; padding: 8px 10px; border-bottom: 1px solid var(--border);
+  }
+  .tab {
+    flex: 1; font-family: var(--font-mono); font-size: 11.5px; padding: 6px 0;
+    border: none; border-radius: var(--radius-sm); background: transparent;
+    color: var(--text-subtle); cursor: pointer; text-transform: lowercase;
+  }
+  .tab:hover { color: var(--text-muted); background: var(--surface-hover); }
+  .tab.active { background: var(--surface-active); color: var(--text); }
+
+  .contact-row {
+    display: flex; align-items: center; gap: 10px; padding: 9px 12px;
+    margin: 6px 8px 0; border-radius: var(--radius-md); cursor: pointer;
+    border-left: 2px solid transparent;
+  }
+  .contact-row:hover { background: var(--surface-hover); }
+  .contact-row.active { background: var(--surface-active); border-left-color: var(--text); }
+  .avatar {
+    width: 34px; height: 34px; border-radius: var(--radius-md); flex-shrink: 0;
+    background: var(--accent-soft); color: var(--text-muted);
+    border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--font-mono); font-weight: 600; font-size: 13px;
+  }
+  .contact-row.active .avatar { color: var(--text); border-color: var(--border-strong); }
+  /* Group chats: round avatar with a # glyph — the shape difference reads at a glance */
+  .avatar.group { border-radius: 50%; color: var(--text-subtle); font-weight: 400; font-size: 14px; }
+  .contact-row.active .avatar.group { color: var(--text); }
+  .contact-info { display: flex; flex-direction: column; gap: 2px; overflow: hidden; }
+  .contact-name { font-size: 14px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .contact-name .hash { color: var(--text-subtle); font-family: var(--font-mono); }
+  .trust { font-family: var(--font-mono); font-size: 10.5px; white-space: nowrap; }
+  .trust.verified { color: var(--ok); }
+  .trust.unverified { color: var(--text-subtle); }
+  .trust.key-changed { color: var(--warn); }
+  .members { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-subtle); white-space: nowrap; }
+
+  /* --- Chat pane --- */
+  .chat { flex: 1; display: flex; flex-direction: column; min-width: 0; background: var(--workspace-bg); }
+  .chat-header {
+    min-height: 58px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; padding: 0 24px;
+  }
+  .chat-header-inner {
+    width: 100%; max-width: 840px; margin: 0 auto;
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  }
+  .chat-title { font-size: 15px; font-weight: 600; color: var(--text); }
+  .chat-title .hash { color: var(--text-subtle); font-family: var(--font-mono); font-weight: 400; }
+  .chat-meta { font-family: var(--font-mono); font-size: 11.5px; margin-top: 2px; color: var(--text-subtle); }
+  .chat-meta.verified { color: var(--ok); }
+  .outline-btn {
+    font: inherit; font-size: 12px; padding: 6px 12px; border-radius: var(--radius-md);
+    border: 1px solid var(--border-strong); background: transparent;
+    color: var(--text-muted); cursor: pointer; flex-shrink: 0;
+  }
+  .outline-btn:hover { background: var(--surface-hover); color: var(--text); }
+
+  .messages {
+    flex: 1; overflow-y: auto; width: 100%; max-width: 840px; margin: 0 auto;
+    padding: 24px 24px 18px; display: flex; flex-direction: column; gap: 12px;
+  }
+  .msg-row { display: flex; }
+  .msg-row.mine { justify-content: flex-end; }
+  .bubble {
+    max-width: 72%; padding: 10px 13px; border-radius: 12px;
+    display: flex; flex-direction: column; gap: 4px; border: 1px solid transparent;
+  }
+  .bubble.theirs {
+    background: var(--surface); border-color: var(--border); color: var(--text);
+    border-bottom-left-radius: 4px;
+  }
+  .bubble.mine {
+    background: var(--accent); color: var(--accent-contrast);
+    border-bottom-right-radius: 4px;
+  }
+  .bubble .sender { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-muted); }
+  .bubble .body { font-size: 14px; word-break: break-word; }
+  .bubble .stamp {
+    font-family: var(--font-mono); font-size: 10px; opacity: 0.7; align-self: flex-end;
+  }
+
+  .composer-zone { width: calc(100% - 48px); max-width: 840px; margin: 0 auto 20px; }
+  .composer {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 8px 8px 14px; background: var(--surface);
+    border: 1px solid var(--border-strong); border-radius: var(--composer-radius);
+    box-shadow: var(--shadow-composer);
+  }
+  .composer:focus-within { border-color: var(--text-subtle); }
+  .composer .prompt { font-family: var(--font-mono); color: var(--text-subtle); font-size: 14px; }
+  .composer input {
+    flex: 1; min-width: 0; padding: 8px 0; border: none; outline: none;
+    background: transparent; color: var(--text); font: inherit; font-size: 14px;
+  }
+  .composer input::placeholder { color: var(--text-subtle); }
+  .send-btn {
+    font: inherit; font-size: 13px; font-weight: 600; padding: 8px 16px;
+    border: none; border-radius: var(--radius-md); background: var(--accent);
+    color: var(--accent-contrast); cursor: pointer; flex-shrink: 0;
+  }
+  .send-btn:hover { background: var(--accent-hover); }
+
+  /* --- Empty chat state --- */
+  .empty-chat {
+    flex: 1; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 8px; background: var(--workspace-bg);
+  }
+  .empty-chat .big { font-family: var(--font-mono); font-size: 15px; color: var(--text-muted); }
+  .empty-chat .hint { font-family: var(--font-mono); font-size: 12px; color: var(--text-subtle); }
+
+  /* --- Contact detail pane (contacts tab, future feature) --- */
+  .contact-detail {
+    flex: 1; display: flex; align-items: center; justify-content: center; padding: 24px;
+  }
+  .contact-card {
+    width: min(360px, 100%); padding: 28px; text-align: center;
+    background: var(--sidebar-bg); border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+  }
+  .contact-card .avatar { width: 52px; height: 52px; font-size: 18px; margin: 0 auto 12px; }
+  .contact-card .cname { font-size: 16px; font-weight: 600; color: var(--text); }
+  .contact-card .fingerprint {
+    font-family: var(--font-mono); font-size: 11.5px; color: var(--text-subtle);
+    margin: 8px 0 4px; word-break: break-all;
+  }
+  .contact-card .cstate { font-family: var(--font-mono); font-size: 11.5px; }
+  .contact-card .actions { display: flex; gap: 10px; justify-content: center; margin-top: 20px; }
+  .contact-card .primary-btn { padding: 8px 18px; font-size: 13px; }
+  .contact-card .outline-btn { padding: 8px 14px; }
+
+  /* --- Login --- */
+  .login-screen {
+    height: 560px; display: flex; align-items: center; justify-content: center;
+    padding: 24px; background: var(--workspace-bg);
+  }
+  .login-card {
+    width: min(380px, 100%); padding: 36px; text-align: center;
+    background: var(--sidebar-bg); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); box-shadow: var(--shadow-modal);
+  }
+  .login-card .wordmark { font-size: 22px; display: block; }
+  .login-sub {
+    font-family: var(--font-mono); font-size: 12px; color: var(--text-subtle);
+    margin: 8px 0 28px;
+  }
+  .segmented {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 4px;
+    background: var(--surface-muted); border: 1px solid var(--border);
+    border-radius: var(--radius-md); margin-bottom: 18px;
+  }
+  .segment {
+    font: inherit; font-size: 13px; font-weight: 600; padding: 8px 10px; border: 1px solid transparent;
+    border-radius: var(--radius-sm); background: transparent; color: var(--text-muted); cursor: pointer;
+  }
+  .segment.active { background: var(--surface-active); color: var(--text); }
+  .login-form { display: flex; flex-direction: column; gap: 12px; }
+  .form-input {
+    font: inherit; font-size: 14px; padding: 11px 13px; outline: none;
+    border: 1px solid var(--border-strong); border-radius: var(--radius-md);
+    background: var(--surface-muted); color: var(--text);
+  }
+  .form-input:focus { border-color: var(--text-subtle); }
+  .form-input::placeholder { color: var(--text-subtle); }
+  .primary-btn {
+    font: inherit; font-size: 14px; font-weight: 600; padding: 11px;
+    border: none; border-radius: var(--radius-md);
+    background: var(--accent); color: var(--accent-contrast); cursor: pointer;
+  }
+  .primary-btn:hover { background: var(--accent-hover); }
+
+  /* --- Modals --- */
+  .modal-stage {
+    height: 520px; display: flex; align-items: center; justify-content: center;
+    gap: 28px; padding: 24px; background: var(--overlay); flex-wrap: wrap;
+  }
+  .modal {
+    width: min(400px, 100%); background: var(--sidebar-bg); border: 1px solid var(--border-strong);
+    border-radius: var(--radius-lg); box-shadow: var(--shadow-modal);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .modal-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 20px; border-bottom: 1px solid var(--border);
+  }
+  .modal-title { margin: 0; font-size: 14px; font-weight: 600; color: var(--text); }
+  .modal-close { border: none; background: none; color: var(--text-muted); font-size: 15px; cursor: pointer; }
+  .search-row { display: flex; gap: 8px; padding: 12px 20px; border-bottom: 1px solid var(--border); }
+  .search-row .form-input { flex: 1; padding: 9px 12px; }
+  .search-row .primary-btn { padding: 9px 16px; font-size: 13px; }
+  .result-item { display: flex; align-items: center; gap: 10px; padding: 10px 20px; }
+  .result-name { font-size: 14px; color: var(--text); }
+  .result-id {
+    font-family: var(--font-mono); font-size: 10.5px; color: var(--text-subtle);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 190px;
+  }
+  .result-info { display: flex; flex-direction: column; gap: 2px; flex: 1; overflow: hidden; }
+
+  .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 20px 20px 0; }
+  .stat-card {
+    background: var(--surface-muted); border: 1px solid var(--border);
+    border-radius: var(--radius-md); padding: 12px;
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .stat-card.highlight { background: var(--accent-soft); border-color: var(--border-strong); }
+  .stat-label {
+    font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.05em;
+    text-transform: uppercase; color: var(--text-subtle);
+  }
+  .stat-value { font-family: var(--font-mono); font-size: 20px; font-weight: 600; color: var(--text); }
+  .stat-sub { font-family: var(--font-mono); font-size: 11px; color: var(--text-subtle); }
+  .modal-actions { display: flex; flex-direction: column; gap: 10px; padding: 20px; }
+  .modal .outline-btn { padding: 10px 16px; font-size: 13px; }
+  .modal-result { font-family: var(--font-mono); font-size: 12px; color: var(--ok); text-align: center; padding: 0 20px 16px; margin: 0; }
+</style>
+</head>
+<body class="dark">
+<div class="preview-wrap">
+  <div class="preview-head">
+    <h1>liteseal<span class="cursor">▌</span> — redesign preview (codex style)</h1>
+    <button class="theme-toggle" onclick="document.body.classList.toggle('light'); document.body.classList.toggle('dark'); this.textContent = document.body.classList.contains('light') ? 'switch to dark' : 'switch to light';">switch to light</button>
+  </div>
+  <p class="preview-note">Codex aesthetic: near-black neutral palette, hairline borders, monochrome accent (white primary buttons on dark, black on light), monospace wordmark and metadata. Sections 2 and 3 show the future group-chat and contacts features so the visual language is settled now: <b>DMs</b> = square initial avatar + trust state; <b>groups</b> = round <span class="mono">#</span> avatar + member count; the sidebar carries <span class="mono">chats | contacts</span> tabs. Toggle above to compare dark and light.</p>
+
+  <div class="section-label">1 · Main window — chats tab, DM open</div>
+  <div class="frame">
+    <div class="titlebar"><div class="dots"><span></span><span></span><span></span></div><div class="win-title">LiteSeal</div><div style="width:42px"></div></div>
+    <div class="app-shell">
+      <div class="sidebar">
+        <div class="sidebar-header">
+          <span class="wordmark">liteseal<span class="cursor">▌</span></span>
+          <div class="sidebar-btns">
+            <button class="ghost-btn" title="Storage">⚙</button>
+            <button class="add-btn" title="Add">+</button>
+            <button class="ghost-btn" title="Logout">⏻</button>
+          </div>
+        </div>
+        <div class="sidebar-tabs">
+          <button class="tab active">chats</button>
+          <button class="tab">contacts</button>
+        </div>
+        <div class="contact-row">
+          <div class="avatar group">#</div>
+          <div class="contact-info"><span class="contact-name"><span class="hash">#</span> project-x</span><span class="members">3 members</span></div>
+        </div>
+        <div class="contact-row active">
+          <div class="avatar">A</div>
+          <div class="contact-info"><span class="contact-name">alice</span><span class="trust verified">✓ verified</span></div>
+        </div>
+        <div class="contact-row">
+          <div class="avatar">B</div>
+          <div class="contact-info"><span class="contact-name">bob</span><span class="trust unverified">unverified</span></div>
+        </div>
+        <div class="contact-row">
+          <div class="avatar">C</div>
+          <div class="contact-info"><span class="contact-name">carol</span><span class="trust key-changed">⚠ key changed</span></div>
+        </div>
+      </div>
+      <div class="chat">
+        <div class="chat-header">
+          <div class="chat-header-inner">
+            <div>
+              <div class="chat-title">alice</div>
+              <div class="chat-meta verified">✓ verified · 3f9a 12cd 88e0 45b1</div>
+            </div>
+            <button class="outline-btn">Unverify</button>
+          </div>
+        </div>
+        <div class="messages">
+          <div class="msg-row"><div class="bubble theirs"><span class="body">hey, did you get the file I sent?</span><span class="stamp">14:02</span></div></div>
+          <div class="msg-row mine"><div class="bubble mine"><span class="body">yep — decrypted fine on this end</span><span class="stamp">14:03 · delivered</span></div></div>
+          <div class="msg-row"><div class="bubble theirs"><span class="body">perfect. sending the second half tonight</span><span class="stamp">14:05</span></div></div>
+          <div class="msg-row mine"><div class="bubble mine"><span class="body">sounds good, I’ll be online</span><span class="stamp">14:06 · pending</span></div></div>
+        </div>
+        <div class="composer-zone">
+          <div class="composer">
+            <span class="prompt">›</span>
+            <input type="text" placeholder="type a message…">
+            <button class="send-btn">Send</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-label">2 · Group conversation (future feature — sender labels on incoming bubbles)</div>
+  <div class="frame">
+    <div class="titlebar"><div class="dots"><span></span><span></span><span></span></div><div class="win-title">LiteSeal</div><div style="width:42px"></div></div>
+    <div class="app-shell" style="height: 440px;">
+      <div class="sidebar">
+        <div class="sidebar-header">
+          <span class="wordmark">liteseal<span class="cursor">▌</span></span>
+          <div class="sidebar-btns">
+            <button class="ghost-btn">⚙</button>
+            <button class="add-btn">+</button>
+            <button class="ghost-btn">⏻</button>
+          </div>
+        </div>
+        <div class="sidebar-tabs">
+          <button class="tab active">chats</button>
+          <button class="tab">contacts</button>
+        </div>
+        <div class="contact-row active">
+          <div class="avatar group">#</div>
+          <div class="contact-info"><span class="contact-name"><span class="hash">#</span> project-x</span><span class="members">3 members</span></div>
+        </div>
+        <div class="contact-row">
+          <div class="avatar">A</div>
+          <div class="contact-info"><span class="contact-name">alice</span><span class="trust verified">✓ verified</span></div>
+        </div>
+      </div>
+      <div class="chat">
+        <div class="chat-header">
+          <div class="chat-header-inner">
+            <div>
+              <div class="chat-title"><span class="hash">#</span> project-x</div>
+              <div class="chat-meta">3 members · end-to-end encrypted</div>
+            </div>
+            <button class="outline-btn">Members</button>
+          </div>
+        </div>
+        <div class="messages">
+          <div class="msg-row"><div class="bubble theirs"><span class="sender">alice</span><span class="body">pushed the new build to staging</span><span class="stamp">09:14</span></div></div>
+          <div class="msg-row"><div class="bubble theirs"><span class="sender">bob</span><span class="body">nice — I’ll run the smoke tests</span><span class="stamp">09:16</span></div></div>
+          <div class="msg-row mine"><div class="bubble mine"><span class="body">ping me when they pass</span><span class="stamp">09:17 · delivered</span></div></div>
+        </div>
+        <div class="composer-zone">
+          <div class="composer">
+            <span class="prompt">›</span>
+            <input type="text" placeholder="message # project-x…">
+            <button class="send-btn">Send</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-label">3 · Contacts tab (future feature — contact detail with key verification)</div>
+  <div class="frame">
+    <div class="titlebar"><div class="dots"><span></span><span></span><span></span></div><div class="win-title">LiteSeal</div><div style="width:42px"></div></div>
+    <div class="app-shell" style="height: 400px;">
+      <div class="sidebar">
+        <div class="sidebar-header">
+          <span class="wordmark">liteseal<span class="cursor">▌</span></span>
+          <div class="sidebar-btns">
+            <button class="ghost-btn">⚙</button>
+            <button class="add-btn">+</button>
+            <button class="ghost-btn">⏻</button>
+          </div>
+        </div>
+        <div class="sidebar-tabs">
+          <button class="tab">chats</button>
+          <button class="tab active">contacts</button>
+        </div>
+        <div class="contact-row active">
+          <div class="avatar">A</div>
+          <div class="contact-info"><span class="contact-name">alice</span><span class="trust verified">✓ verified</span></div>
+        </div>
+        <div class="contact-row">
+          <div class="avatar">B</div>
+          <div class="contact-info"><span class="contact-name">bob</span><span class="trust unverified">unverified</span></div>
+        </div>
+        <div class="contact-row">
+          <div class="avatar">C</div>
+          <div class="contact-info"><span class="contact-name">carol</span><span class="trust key-changed">⚠ key changed</span></div>
+        </div>
+      </div>
+      <div class="contact-detail">
+        <div class="contact-card">
+          <div class="avatar">A</div>
+          <div class="cname">alice</div>
+          <div class="fingerprint">3f9a 12cd 88e0 45b1 7c2e 90af 5d13 66b8</div>
+          <div class="cstate trust verified">✓ verified</div>
+          <div class="actions">
+            <button class="primary-btn">Message</button>
+            <button class="outline-btn">Unverify</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-label">4 · Main window — no conversation selected</div>
+  <div class="frame">
+    <div class="titlebar"><div class="dots"><span></span><span></span><span></span></div><div class="win-title">LiteSeal</div><div style="width:42px"></div></div>
+    <div class="app-shell" style="height: 300px;">
+      <div class="sidebar">
+        <div class="sidebar-header">
+          <span class="wordmark">liteseal<span class="cursor">▌</span></span>
+          <div class="sidebar-btns">
+            <button class="ghost-btn">⚙</button>
+            <button class="add-btn">+</button>
+            <button class="ghost-btn">⏻</button>
+          </div>
+        </div>
+        <div class="sidebar-tabs">
+          <button class="tab active">chats</button>
+          <button class="tab">contacts</button>
+        </div>
+        <div class="contact-row"><div class="avatar">A</div><div class="contact-info"><span class="contact-name">alice</span><span class="trust verified">✓ verified</span></div></div>
+        <div class="contact-row"><div class="avatar">B</div><div class="contact-info"><span class="contact-name">bob</span><span class="trust unverified">unverified</span></div></div>
+      </div>
+      <div class="empty-chat">
+        <span class="big">no conversation selected</span>
+        <span class="hint">messages are end-to-end encrypted</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-label">5 · Login screen</div>
+  <div class="frame">
+    <div class="titlebar"><div class="dots"><span></span><span></span><span></span></div><div class="win-title">LiteSeal</div><div style="width:42px"></div></div>
+    <div class="login-screen">
+      <div class="login-card">
+        <span class="wordmark">liteseal<span class="cursor">▌</span></span>
+        <p class="login-sub">end-to-end encrypted messaging</p>
+        <div class="segmented">
+          <button class="segment active">Login</button>
+          <button class="segment">Register</button>
+        </div>
+        <div class="login-form">
+          <input class="form-input" type="text" value="http://localhost:3000">
+          <input class="form-input" type="text" placeholder="Username">
+          <input class="form-input" type="password" placeholder="Password" value="password">
+          <button class="primary-btn">Login</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-label">6 · Modals — add contact &amp; storage manager</div>
+  <div class="frame">
+    <div class="titlebar"><div class="dots"><span></span><span></span><span></span></div><div class="win-title">LiteSeal</div><div style="width:42px"></div></div>
+    <div class="modal-stage">
+      <div class="modal">
+        <div class="modal-header"><h3 class="modal-title">Add Contact</h3><button class="modal-close">✕</button></div>
+        <div class="search-row">
+          <input class="form-input" type="text" value="bo">
+          <button class="primary-btn">Search</button>
+        </div>
+        <div style="padding: 8px 0;">
+          <div class="result-item">
+            <div class="avatar">B</div>
+            <div class="result-info"><span class="result-name">bob</span><span class="result-id">9b2f47a1-6c0e-4d2a-91d5-3e8f0b7c4a66</span></div>
+            <button class="outline-btn">Add</button>
+          </div>
+          <div class="result-item">
+            <div class="avatar">B</div>
+            <div class="result-info"><span class="result-name">bonnie</span><span class="result-id">c41d92e8-0a53-47fb-b8a9-77d2e615c903</span></div>
+            <button class="outline-btn" disabled style="opacity:0.55; cursor:not-allowed;">Already added</button>
+          </div>
+        </div>
+      </div>
+      <div class="modal">
+        <div class="modal-header"><h3 class="modal-title">Storage Manager</h3><button class="modal-close">×</button></div>
+        <div class="stats-grid">
+          <div class="stat-card"><span class="stat-label">Messages</span><span class="stat-value">1,284</span><span class="stat-sub">2.4 MB</span></div>
+          <div class="stat-card"><span class="stat-label">Attachments</span><span class="stat-value">17</span><span class="stat-sub">48.1 MB</span></div>
+          <div class="stat-card"><span class="stat-label">Conversations</span><span class="stat-value">6</span></div>
+          <div class="stat-card highlight"><span class="stat-label">Total</span><span class="stat-value">50.5 MB</span></div>
+        </div>
+        <div class="modal-actions">
+          <button class="outline-btn">Clear Expired Messages</button>
+          <button class="outline-btn">Clear Unpinned Attachments</button>
+        </div>
+        <p class="modal-result">Cleared 42 expired messages</p>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

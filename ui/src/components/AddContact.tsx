@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { useTauri } from "../hooks/useTauri";
+import { useDesktop } from "../hooks/useDesktop";
 import type { Contact, UserSearchResult } from "../types";
 
 interface AddContactProps {
   serverUrl: string;
+  token: string;
   userId: string;
   contacts: Contact[];
   onClose: () => void;
@@ -12,6 +13,7 @@ interface AddContactProps {
 
 export default function AddContact({
   serverUrl,
+  token,
   userId,
   contacts,
   onClose,
@@ -23,7 +25,7 @@ export default function AddContact({
   const [searched, setSearched] = useState(false);
   const [adding, setAdding] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const { searchUsers, addContact } = useTauri();
+  const { searchUsers, addContact } = useDesktop();
 
   async function handleSearch(e: React.FormEvent) {
     e.preventDefault();
@@ -32,7 +34,7 @@ export default function AddContact({
     setSearching(true);
     setError(null);
     try {
-      const res = await searchUsers(query.trim(), serverUrl);
+      const res = await searchUsers(query.trim(), serverUrl, token);
       setResults(res);
       setSearched(true);
     } catch (err) {
@@ -115,7 +117,7 @@ export default function AddContact({
                   <span style={styles.userId}>{user.user_id}</span>
                 </div>
                 <button
-                  className="neutral-button"
+                  className="outline-button"
                   style={styles.addBtn}
                   disabled={adding === user.user_id || disabledReason !== null}
                   onClick={() => handleAdd(user)}
@@ -143,9 +145,9 @@ const styles: Record<string, React.CSSProperties> = {
     zIndex: 1000,
   },
   modal: {
-    backgroundColor: "var(--surface)",
+    backgroundColor: "var(--sidebar-bg)",
     borderRadius: "var(--radius-lg)",
-    border: "1px solid var(--border)",
+    border: "1px solid var(--border-strong)",
     width: "min(420px, 100%)",
     maxHeight: "min(520px, calc(100vh - 32px))",
     display: "flex",
@@ -156,20 +158,20 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
-    padding: "16px 20px",
+    padding: "14px 20px",
     borderBottom: "1px solid var(--border)",
   },
   title: {
     margin: 0,
     color: "var(--text)",
-    fontSize: "16px",
+    fontSize: "14px",
     fontWeight: 600,
   },
   closeBtn: {
     background: "none",
     border: "none",
     color: "var(--text-muted)",
-    fontSize: "18px",
+    fontSize: "15px",
     cursor: "pointer",
     padding: "4px",
   },
@@ -184,7 +186,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "9px 12px",
     borderRadius: "var(--radius-md)",
     border: "1px solid var(--border-strong)",
-    backgroundColor: "var(--surface)",
+    backgroundColor: "var(--surface-muted)",
     color: "var(--text)",
     fontSize: "14px",
     outline: "none",
@@ -195,14 +197,15 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "var(--radius-md)",
     border: "none",
     backgroundColor: "var(--accent)",
-    color: "white",
-    fontSize: "14px",
+    color: "var(--accent-contrast)",
+    fontSize: "13px",
     cursor: "pointer",
     fontWeight: 600,
   },
   error: {
+    fontFamily: "var(--font-mono)",
     color: "var(--danger)",
-    fontSize: "13px",
+    fontSize: "12px",
     margin: "0 20px",
     padding: "8px 0",
   },
@@ -212,8 +215,9 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "8px 0",
   },
   empty: {
+    fontFamily: "var(--font-mono)",
     color: "var(--text-subtle)",
-    fontSize: "13px",
+    fontSize: "12px",
     textAlign: "center",
     padding: "20px",
   },
@@ -224,16 +228,18 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "10px",
   },
   avatar: {
-    width: "36px",
-    height: "36px",
-    borderRadius: "50%",
+    width: "34px",
+    height: "34px",
+    borderRadius: "var(--radius-md)",
     backgroundColor: "var(--accent-soft)",
+    border: "1px solid var(--border)",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    color: "var(--accent)",
+    color: "var(--text-muted)",
+    fontFamily: "var(--font-mono)",
     fontWeight: 600,
-    fontSize: "14px",
+    fontSize: "13px",
     flexShrink: 0,
   },
   info: {
@@ -241,6 +247,7 @@ const styles: Record<string, React.CSSProperties> = {
     overflow: "hidden",
     display: "flex",
     flexDirection: "column",
+    gap: "2px",
   },
   name: {
     color: "var(--text)",
@@ -250,18 +257,19 @@ const styles: Record<string, React.CSSProperties> = {
     textOverflow: "ellipsis",
   },
   userId: {
+    fontFamily: "var(--font-mono)",
     color: "var(--text-subtle)",
-    fontSize: "11px",
+    fontSize: "10.5px",
     whiteSpace: "nowrap",
     overflow: "hidden",
     textOverflow: "ellipsis",
   },
   addBtn: {
     padding: "6px 14px",
-    borderRadius: "var(--radius-sm)",
-    border: "1px solid var(--border)",
-    backgroundColor: "var(--surface-muted)",
-    color: "var(--text)",
+    borderRadius: "var(--radius-md)",
+    border: "1px solid var(--border-strong)",
+    backgroundColor: "transparent",
+    color: "var(--text-muted)",
     fontSize: "13px",
     cursor: "pointer",
     flexShrink: 0,

@@ -37,8 +37,36 @@ export interface ConnectResult {
   connected: boolean;
 }
 
+/** The saved identity as the renderer sees it; secret keys stay in Rust. */
+export interface Identity {
+  user_id: string;
+  token: string;
+  refresh_token: string;
+  device_id: string;
+  server_url: string;
+  public_key: number[];
+  ed25519_pk: number[];
+  /** False for newly generated keys not yet bound to an account. */
+  saved: boolean;
+}
+
 export interface SendMessageResult {
   message_id: string;
+}
+
+export interface EncryptedPayload {
+  recipient_user_id: string;
+  recipient_device_id: string;
+  ciphertext: number[];
+  signature: number[];
+}
+
+export interface RemoteDevice {
+  id: string;
+  name: string;
+  public_key: number[];
+  ed25519_pk: number[];
+  revoked: boolean;
 }
 
 export interface IncomingMessage {
@@ -103,3 +131,14 @@ export interface StorageStats {
   conversation_count: number;
   total_bytes: number;
 }
+
+export interface ConversationSummary {
+  conversation_id: string;
+  latest: Message;
+  unread_count: number;
+}
+
+export interface ConversationPreference { peer_id: string; pinned: boolean; archived: boolean; draft: number[] }
+export interface Draft { text: string; messageId?: string; reply?: import("../lib/messageContent").MessageReference; forwarded?: import("../lib/messageContent").MessageReference }
+
+export interface MessageOperation { id: string; target_id: string; kind: "edit" | "revoke"; revision: number; status: "pending" | "accepted" | "rejected" | "unverified"; content: string | null; error: string | null }

@@ -37,32 +37,44 @@ pub struct DeviceResponse {
     pub revoked: bool,
 }
 
-#[derive(Deserialize)]
-pub struct TrustContactRequest {
-    pub fingerprint: String,
-    pub state: String,
+fn escape_like_pattern(query: &str) -> String {
+    query
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
 }
 
 pub async fn search_users(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(params): Query<SearchQuery>,
-) -> Json<Vec<UserSearchResult>> {
+) -> Result<Json<Vec<UserSearchResult>>, StatusCode> {
+    let requester = crate::auth::handlers::user_from_bearer(&state, &headers).await?;
     let query = params.q.trim().to_lowercase();
     let mut results = Vec::new();
 
     if query.is_empty() {
-        return Json(results);
+        return Ok(Json(results));
+    }
+    if !state
+        .db
+        .hit_rate_limit(&format!("search:account:{requester}"), 30, 60)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    {
+        return Err(StatusCode::TOO_MANY_REQUESTS);
     }
 
+    // One row per user (their newest active device), wildcards escaped.
     let rows = sqlx::query(
-        "SELECT u.id, u.username, d.public_key, d.ed25519_pk
+        r#"SELECT DISTINCT ON (u.id) u.id, u.username, d.public_key, d.ed25519_pk
          FROM users u
          JOIN devices d ON d.user_id = u.id AND d.revoked = false
-         WHERE lower(u.username) LIKE $1 OR u.id LIKE $1
-         ORDER BY u.username ASC
-         LIMIT 50",
+         WHERE lower(u.username) LIKE $1 ESCAPE '\' OR u.id LIKE $1 ESCAPE '\'
+         ORDER BY u.id, d.created_at DESC
+         LIMIT 50"#,
     )
-    .bind(format!("%{}%", query))
+    .bind(format!("%{}%", escape_like_pattern(&query)))
     .fetch_all(state.db.pool())
     .await
     .unwrap_or_default();
@@ -80,22 +92,31 @@ pub async fn search_users(
         }
     }
 
-    Json(results)
+    results.sort_by(|a, b| a.username.cmp(&b.username));
+    Ok(Json(results))
 }
 
 pub async fn get_public_key(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(user_id): Path<String>,
 ) -> Result<Json<PublicKeyResponse>, StatusCode> {
+    crate::auth::handlers::user_from_bearer(&state, &headers).await?;
+    let username = state
+        .db
+        .get_username(&user_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
     let rows = state
         .db
         .list_user_devices(&user_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    match rows.into_iter().find(|device| !device.revoked) {
+    match rows.into_iter().rev().find(|device| !device.revoked) {
         Some(device) => Ok(Json(PublicKeyResponse {
-            user_id: user_id.clone(),
-            username: user_id,
+            user_id,
+            username,
             public_key: Some(device.public_key),
             ed25519_pk: Some(device.ed25519_pk),
         })),
@@ -105,8 +126,10 @@ pub async fn get_public_key(
 
 pub async fn list_user_devices(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(user_id): Path<String>,
 ) -> Result<Json<Vec<DeviceResponse>>, StatusCode> {
+    crate::auth::handlers::user_from_bearer(&state, &headers).await?;
     let devices = state
         .db
         .list_user_devices(&user_id)
@@ -126,6 +149,12 @@ pub async fn list_user_devices(
     ))
 }
 
+#[derive(Deserialize)]
+pub struct TrustContactRequest {
+    pub fingerprint: String,
+    pub state: String,
+}
+
 pub async fn trust_contact(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -136,7 +165,7 @@ pub async fn trust_contact(
         "unverified" | "verified" | "key_changed" => {}
         _ => return Err(StatusCode::BAD_REQUEST),
     }
-    let owner_user_id = user_from_bearer(&state, &headers).await?;
+    let owner_user_id = crate::auth::handlers::user_from_bearer(&state, &headers).await?;
     state
         .db
         .upsert_trusted_contact(
@@ -148,20 +177,4 @@ pub async fn trust_contact(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(StatusCode::NO_CONTENT)
-}
-
-async fn user_from_bearer(state: &AppState, headers: &HeaderMap) -> Result<String, StatusCode> {
-    let value = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .ok_or(StatusCode::UNAUTHORIZED)?;
-    let token = value
-        .strip_prefix("Bearer ")
-        .ok_or(StatusCode::UNAUTHORIZED)?;
-    state
-        .db
-        .user_for_access_token(&crate::auth::service::hash_token(token))
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::UNAUTHORIZED)
 }
