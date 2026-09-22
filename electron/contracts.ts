@@ -3,6 +3,9 @@ import type { RegisterResult, ConnectResult, SendMessageResult, PollMessagesResu
 } from "../ui/src/types";
 
 export interface CommandMap {
+  app_lock_state: { args: {}; result: boolean };
+  lock_app: { args: {}; result: void };
+  unlock_app: { args: { password: string }; result: void };
   submit_reaction: { args: { targetId: string; peerId: string; emoji: string }; result: void };
   sync_reactions: { args: {}; result: number };
   get_reactions: { args: { conversationId: string }; result: { target_id: string; actor: string; emoji: string }[] };
@@ -72,6 +75,7 @@ export type DesktopApi = {
   [K in CommandName]: (args: CommandMap[K]["args"]) => Promise<CommandMap[K]["result"]>;
 };
 export const commandNames = [
+  "app_lock_state", "lock_app", "unlock_app",
   "submit_reaction", "sync_reactions", "get_reactions",
   "list_contact_requests", "set_contact_policy", "list_account_sessions", "logout_all_sessions",
   "select_attachment", "list_attachment_tasks", "attachment_step", "publish_attachment", "begin_attachment_download", "export_attachment", "forget_attachment_task", "attachment_cache_stats", "clear_attachment_cache",

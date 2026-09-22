@@ -16,6 +16,18 @@ let exitRequested = false;
 let tray: Tray | undefined;
 let explainedTray = false;
 const notifications = new ChatNotifications(() => mainWindow, bridge);
+let locked = false;
+let lockEnabled = false;
+let lockGeneration = 0;
+let unlockAfter = 0;
+let unlockBusy = false;
+function lockApp() {
+  if (!lockEnabled || locked) return;
+  locked = true; lockGeneration++;
+  notifications.lock(true);
+  // Unmount decrypted renderer state, including message and image previews.
+  mainWindow?.webContents.send("liteseal:locked");
+}
 
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
@@ -52,10 +64,11 @@ else {
     const executable = path.join(app.isPackaged ? process.resourcesPath : path.join(root, "target", "debug"),
       app.isPackaged ? "desktop" : "", `liteseal-desktop${process.platform === "win32" ? ".exe" : ""}`);
     await bridge.start(executable);
+    try { await bridge.call("load_identity", {}); lockEnabled = true; locked = true; notifications.lock(true); } catch { /* First run has no chat identity. */ }
     if (quitting) return;
     app.setAppUserModelId("com.liteseal.app");
-    powerMonitor.on("lock-screen", () => notifications.lock(true));
-    powerMonitor.on("unlock-screen", () => notifications.lock(false));
+    powerMonitor.on("lock-screen", lockApp);
+    setInterval(() => { if (powerMonitor.getSystemIdleTime() >= 300) lockApp(); }, 1000).unref();
     const csp = `default-src 'self'; script-src 'self'${app.isPackaged ? "" : " 'unsafe-inline'"}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'${app.isPackaged ? "" : " ws://127.0.0.1:1420"}; object-src 'none'; base-uri 'none'; frame-src 'none'`;
     protocol.handle("liteseal", async request => {
       const url = new URL(request.url);
@@ -88,12 +101,29 @@ else {
           return { ok: false, error: "不允许的桌面接口来源" };
         }
         try {
+          if (name === "app_lock_state") return { ok: true, result: locked };
+          if (name === "lock_app") { lockApp(); return { ok: true, result: null }; }
+          if (name === "unlock_app") {
+            if (!locked) return { ok: true, result: null };
+            if (unlockBusy || Date.now() < unlockAfter) throw new Error("请稍后再试");
+            const password = (args as { password: string }).password;
+            if (typeof password !== "string" || password.length > 1024) throw new Error("无效密码");
+            unlockBusy = true; unlockAfter = Date.now() + 5000;
+            try { await bridge.call("unlock_app", { password }); locked = false; notifications.lock(false); }
+            finally { unlockBusy = false; }
+            return { ok: true, result: null };
+          }
+          if (locked) throw new Error("应用已锁定，请先验证 Windows 身份");
+          const generation = lockGeneration;
           if (name === "select_attachment") {
             const peerId = (args as { peerId: string }).peerId;
             if (typeof peerId !== "string" || peerId.length > 128) throw new Error("无效联系人");
             const selected = await dialog.showOpenDialog(mainWindow, { title: "选择文件（最大 20 MiB）", properties: ["openFile"] });
+            if (locked || generation !== lockGeneration) throw new Error("应用已锁定");
             if (selected.canceled || !selected.filePaths[0]) return { ok: true, result: null };
-            return { ok: true, result: await bridge.call("select_attachment", { peerId, path: selected.filePaths[0] } as never) };
+            const result = await bridge.call("select_attachment", { peerId, path: selected.filePaths[0] } as never);
+            if (locked || generation !== lockGeneration) throw new Error("应用已锁定");
+            return { ok: true, result };
           }
           if (name === "export_attachment") {
             const input = args as { messageId: string; preview?: boolean };
@@ -108,8 +138,10 @@ else {
             const temporary = path.join(directory, "verified");
             try {
               await bridge.call("export_attachment", { messageId: input.messageId, path: temporary } as never);
+              if (locked || generation !== lockGeneration) throw new Error("应用已锁定");
               if (destination) { await fs.rename(temporary, destination); return { ok: true, result: "已保存" }; }
               const bytes = await fs.readFile(temporary);
+              if (locked || generation !== lockGeneration) throw new Error("应用已锁定");
               const mime = bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10])) ? "image/png"
                 : bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255 ? "image/jpeg"
                 : bytes.subarray(0,4).toString() === "RIFF" && bytes.subarray(8,12).toString() === "WEBP" ? "image/webp" : null;
@@ -136,6 +168,8 @@ else {
           }
           if (name === "sign_out" || name === "clear_keypair" || name === "logout_all_sessions") notifications.context(null, null);
           const result = await bridge.call(name, args as never);
+          if (name === "save_session") lockEnabled = true;
+          if (locked || generation !== lockGeneration) throw new Error("应用已锁定");
           if (name === "poll_messages") {
             // A failed notification must never consume or fail a persisted relay batch.
             await notifications.receive(result as import("../ui/src/types").PollMessagesResult).catch(() => {});

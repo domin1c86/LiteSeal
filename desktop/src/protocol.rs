@@ -104,6 +104,8 @@ pub enum Command {
     },
     #[serde(rename = "poll_messages")]
     PollMessages {},
+    #[serde(rename="unlock_app")]
+    UnlockApp {password:String},
     #[serde(rename="submit_reaction")]
     SubmitReaction { #[serde(rename="targetId")] target_id:String, #[serde(rename="peerId")] peer_id:String, emoji:String },
     #[serde(rename="sync_reactions")]
@@ -353,6 +355,7 @@ impl Response {
 
 pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, String> {
     let result = match command {
+        Command::UnlockApp {password} => serde_json::to_value(commands::windows_lock::verify(password)?),
         Command::SubmitReaction {target_id,peer_id,emoji} => serde_json::to_value(commands::reactions::submit(state,target_id,peer_id,emoji).await?),
         Command::SyncReactions {} => serde_json::to_value(commands::reactions::sync(state).await?),
         Command::GetReactions {conversation_id} => serde_json::to_value(commands::reactions::views(state,conversation_id)?),
