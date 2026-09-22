@@ -1,4 +1,5 @@
 import { latestOperations } from "../lib/messageOperations";
+import { deliveryStatusLabel } from "../lib/deliveryStatus";
 import { decodeContent, encodeContent } from "../lib/messageContent";
 import { useState, useEffect, useRef, useLayoutEffect } from "react";
 import { useDesktop } from "../hooks/useDesktop";
@@ -431,7 +432,7 @@ export default function Chat({ draft, onDraftChange, onForward, online, conversa
                     hour: "2-digit",
                     minute: "2-digit",
                   })}
-                  {isMine && msg.local_state ? ` · ${({ pending: "等待确认", queued: "服务器已保存，等待设备确认", stored_offline: "服务器已保存，设备离线", received: "全部目标设备已保存（非已读）", partially_received: "部分设备已保存", delivered: "旧版投递状态（非已读）", failed: "投递失败，可重试" } as Record<string, string>)[msg.local_state] ?? msg.local_state}` : ""}
+                  {isMine && msg.local_state ? ` · ${deliveryStatusLabel(msg.local_state)}` : ""}
                   {isMine && ["failed", "pending"].includes(msg.local_state ?? "") && (
                     <button disabled={!online || sending} onClick={async () => {
                       setSending(true);
