@@ -11,6 +11,9 @@ interface ContactListProps {
   flags: Record<string, { pinned: boolean; archived: boolean }>;
   muted: Record<string, boolean>;
   onMutedChange: (id: string, muted: boolean) => void;
+  aliases: Record<string, string>;
+  lists: { id: string; name: string; peers: string[] }[];
+  onOrganizer: () => void;
   drafts: Record<string, Draft>;
   preferencesReady: boolean;
   onFlagsChange: (id: string, flags: { pinned: boolean; archived: boolean }) => void;
@@ -34,7 +37,7 @@ export function trustLabel(contact: Contact): { text: string; color: string } {
 }
 
 export default function ContactList({
-  contacts, userId, signingPublicKey, flags, muted, onMutedChange, drafts, preferencesReady, onFlagsChange,
+  contacts, userId, signingPublicKey, flags, muted, onMutedChange, aliases, lists, onOrganizer, drafts, preferencesReady, onFlagsChange,
   activeConversation,
   tab,
   onTabChange,
@@ -45,8 +48,10 @@ export default function ContactList({
 }: ContactListProps) {
   const { previews, error } = useConversationSummaries(userId, signingPublicKey, contacts);
   const [showArchived, setShowArchived] = useState(false);
+  const [filter, setFilter] = useState("all");
   const archiveCount = contacts.filter(contact => flags[contact.user_id]?.archived).length;
-  const ordered = tab === "chats" ? contacts.filter(contact => !!flags[contact.user_id]?.archived === showArchived).sort((a, b) =>
+  const ordered = tab === "chats" ? contacts.filter(contact => !!flags[contact.user_id]?.archived === showArchived
+    && (filter === "all" || (filter === "unread" ? (previews[contact.user_id]?.unread ?? 0) > 0 : lists.find(list => list.id === filter)?.peers.includes(contact.user_id)))).sort((a, b) =>
     Number(!!flags[b.user_id]?.pinned) - Number(!!flags[a.user_id]?.pinned)
     || (previews[b.user_id]?.timestamp ?? 0) - (previews[a.user_id]?.timestamp ?? 0) || a.username.localeCompare(b.username)) : contacts;
   return (
@@ -86,6 +91,11 @@ export default function ContactList({
       {tab === "chats" && <button onClick={() => setShowArchived(value => !value)}>
         {showArchived ? "返回聊天" : `已归档 (${archiveCount})`}
       </button>}
+      {tab === "chats" && <select aria-label="筛选会话" value={filter} onChange={event => setFilter(event.target.value)}>
+        <option value="all">全部</option><option value="unread">未读</option>
+        {lists.map(list => <option key={list.id} value={list.id}>{list.name}</option>)}
+      </select>}
+      <button onClick={onOrganizer}>本机列表、收藏和便笺</button>
       {ordered.length === 0 && (
         <p style={styles.empty}>{showArchived && tab === "chats" ? "暂无归档会话" : "暂无会话"}</p>
       )}
@@ -113,7 +123,7 @@ export default function ContactList({
               {contact.username.charAt(0).toUpperCase()}
             </div>
             <div style={styles.info}>
-              <span className="contact-name" style={styles.name}>{tab === "chats" && preference.pinned ? "📌 " : ""}{contact.username}</span>
+              <span className="contact-name" style={styles.name} title={`${contact.username} · ${contact.user_id}`}>{tab === "chats" && preference.pinned ? "📌 " : ""}{aliases[contact.user_id] || contact.username}</span>
               {tab === "chats" ? <span style={styles.trust} title={summary}>{summary}</span>
                 : <span style={{ ...styles.trust, color: trust.color }}>{trust.text}</span>}
             </div>

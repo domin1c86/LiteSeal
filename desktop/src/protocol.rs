@@ -104,6 +104,10 @@ pub enum Command {
     },
     #[serde(rename = "poll_messages")]
     PollMessages {},
+    #[serde(rename = "get_personal_organizer")]
+    GetPersonalOrganizer {},
+    #[serde(rename = "save_personal_organizer")]
+    SavePersonalOrganizer { content: String },
     #[serde(rename = "get_local_message_page")]
     GetLocalMessagePage {
         #[serde(rename = "userId", default)]
@@ -317,6 +321,21 @@ impl Response {
 
 pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, String> {
     let result = match command {
+        Command::GetPersonalOrganizer {} => {
+            let saved = state.identity()?;
+            let bytes = state.client.db.lock().map_err(|e| e.to_string())?.personal_organizer(&saved.user_id).map_err(|e| e.to_string())?;
+            let content = if bytes.is_empty() { String::new() } else {
+                String::from_utf8(liteseal_core::chat::decrypt_message(bytes, saved.public_key, saved.secret_key)?).map_err(|_| "Invalid organizer encoding")?
+            };
+            serde_json::to_value(content)
+        }
+        Command::SavePersonalOrganizer { content } => {
+            if content.len() > 1024 * 1024 { return Err("本机列表和便笺总量不能超过 1 MiB".into()); }
+            let saved = state.identity()?;
+            let encrypted = liteseal_core::chat::encrypt_message(content.into_bytes(), saved.public_key, saved.secret_key)?;
+            state.client.db.lock().map_err(|e| e.to_string())?.save_personal_organizer(&saved.user_id, &encrypted).map_err(|e| e.to_string())?;
+            serde_json::to_value(())
+        }
         Command::GetMessageContext { user_id, conversation_id, message_id } => {
             if state.identity()?.user_id != user_id { return Err("Account mismatch".into()); }
             serde_json::to_value(state.client.db.lock().map_err(|e| e.to_string())?

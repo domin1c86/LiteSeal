@@ -11,6 +11,7 @@ import type { RelayBatch } from "../App";
 import type { Draft, MessageOperation, Message, IncomingMessage, Contact, RelayEvent } from "../types";
 
 interface ChatProps {
+  onFavorite: (messageId: string) => Promise<void>;
   draft: Draft;
   onForward: (peerId: string, draft: Draft) => Promise<void>;
   onDraftChange: (draft: Draft) => Promise<void>;
@@ -25,7 +26,7 @@ interface ChatProps {
   onContactsChanged: () => void;
 }
 
-export default function Chat({ draft, onDraftChange, onForward, online, conversationId, userId, deviceId, token, serverUrl, contacts, relayBatch, onContactsChanged }: ChatProps) {
+export default function Chat({ onFavorite, draft, onDraftChange, onForward, online, conversationId, userId, deviceId, token, serverUrl, contacts, relayBatch, onContactsChanged }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchRevision, setSearchRevision] = useState(0);
@@ -455,6 +456,7 @@ export default function Chat({ draft, onDraftChange, onForward, online, conversa
                 {notices.map(item => <div key={item.id} role="status">{item.status === "pending" ? "变更等待服务端确认，将自动重试" : item.error ?? "变更未通过校验"}</div>)}
                 <div style={{ display: "flex", gap: 6 }}>
                   {!revoked && <button onClick={() => { void copyMessageText(content.text).then(() => setActionStatus("已复制消息正文")).catch(error => setActionStatus(String(error))); }}>复制</button>}
+                  {!revoked && <button onClick={() => { void onFavorite(msg.id).then(() => setActionStatus("已收藏本机引用")).catch(error => setActionStatus(String(error))); }}>收藏</button>}
                   {!revoked && <button disabled={sending || !!draft.messageId} onClick={() => { void onDraftChange({ ...draft, reply: reference }).catch(error => setActionStatus(String(error))); }}>回复</button>}
                   <button disabled={sending || deleting || draft.messageId === msg.id} onClick={() => setDeleteTarget(msg.id)}>从本机删除</button>
                   {!revoked && <button onClick={() => { setForwardDraft({ text: content.text, forwarded: reference }); setForwardTarget(""); }}>转发</button>}

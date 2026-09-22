@@ -82,6 +82,9 @@ impl MessageRepository {
                 user_id TEXT NOT NULL, peer_id TEXT NOT NULL,
                 muted INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(user_id, peer_id)
             );
+            CREATE TABLE IF NOT EXISTS personal_organizer (
+                user_id TEXT PRIMARY KEY, ciphertext BLOB NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS local_message_operations (
                 user_id TEXT NOT NULL, device_id TEXT NOT NULL, id TEXT NOT NULL,
                 target_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
@@ -390,6 +393,17 @@ impl MessageRepository {
             ON CONFLICT(user_id, peer_id) DO UPDATE SET
             pinned = COALESCE(?3, pinned), archived = COALESCE(?4, archived), draft = COALESCE(?5, draft)",
             params![user_id, peer_id, pinned, archived, draft])?;
+        Ok(())
+    }
+
+    pub fn personal_organizer(&self, user_id: &str) -> Result<Vec<u8>, DbError> {
+        use rusqlite::OptionalExtension;
+        Ok(self.conn.query_row("SELECT ciphertext FROM personal_organizer WHERE user_id = ?1", [user_id], |row| row.get(0)).optional()?.unwrap_or_default())
+    }
+
+    pub fn save_personal_organizer(&self, user_id: &str, ciphertext: &[u8]) -> Result<(), DbError> {
+        self.conn.execute("INSERT INTO personal_organizer(user_id, ciphertext) VALUES (?1, ?2)
+            ON CONFLICT(user_id) DO UPDATE SET ciphertext = excluded.ciphertext", params![user_id, ciphertext])?;
         Ok(())
     }
 

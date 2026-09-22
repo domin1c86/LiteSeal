@@ -3,6 +3,8 @@ import type { RegisterResult, ConnectResult, SendMessageResult, PollMessagesResu
 } from "../ui/src/types";
 
 export interface CommandMap {
+  get_personal_organizer: { args: {}; result: string };
+  save_personal_organizer: { args: { content: string }; result: void };
   get_message_context: { args: { userId: string; conversationId: string; messageId: string }; result: Message[] };
   set_conversation_muted: { args: { userId: string; peerId: string; muted: boolean }; result: void };
   set_notification_context: { args: { userId: string | null; activePeerId: string | null }; result: void };
@@ -53,6 +55,8 @@ export type DesktopApi = {
   [K in CommandName]: (args: CommandMap[K]["args"]) => Promise<CommandMap[K]["result"]>;
 };
 export const commandNames = [
+  "get_personal_organizer",
+  "save_personal_organizer",
   "get_message_context",
   "set_conversation_muted",
   "set_notification_context",
