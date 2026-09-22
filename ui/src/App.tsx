@@ -47,6 +47,23 @@ export default function App() {
   const connectionWork = useRef<Promise<void>>(Promise.resolve());
   const [relayBatch, setRelayBatch] = useState<RelayBatch | null>(null);
 
+  useEffect(() => {
+    let active = true;
+    const takeTarget = async () => {
+      try {
+        const target = await window.desktop.take_notification_target({});
+        if (active && target && target.userId === session?.user_id) {
+          setActiveConversation(target.peerId); setSidebarTab("chats");
+        }
+      } catch { /* Notification routing never interrupts the message pump. */ }
+    };
+    void window.desktop.set_notification_context({ userId: session?.user_id ?? null,
+      activePeerId: sidebarTab === "chats" ? activeConversation : null }).catch(() => {});
+    const timer = setInterval(takeTarget, 500);
+    window.addEventListener("focus", takeTarget);
+    return () => { active = false; clearInterval(timer); window.removeEventListener("focus", takeTarget); };
+  }, [session?.user_id, activeConversation, sidebarTab]);
+
   // One serialized pump owns reconnect and polling; renders never overlap requests.
   useEffect(() => {
     if (!session) return;
@@ -225,6 +242,8 @@ export default function App() {
         signingPublicKey={session.ed25519Pk}
         contacts={contacts}
         flags={preferences.flags}
+        muted={preferences.muted}
+        onMutedChange={(id, value) => { void preferences.saveMuted(id, value).catch(() => {}); }}
         drafts={drafts}
         preferencesReady={preferences.ready}
         onFlagsChange={(id, flags) => { void preferences.saveFlags(id, flags).catch(() => {}); }}

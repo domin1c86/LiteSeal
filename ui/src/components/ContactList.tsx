@@ -9,6 +9,8 @@ interface ContactListProps {
   signingPublicKey: number[];
   contacts: Contact[];
   flags: Record<string, { pinned: boolean; archived: boolean }>;
+  muted: Record<string, boolean>;
+  onMutedChange: (id: string, muted: boolean) => void;
   drafts: Record<string, Draft>;
   preferencesReady: boolean;
   onFlagsChange: (id: string, flags: { pinned: boolean; archived: boolean }) => void;
@@ -32,7 +34,7 @@ export function trustLabel(contact: Contact): { text: string; color: string } {
 }
 
 export default function ContactList({
-  contacts, userId, signingPublicKey, flags, drafts, preferencesReady, onFlagsChange,
+  contacts, userId, signingPublicKey, flags, muted, onMutedChange, drafts, preferencesReady, onFlagsChange,
   activeConversation,
   tab,
   onTabChange,
@@ -118,6 +120,7 @@ export default function ContactList({
             {tab === "chats" && <div style={{ display: "flex", flexDirection: "column", gap: 4 }} onClick={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}>
               <button disabled={!preferencesReady} aria-label={`${preference.pinned ? "取消置顶" : "置顶"} ${contact.username}`} onClick={() => onFlagsChange(contact.user_id, { ...preference, pinned: !preference.pinned })}>{preference.pinned ? "取消置顶" : "置顶"}</button>
               <button disabled={!preferencesReady} aria-label={`${preference.archived ? "取消归档" : "归档"} ${contact.username}`} onClick={() => onFlagsChange(contact.user_id, { ...preference, archived: !preference.archived })}>{preference.archived ? "移回聊天" : "归档"}</button>
+              <button disabled={!preferencesReady} aria-pressed={!!muted[contact.user_id]} onClick={() => onMutedChange(contact.user_id, !muted[contact.user_id])}>{muted[contact.user_id] ? "取消静音" : "静音"}</button>
             </div>}
             {tab === "chats" && preview && <div style={{ marginLeft: "auto", textAlign: "right", flexShrink: 0, fontSize: 11 }}>
               {preview.timestamp > 0 && <time dateTime={new Date(preview.timestamp).toISOString()} title={new Date(preview.timestamp).toLocaleString()}>

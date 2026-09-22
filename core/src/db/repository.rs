@@ -26,6 +26,7 @@ pub struct ConversationPreference {
     pub pinned: bool,
     pub archived: bool,
     pub draft: Vec<u8>,
+    pub muted: bool,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -76,6 +77,10 @@ impl MessageRepository {
                 user_id TEXT NOT NULL, peer_id TEXT NOT NULL,
                 pinned INTEGER NOT NULL DEFAULT 0, archived INTEGER NOT NULL DEFAULT 0,
                 draft BLOB NOT NULL DEFAULT X'', PRIMARY KEY(user_id, peer_id)
+            );
+            CREATE TABLE IF NOT EXISTS conversation_notifications (
+                user_id TEXT NOT NULL, peer_id TEXT NOT NULL,
+                muted INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(user_id, peer_id)
             );
             CREATE TABLE IF NOT EXISTS local_message_operations (
                 user_id TEXT NOT NULL, device_id TEXT NOT NULL, id TEXT NOT NULL,
@@ -359,13 +364,14 @@ impl MessageRepository {
         &self,
         user_id: &str,
     ) -> Result<Vec<ConversationPreference>, DbError> {
-        let mut stmt = self.conn.prepare("SELECT peer_id, pinned, archived, draft FROM conversation_preferences WHERE user_id = ?1")?;
+        let mut stmt = self.conn.prepare("SELECT p.peer_id, p.pinned, p.archived, p.draft, COALESCE(n.muted, 0) FROM conversation_preferences p LEFT JOIN conversation_notifications n ON n.user_id = p.user_id AND n.peer_id = p.peer_id WHERE p.user_id = ?1")?;
         let rows = stmt.query_map([user_id], |row| {
             Ok(ConversationPreference {
                 peer_id: row.get(0)?,
                 pinned: row.get(1)?,
                 archived: row.get(2)?,
                 draft: row.get(3)?,
+                muted: row.get(4)?,
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -384,6 +390,13 @@ impl MessageRepository {
             ON CONFLICT(user_id, peer_id) DO UPDATE SET
             pinned = COALESCE(?3, pinned), archived = COALESCE(?4, archived), draft = COALESCE(?5, draft)",
             params![user_id, peer_id, pinned, archived, draft])?;
+        Ok(())
+    }
+
+    pub fn set_conversation_muted(&self, user_id: &str, peer_id: &str, muted: bool) -> Result<(), DbError> {
+        self.save_conversation_preference(user_id, peer_id, None, None, None)?;
+        self.conn.execute("INSERT INTO conversation_notifications(user_id, peer_id, muted) VALUES (?1, ?2, ?3)
+            ON CONFLICT(user_id, peer_id) DO UPDATE SET muted = excluded.muted", params![user_id, peer_id, muted])?;
         Ok(())
     }
 

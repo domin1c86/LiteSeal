@@ -53,6 +53,14 @@ pub enum Command {
         #[serde(rename = "userId")]
         user_id: String,
     },
+    #[serde(rename = "set_conversation_muted")]
+    SetConversationMuted {
+        #[serde(rename = "userId")]
+        user_id: String,
+        #[serde(rename = "peerId")]
+        peer_id: String,
+        muted: bool,
+    },
     #[serde(rename = "save_conversation_preference")]
     SaveConversationPreference {
         #[serde(rename = "userId")]
@@ -341,6 +349,12 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
                 .locally_deleted_ids(&user_id, &conversation_id)
                 .map_err(|e| e.to_string())?,
         ),
+        Command::SetConversationMuted { user_id, peer_id, muted } => {
+            if state.identity()?.user_id != user_id { return Err("Account mismatch".into()); }
+            state.client.db.lock().map_err(|e| e.to_string())?
+                .set_conversation_muted(&user_id, &peer_id, muted).map_err(|e| e.to_string())?;
+            serde_json::to_value(())
+        }
         Command::GetConversationPreferences { user_id } => serde_json::to_value(
             state
                 .client

@@ -8,6 +8,7 @@ type Flags = { pinned: boolean; archived: boolean };
 export function useConversationPreferences(session: Identity | null) {
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [flags, setFlags] = useState<Record<string, Flags>>({});
+  const [muted, setMuted] = useState<Record<string, boolean>>({});
   const [saving, setSaving] = useState(false);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -19,7 +20,7 @@ export function useConversationPreferences(session: Identity | null) {
 
   useEffect(() => {
     let active = true;
-    setReady(false); setDrafts({}); setFlags({}); setError(null);
+    setReady(false); setDrafts({}); setFlags({}); setMuted({}); setError(null);
     if (!session) return;
     const identity = session;
     (async () => {
@@ -45,6 +46,7 @@ export function useConversationPreferences(session: Identity | null) {
         if (!active) return;
         setDrafts(Object.fromEntries(decoded.map(({ row, draft }) => [row.peer_id, draft])));
         setFlags(Object.fromEntries(rows.map(row => [row.peer_id, { pinned: row.pinned, archived: row.archived }])));
+        setMuted(Object.fromEntries(rows.map(row => [row.peer_id, row.muted])));
         setReady(true);
       } catch (failure) { if (active) setError(`无法恢复会话设置和草稿：${String(failure)}。已保留原数据。`); }
     })();
@@ -99,6 +101,15 @@ export function useConversationPreferences(session: Identity | null) {
     for (const [key, work] of [...pending.current]) await enqueue(key, work);
   }
 
-  return { drafts, flags, ready, error, saving, saveDraft, saveFlags, flush,
+  function saveMuted(peerId: string, value: boolean) {
+    if (!session || !ready) return Promise.reject(new Error("会话设置尚未恢复"));
+    const userId = session.user_id;
+    return enqueue(`muted:${peerId}`, async () => {
+      await window.desktop.set_conversation_muted({ userId, peerId, muted: value });
+      setMuted(previous => ({ ...previous, [peerId]: value }));
+    });
+  }
+
+  return { drafts, flags, muted, saveMuted, ready, error, saving, saveDraft, saveFlags, flush,
     retry: () => ready ? flush() : Promise.resolve(setRevision(value => value + 1)) };
 }

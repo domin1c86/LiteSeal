@@ -1,4 +1,5 @@
-import { app, clipboard, BrowserWindow, dialog, ipcMain, net, protocol, session } from "electron";
+import { app, clipboard, BrowserWindow, dialog, ipcMain, Menu, net, powerMonitor, protocol, session, Tray } from "electron";
+import { ChatNotifications } from "./notifications";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { DesktopBridge } from "./bridge";
@@ -10,6 +11,10 @@ const bridge = new DesktopBridge();
 let mainWindow: BrowserWindow | undefined;
 let quitting = false;
 let cleanedUp = false;
+let exitRequested = false;
+let tray: Tray | undefined;
+let explainedTray = false;
+const notifications = new ChatNotifications(() => mainWindow, bridge);
 
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
@@ -21,6 +26,7 @@ else {
   app.on("window-all-closed", () => app.quit());
   app.on("before-quit", event => {
     if (cleanedUp) return;
+    exitRequested = true;
     event.preventDefault();
     // Let the renderer's pending-save guard run while the sidecar is still alive.
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -29,6 +35,8 @@ else {
     }
     if (quitting) return;
     quitting = true;
+    notifications.clear();
+    tray?.destroy();
     void bridge.stop().finally(() => { cleanedUp = true; app.quit(); });
   });
   bridge.on("failure", (error: Error) => {
@@ -44,6 +52,9 @@ else {
       app.isPackaged ? "desktop" : "", `liteseal-desktop${process.platform === "win32" ? ".exe" : ""}`);
     await bridge.start(executable);
     if (quitting) return;
+    app.setAppUserModelId("com.liteseal.app");
+    powerMonitor.on("lock-screen", () => notifications.lock(true));
+    powerMonitor.on("unlock-screen", () => notifications.lock(false));
     const csp = `default-src 'self'; script-src 'self'${app.isPackaged ? "" : " 'unsafe-inline'"}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'${app.isPackaged ? "" : " ws://127.0.0.1:1420"}; object-src 'none'; base-uri 'none'; frame-src 'none'`;
     protocol.handle("liteseal", async request => {
       const url = new URL(request.url);
@@ -76,13 +87,32 @@ else {
           return { ok: false, error: "不允许的桌面接口来源" };
         }
         try {
+          if (name === "set_notification_context") {
+            const input = args as { userId: string | null; activePeerId: string | null };
+            if (input.userId !== null) {
+              const identity = await bridge.call("load_identity", {});
+              if (!identity.token || identity.user_id !== input.userId) throw new Error("通知账号不匹配");
+            }
+            if (input.activePeerId !== null && typeof input.activePeerId !== "string") throw new Error("无效会话");
+            notifications.context(input.userId, input.activePeerId);
+            return { ok: true, result: null };
+          }
+          if (name === "take_notification_target") return { ok: true, result: notifications.takeTarget() };
           if (name === "copy_message_text") {
             const text = args && typeof args === "object" ? (args as Record<string, unknown>).text : undefined;
             if (typeof text !== "string" || text.length > 1024 * 1024) throw new Error("无效的复制文本或文本超过 1 MiB");
             clipboard.writeText(text);
             return { ok: true, result: null };
           }
-          return { ok: true, result: await bridge.call(name, args as never) };
+          if (name === "sign_out" || name === "clear_keypair") notifications.context(null, null);
+          const result = await bridge.call(name, args as never);
+          if (name === "poll_messages") {
+            // A failed notification must never consume or fail a persisted relay batch.
+            await notifications.receive(result as import("../ui/src/types").PollMessagesResult).catch(() => {});
+          }
+          if (name === "set_conversation_muted") notifications.dismiss((args as { peerId: string }).peerId);
+          if (name === "submit_message_operation" || (name === "sync_message_operations" && result)) notifications.clear();
+          return { ok: true, result };
         }
         catch (error) { return { ok: false, error: error instanceof Error ? error.message : "桌面操作失败" }; }
       });
@@ -94,6 +124,28 @@ else {
         nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true },
     });
     mainWindow.setMenuBarVisibility(false);
+    try {
+      tray = new Tray(path.join(root, "electron", "icons", "icon.png"));
+      tray.setToolTip("LiteSeal · 关闭窗口后继续接收消息");
+      const show = () => { if (mainWindow?.isMinimized()) mainWindow.restore(); mainWindow?.show(); mainWindow?.focus(); };
+      tray.setContextMenu(Menu.buildFromTemplate([
+        { label: "打开 LiteSeal", click: show },
+        { label: "退出 LiteSeal", click: () => app.quit() },
+      ]));
+      tray.on("double-click", show);
+    } catch { tray = undefined; }
+    mainWindow.on("close", event => {
+      if (exitRequested || !tray) return;
+      event.preventDefault();
+      if (!explainedTray) {
+        explainedTray = true;
+        dialog.showMessageBoxSync(mainWindow!, { type: "info", title: "LiteSeal 继续运行", message: "关闭窗口会收起到托盘并继续接收消息。要完全退出，请使用托盘菜单中的“退出 LiteSeal”。" });
+      }
+      mainWindow?.hide();
+    });
+    mainWindow.on("closed", () => { mainWindow = undefined; });
+    mainWindow.webContents.on("will-prevent-unload", () => { exitRequested = false; });
+    mainWindow.webContents.on("render-process-gone", () => notifications.context(null, null));
     mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     mainWindow.webContents.on("will-navigate", event => event.preventDefault());
     mainWindow.webContents.on("will-attach-webview", event => event.preventDefault());

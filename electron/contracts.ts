@@ -3,6 +3,9 @@ import type { RegisterResult, ConnectResult, SendMessageResult, PollMessagesResu
 } from "../ui/src/types";
 
 export interface CommandMap {
+  set_conversation_muted: { args: { userId: string; peerId: string; muted: boolean }; result: void };
+  set_notification_context: { args: { userId: string | null; activePeerId: string | null }; result: void };
+  take_notification_target: { args: {}; result: { userId: string; peerId: string } | null };
   submit_message_operation: { args: { targetId: string; kind: "edit" | "revoke"; content: string; baseRevision: number }; result: string };
   sync_message_operations: { args: {}; result: number };
   get_message_operations: { args: { conversationId?: string }; result: MessageOperation[] };
@@ -49,6 +52,9 @@ export type DesktopApi = {
   [K in CommandName]: (args: CommandMap[K]["args"]) => Promise<CommandMap[K]["result"]>;
 };
 export const commandNames = [
+  "set_conversation_muted",
+  "set_notification_context",
+  "take_notification_target",
   "submit_message_operation",
   "sync_message_operations",
   "get_message_operations",
