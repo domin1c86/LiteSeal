@@ -3,6 +3,8 @@ import type { RegisterResult, ConnectResult, SendMessageResult, PollMessagesResu
 } from "../ui/src/types";
 
 export interface CommandMap {
+  configure_app_lock: { args: { enabled: boolean; password: string }; result: void };
+  preview_attachment_task: { args: { id: string }; result: string };
   check_app_update: { args: {}; result: { current: string; latest: string; available: boolean } };
   open_app_release: { args: {}; result: void };
   app_lock_state: { args: {}; result: boolean };
@@ -22,7 +24,7 @@ export interface CommandMap {
   begin_attachment_download: { args: { messageId: string }; result: AttachmentTask };
   export_attachment: { args: { messageId: string; preview?: boolean }; result: string | null };
   forget_attachment_task: { args: { id: string }; result: void };
-  attachment_cache_stats: { args: {}; result: { cache_bytes: number; database_allocated: number; database_reusable: number; limit: number } };
+  attachment_cache_stats: { args: {}; result: { cache_bytes: number; database_allocated: number; database_reusable: number; disk_bytes: number; limit: number } };
   clear_attachment_cache: { args: { peerId?: string }; result: number };
   get_personal_organizer: { args: {}; result: string };
   save_personal_organizer: { args: { content: string }; result: void };
@@ -77,6 +79,8 @@ export type DesktopApi = {
   [K in CommandName]: (args: CommandMap[K]["args"]) => Promise<CommandMap[K]["result"]>;
 };
 export const commandNames = [
+  "configure_app_lock",
+  "preview_attachment_task",
   "check_app_update", "open_app_release",
   "app_lock_state", "lock_app", "unlock_app",
   "submit_reaction", "sync_reactions", "get_reactions",

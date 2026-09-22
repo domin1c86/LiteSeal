@@ -10,6 +10,7 @@ pub async fn submit(State(state):State<AppState>,headers:HeaderMap,Json(event):J
     let user=crate::message_operations::authorize(&state,&headers,&event.device).await?;
     if user!=event.actor || !(1..=1_000_000).contains(&event.revision) || event.ciphertext.len()>256 || uuid::Uuid::parse_str(&event.id).is_err(){return Err(invalid());}
     let device=state.db.get_user_device(&user,&event.device).await.map_err(db)?.ok_or_else(invalid)?;
+    if !state.db.hit_rate_limit(&format!("reactions:{user}"),120,60).await.map_err(db)? {return Err((StatusCode::TOO_MANY_REQUESTS,"回应过于频繁，请稍后重试".into()));}
     let key:[u8;32]=device.ed25519_pk.try_into().map_err(|_|invalid())?;
     if !crypto::verify_with_public_key(&event.signing_bytes(),&event.signature,&key).map_err(|_|invalid())?{return Err(invalid());}
     let mut tx=state.db.pool().begin().await.map_err(db)?;

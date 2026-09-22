@@ -4,6 +4,11 @@ use sqlx::Row;
 use crate::state::AppState;
 type Failure = (StatusCode, String);
 fn db(_: sqlx::Error) -> Failure { (StatusCode::SERVICE_UNAVAILABLE, "附件存储暂不可用".into()) }
+fn days()->i32{std::env::var("LITESEAL_ATTACHMENT_DAYS").ok().and_then(|v|v.parse().ok()).unwrap_or(30).clamp(1,365)}
+fn orphan_hours()->i32{std::env::var("LITESEAL_ATTACHMENT_ORPHAN_HOURS").ok().and_then(|v|v.parse().ok()).unwrap_or(24).clamp(1,168)}
+pub async fn cleanup(pool:&sqlx::PgPool)->Result<(),sqlx::Error>{
+    sqlx::query("DELETE FROM attachment_objects a WHERE expires_at < now() OR (created_at < now() - make_interval(hours => $1) AND NOT EXISTS (SELECT 1 FROM beta_receipts r WHERE r.message_id = a.message_id AND r.sender_user_id = a.owner))").bind(orphan_hours()).execute(pool).await?;Ok(())
+}
 #[derive(Deserialize)]
 pub struct Access { pub device_id: String }
 #[derive(Deserialize)]
@@ -18,16 +23,17 @@ pub async fn create(State(state): State<AppState>, headers: HeaderMap, Json(inpu
     let mut tx = state.db.pool().begin().await.map_err(db)?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 1))").bind(&user).execute(&mut *tx).await.map_err(db)?;
     // Unsent objects expire after one day; published objects remain downloadable for 30 days.
-    sqlx::query("DELETE FROM attachment_objects a WHERE expires_at < now() OR (created_at < now() - interval '1 day' AND NOT EXISTS (SELECT 1 FROM beta_receipts r WHERE r.message_id = a.message_id AND r.sender_user_id = a.owner))").execute(&mut *tx).await.map_err(db)?;
+    sqlx::query("DELETE FROM attachment_objects a WHERE owner=$2 AND (expires_at < now() OR (created_at < now() - make_interval(hours => $1) AND NOT EXISTS (SELECT 1 FROM beta_receipts r WHERE r.message_id = a.message_id AND r.sender_user_id = a.owner)))").bind(orphan_hours()).bind(&user).execute(&mut *tx).await.map_err(db)?;
     if let Some(row) = sqlx::query("SELECT owner, message_id, recipient, size FROM attachment_objects WHERE id = $1").bind(&input.id).fetch_optional(&mut *tx).await.map_err(db)? {
         if row.get::<String,_>("owner") != user || row.get::<String,_>("message_id") != input.message_id || row.get::<String,_>("recipient") != input.recipient || row.get::<i64,_>("size") != input.size {
             return Err((StatusCode::CONFLICT, "附件编号已绑定其他任务".into()));
         }
     } else {
         let used: i64 = sqlx::query_scalar("SELECT COALESCE(SUM(size),0)::BIGINT FROM attachment_objects WHERE owner=$1").bind(&user).fetch_one(&mut *tx).await.map_err(db)?;
-        if used + input.size > 512 * 1024 * 1024 { return Err((StatusCode::PAYLOAD_TOO_LARGE, "附件配额为每账号 512 MiB".into())); }
-        sqlx::query("INSERT INTO attachment_objects(id,owner,message_id,recipient,size) VALUES ($1,$2,$3,$4,$5)")
-            .bind(&input.id).bind(&user).bind(&input.message_id).bind(&input.recipient).bind(input.size).execute(&mut *tx).await.map_err(db)?;
+        let count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM attachment_objects WHERE owner=$1").bind(&user).fetch_one(&mut *tx).await.map_err(db)?;
+        if used + input.size > 512 * 1024 * 1024 || count>=2000 { return Err((StatusCode::PAYLOAD_TOO_LARGE, "附件配额为每账号 512 MiB、最多 2000 个对象".into())); }
+        sqlx::query("INSERT INTO attachment_objects(id,owner,message_id,recipient,size,expires_at) VALUES ($1,$2,$3,$4,$5,now()+make_interval(days => $6))")
+            .bind(&input.id).bind(&user).bind(&input.message_id).bind(&input.recipient).bind(input.size).bind(days()).execute(&mut *tx).await.map_err(db)?;
     }
     tx.commit().await.map_err(db)?;
     Ok(Json(serde_json::json!({"id":input.id})))

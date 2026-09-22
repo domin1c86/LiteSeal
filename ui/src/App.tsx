@@ -236,7 +236,7 @@ export default function App() {
     <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
       <div role="status" style={{ padding: "6px 12px", background: "var(--surface)", color: "var(--text-muted)", fontSize: 12 }}>
         <button onClick={() => setShowAccount(true)}>账号与消息请求</button>
-        <button onClick={() => { void preferences.flush().then(() => window.desktop.lock_app({})).catch(error => setStartupError(String(error))); }}>锁定</button>
+        <button onClick={() => { void preferences.flush().then(() => window.desktop.lock_app({})).catch(error => setConnectionError(String(error))); }}>锁定</button>
         {{ online: "已连接", connecting: "正在连接…", reconnecting: "正在重连…", offline: "离线", auth_required: "需要重新登录" }[connection]}
         {connectionError && <span> · {connectionError}</span>}
         {connection === "auth_required"

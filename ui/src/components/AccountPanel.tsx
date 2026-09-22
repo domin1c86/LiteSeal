@@ -9,6 +9,8 @@ export default function AccountPanel({ contacts, onClose, onContactsChanged, onL
   const [sessions, setSessions] = useState<CommandMap["list_account_sessions"]["result"]>([]);
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
   const [update, setUpdate] = useState<CommandMap["check_app_update"]["result"] | null>(null);
+  const [windowsPassword, setWindowsPassword] = useState("");
+  const [lockStatus, setLockStatus] = useState("");
   async function refresh() {
     const [policies, active] = await Promise.all([window.desktop.list_contact_requests({}), window.desktop.list_account_sessions({})]);
     setRequests(policies); setSessions(active);
@@ -38,6 +40,15 @@ export default function AccountPanel({ contacts, onClose, onContactsChanged, onL
       try { await window.desktop.logout_all_sessions({}); onLogout(); }
       catch (failure) { setError(String(failure)); setBusy(false); }
     }}>退出全部会话</button>
+    <h2>应用锁</h2>
+    <p>先验证当前 Windows 账号密码再启用；Windows Hello PIN 不适用于此验证。启用后锁屏、空闲 5 分钟和重启均需解锁。</p>
+    <input type="password" autoComplete="off" aria-label="设置应用锁的 Windows 账号密码" value={windowsPassword} onChange={event => setWindowsPassword(event.target.value)} />
+    {[true, false].map(enabled => <button key={String(enabled)} disabled={busy || !windowsPassword} onClick={async () => {
+      setBusy(true); setError(""); const password = windowsPassword; setWindowsPassword("");
+      try { await window.desktop.configure_app_lock({ enabled, password }); setLockStatus(enabled ? "应用锁已启用" : "应用锁已关闭"); }
+      catch (failure) { setError(String(failure)); } finally { setBusy(false); }
+    }}>{enabled ? "验证并启用应用锁" : "验证并关闭应用锁"}</button>)}
+    <p role="status">{lockStatus}</p>
     <h2>版本与升级</h2>
     <button disabled={busy} onClick={async () => {
       setBusy(true); setError(""); try { setUpdate(await window.desktop.check_app_update({})); } catch (failure) { setError(String(failure)); } finally { setBusy(false); }

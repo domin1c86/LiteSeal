@@ -131,7 +131,7 @@ pub enum Command {
     #[serde(rename = "begin_attachment_download")]
     BeginAttachmentDownload { #[serde(rename="messageId")] message_id: String },
     #[serde(rename = "export_attachment")]
-    ExportAttachment { #[serde(rename="messageId")] message_id: String, path: String },
+    ExportAttachment { #[serde(rename="messageId")] message_id: String, path: Option<String>, offset: Option<usize>, #[serde(rename="taskId")] task_id: Option<String> },
     #[serde(rename = "forget_attachment_task")]
     ForgetAttachmentTask { id: String },
     #[serde(rename = "attachment_cache_stats")]
@@ -368,7 +368,12 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
         Command::AttachmentStep {id} => serde_json::to_value(commands::attachments::step(state,id).await?),
         Command::PublishAttachment {id} => serde_json::to_value(commands::attachments::publish(state,id).await?),
         Command::BeginAttachmentDownload {message_id} => serde_json::to_value(commands::attachments::begin_download(state,message_id).await?),
-        Command::ExportAttachment {message_id,path} => serde_json::to_value(commands::attachments::export(state,message_id,path)?),
+        Command::ExportAttachment {message_id,path,offset,task_id} => match (path,task_id) {
+            (Some(path),None) => serde_json::to_value(commands::attachments::export(state,message_id,path)?),
+            (None,Some(id)) => serde_json::to_value(commands::attachments::pending_preview_chunk(state,id,offset.unwrap_or(0))?),
+            (None,None) => serde_json::to_value(commands::attachments::preview_chunk(state,message_id,offset.unwrap_or(0))?),
+            _ => return Err("无效附件导出请求".into()),
+        },
         Command::ForgetAttachmentTask {id} => {
             let user=state.identity()?.user_id;
             state.client.db.lock().map_err(|e|e.to_string())?.forget_attachment_transfer(&user,&id).map_err(|e|e.to_string())?;
@@ -378,7 +383,11 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
             let user=state.identity()?.user_id;
             let db=state.client.db.lock().map_err(|e|e.to_string())?;
             let (allocated,free)=db.database_disk_stats().map_err(|e|e.to_string())?;
-            serde_json::to_value(serde_json::json!({"cache_bytes":db.attachment_cache_bytes(&user).map_err(|e|e.to_string())?,"database_allocated":allocated,"database_reusable":free,"limit":256*1024*1024}))
+            let disk_bytes:u64=["","-wal","-shm","-journal"].iter().map(|suffix| {
+                let mut path=state.db_path.as_os_str().to_os_string();path.push(suffix);
+                std::fs::metadata(std::path::PathBuf::from(path)).map(|m|m.len()).unwrap_or(0)
+            }).sum();
+            serde_json::to_value(serde_json::json!({"cache_bytes":db.attachment_cache_bytes(&user).map_err(|e|e.to_string())?,"database_allocated":allocated,"database_reusable":free,"disk_bytes":disk_bytes,"limit":256*1024*1024}))
         }
         Command::ClearAttachmentCache {peer_id} => {
             let user=state.identity()?.user_id;

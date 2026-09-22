@@ -33,6 +33,11 @@ async fn main() {
         .await
         .expect("failed to connect to Postgres");
     let mut state = AppState::new(db);
+    let attachment_pool=state.db.pool().clone();
+    tokio::spawn(async move {
+        let mut interval=tokio::time::interval(std::time::Duration::from_secs(3600));
+        loop { interval.tick().await; if attachments::cleanup(&attachment_pool).await.is_err(){tracing::warn!("Attachment cleanup deferred");} }
+    });
     state.invite_codes = std::sync::Arc::new(config.invite_codes);
     let allowed_origin = HeaderValue::from_str(&config.cors_allow_origin)
         .expect("LITESEAL_CORS_ALLOW_ORIGIN is not a valid origin");

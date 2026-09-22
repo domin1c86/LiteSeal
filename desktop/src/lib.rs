@@ -5,6 +5,7 @@ use liteseal_core::keystore::{self, KeystoreData};
 use std::{path::PathBuf, sync::Mutex};
 
 pub struct AppState {
+    pub db_path: PathBuf,
     pub client: liteseal_core::LitesealClient,
     keystore_path: Option<PathBuf>,
     identity: Mutex<Option<KeystoreData>>,
@@ -19,6 +20,7 @@ impl AppState {
     /// `keystore_path` replaces the per-user keystore, for example in tests.
     pub fn with_keystore(db_path: &str, keystore_path: Option<PathBuf>) -> Result<Self, String> {
         Ok(Self {
+            db_path: PathBuf::from(db_path),
             client: liteseal_core::LitesealClient::new(db_path)?,
             keystore_path,
             identity: Mutex::new(None),

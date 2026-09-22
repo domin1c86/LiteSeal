@@ -78,6 +78,7 @@ pub async fn step(state:&AppState,id:String)->Result<View,String> {
         if offset<item.ciphertext.len(){
             let end=(offset+CHUNK).min(item.ciphertext.len());
             let response=http.put(format!("{base}/attachments/{id}/{}",offset/CHUNK)).query(&[("device_id",&saved.device_id)]).bearer_auth(&saved.token).body(item.ciphertext[offset..end].to_vec()).send().await.map_err(|_|"分块上传失败，可重试原任务")?;
+            if response.status()==reqwest::StatusCode::NOT_FOUND {item.offset=0;save(state,&item)?;return Err("远端暂存已过期，请继续原任务重新上传".into());}
             if !response.status().is_success(){return Err(format!("分块上传失败：{}",response.status()));}
             item.offset=end as i64;save(state,&item)?;
         }
@@ -85,10 +86,15 @@ pub async fn step(state:&AppState,id:String)->Result<View,String> {
         let total=d.size+40;
         if item.ciphertext.len()<total {
             let part=item.ciphertext.len()/CHUNK;
-            let response=http.get(format!("{base}/attachments/{id}/{part}")).query(&[("device_id",&saved.device_id)]).bearer_auth(&saved.token).send().await.map_err(|_|"下载中断，可继续原任务")?;
+            let mut response=http.get(format!("{base}/attachments/{id}/{part}")).query(&[("device_id",&saved.device_id)]).bearer_auth(&saved.token).send().await.map_err(|_|"下载中断，可继续原任务")?;
             if !response.status().is_success(){return Err(format!("附件不可下载（可能过期或无权限）：{}",response.status()));}
-            let bytes=response.bytes().await.map_err(|_|"下载读取失败")?;
+            let mut bytes=Vec::new();
+            while let Some(chunk)=response.chunk().await.map_err(|_|"下载读取失败")? {
+                if bytes.len()+chunk.len()>CHUNK {return Err("附件分块超过上限".into());}
+                bytes.extend_from_slice(&chunk);
+            }
             if bytes.len()!=(total-item.ciphertext.len()).min(CHUNK){return Err("附件分块长度不符".into());}
+            if state.client.db.lock().map_err(|e|e.to_string())?.attachment_cache_bytes(&saved.user_id).map_err(|e|e.to_string())?+bytes.len() as i64>256*1024*1024{return Err("附件缓存已满，请清理后重试".into());}
             item.ciphertext.extend_from_slice(&bytes);item.offset=item.ciphertext.len() as i64;save(state,&item)?;
         }
     }
@@ -96,8 +102,11 @@ pub async fn step(state:&AppState,id:String)->Result<View,String> {
 }
 pub async fn publish(state:&AppState,id:String)->Result<String,String> {
     let _guard=GATE.get_or_init(||tokio::sync::Mutex::new(())).lock().await;
-    let saved=state.identity()?;let item=load(state,&id)?;
+    let saved=state.identity()?;let mut item=load(state,&id)?;
     if item.direction!="upload" || item.offset!=item.ciphertext.len() as i64 {return Err("请先完成上传".into());}
+    let response=client()?.get(format!("{}/attachments/{}/{}",api::normalize_server_url(&saved.server_url)?,id,(item.ciphertext.len()-1)/CHUNK)).query(&[("device_id",&saved.device_id)]).bearer_auth(&saved.token).send().await.map_err(|_|"无法确认远端附件，保留原任务")?;
+    if response.status()==reqwest::StatusCode::NOT_FOUND{item.offset=0;save(state,&item)?;return Err("远端暂存已过期，请继续原任务重新上传".into());}
+    if !response.status().is_success(){return Err(format!("无法确认远端附件：{}",response.status()));}
     let existing=state.client.db.lock().map_err(|e|e.to_string())?.get_message(&item.message_id).map_err(|e|e.to_string())?.is_some();
     if existing {state.client.retry_message(item.message_id.clone()).await?;return Ok(item.message_id);}
     let d=descriptor(state,&item)?;
@@ -146,6 +155,20 @@ pub fn export(state:&AppState,message_id:String,path:String)->Result<(),String>{
     let mut file=std::fs::OpenOptions::new().write(true).create_new(true).open(&path).map_err(|_|"无法创建保存文件，请检查权限和磁盘空间")?;
     if let Err(error)=file.write_all(&bytes).and_then(|_|file.sync_all()){drop(file);let _=std::fs::remove_file(&path);return Err(format!("保存失败，请检查磁盘空间：{error}"));}
     Ok(())
+}
+pub fn preview_chunk(state:&AppState,message_id:String,offset:usize)->Result<Vec<u8>,String>{
+    let (d,_)=from_message(state,&message_id)?;let item=load(state,&d.id)?;
+    let bytes=crypto::decrypt_attachment(&item.ciphertext,&d.key).map_err(|_|"附件认证失败")?;
+    if bytes.len()!=d.size || !media(&bytes).starts_with("image/") || offset>bytes.len(){return Err("图片格式或大小不支持".into());}
+    Ok(bytes[offset..(offset+CHUNK).min(bytes.len())].to_vec())
+}
+pub fn pending_preview_chunk(state:&AppState,id:String,offset:usize)->Result<Vec<u8>,String>{
+    let item=load(state,&id)?;
+    if item.direction!="upload"{return Err("不是待发任务".into());}
+    let d=descriptor(state,&item)?;
+    let bytes=crypto::decrypt_attachment(&item.ciphertext,&d.key).map_err(|_|"附件认证失败")?;
+    if !media(&bytes).starts_with("image/")||offset>bytes.len(){return Err("图片格式不支持".into());}
+    Ok(bytes[offset..(offset+CHUNK).min(bytes.len())].to_vec())
 }
 pub fn public_plaintext(bytes:Vec<u8>)->Result<Vec<u8>,String>{
     let Ok(text)=std::str::from_utf8(&bytes) else{return Ok(bytes)};

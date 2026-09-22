@@ -234,9 +234,12 @@ pub async fn pending(
     headers: HeaderMap,
     Query(q): Query<DeviceQuery>,
 ) -> Result<Json<Vec<OperationDelivery>>, Failure> {
-    authorize(&state, &headers, &q.device_id).await?;
-    let rows = sqlx::query("SELECT body FROM operation_deliveries WHERE device_id = $1 AND acked = false ORDER BY operation_id LIMIT 100")
-        .bind(q.device_id).fetch_all(state.db.pool()).await.map_err(database)?;
+    let user=authorize(&state, &headers, &q.device_id).await?;
+    // Retractions remain deliverable for privacy; blocked edits cannot inject new plaintext.
+    let rows = sqlx::query("SELECT d.body FROM operation_deliveries d JOIN message_operations m ON m.id=d.operation_id WHERE d.device_id=$1 AND d.acked=false
+        AND (m.kind='revoke' OR d.body::jsonb->'header'->>'sender_id'=$2 OR EXISTS (SELECT 1 FROM contact_policy p WHERE p.user_id=$2 AND p.peer_id=d.body::jsonb->'header'->>'sender_id' AND p.status='accepted'))
+        ORDER BY d.operation_id LIMIT 100")
+        .bind(q.device_id).bind(user).fetch_all(state.db.pool()).await.map_err(database)?;
     let result = rows
         .into_iter()
         .map(|r| serde_json::from_str(&r.get::<String, _>("body")))

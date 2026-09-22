@@ -380,7 +380,13 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
   }
 
   return (
-    <div style={styles.container}>
+    <div style={styles.container} onKeyDown={event => {
+      if (event.key !== "Escape" || event.nativeEvent.isComposing) return;
+      if (!operationBusy) setOperationDialog(null);
+      if (!deleting) setDeleteTarget(null);
+      if (!forwarding) setForwardDraft(null);
+      setEmojiOpen(false); setSearchOpen(false); composer.current?.focus();
+    }}>
       <div className="chat-header" style={styles.header}>
         <div style={styles.headerInner}>
           <div style={styles.headerText}>
