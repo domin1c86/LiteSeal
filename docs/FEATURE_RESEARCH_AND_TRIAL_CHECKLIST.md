@@ -43,13 +43,13 @@
 
 | 能力 | 当前判断 | 核对依据与后续动作 |
 | --- | --- | --- |
-| 文字单聊、签名信封、持久化和回执 | 有实现，仍需场景验收 | [协议](shared/src/protocol.rs)、[客户端](core/src/client.rs)、[中继](server/src/relay/handlers.rs)；复用现有离线队列与去重，不另造消息通道 |
-| 会话摘要、未读、置顶/归档、加密草稿 | 有实现，仍需场景验收 | [会话列表](ui/src/components/ContactList.tsx)、[偏好](ui/src/hooks/useConversationPreferences.ts)、[桌面契约](electron/contracts.ts)；未读为本机状态 |
-| 引用、转发、复制、本机删除、编辑/撤回 | 有实现，仍需场景验收 | [正文结构](ui/src/lib/messageContent.ts)、[消息操作规则](MESSAGE_OPERATIONS.md)、[操作服务](server/src/message_operations.rs)；原发送设备 48 小时内编辑/撤回，快照与逻辑删除边界保留 |
-| 用户搜索、联系人信任 | 有实现；资料管理不完整 | [添加联系人](ui/src/components/AddContact.tsx)、[联系人详情](ui/src/components/ContactDetail.tsx)；用户搜索不是消息全文搜索 |
-| 消息全文搜索、系统通知/托盘 | 本轮未发现完整业务入口 | [桌面契约](electron/contracts.ts)、[主进程](electron/main.ts)、[旧清单 D-04/D-06](DEVELOPMENT_BACKLOG.md)；适合作为首批新增 |
-| 图片/文件、附件缓存 | 有附件模型和清理入口，未形成传输闭环 | [附件模型](core/src/db/models.rs)、[存储界面](ui/src/components/StorageManager.tsx)、[服务路由](server/src/main.rs)；不能把附件计数视为已经可以发文件 |
-| 跨设备与换机 | 内测主动限制 | [登录及设备接口](server/src/auth/handlers.rs)要求原设备/原密钥；设备创建和密钥替换关闭。原 E-01 的“部分实现”不意味着可用的多设备产品 |
+| 文字单聊、签名信封、持久化和回执 | 有实现，仍需场景验收 | [协议](../shared/src/protocol.rs)、[客户端](../core/src/client.rs)、[中继](../server/src/relay/handlers.rs)；复用现有离线队列与去重，不另造消息通道 |
+| 会话摘要、未读、置顶/归档、加密草稿 | 有实现，仍需场景验收 | [会话列表](../ui/src/components/ContactList.tsx)、[偏好](../ui/src/hooks/useConversationPreferences.ts)、[桌面契约](../electron/contracts.ts)；未读为本机状态 |
+| 引用、转发、复制、本机删除、编辑/撤回 | 有实现，仍需场景验收 | [正文结构](../ui/src/lib/messageContent.ts)、[消息操作规则](MESSAGE_OPERATIONS.md)、[操作服务](../server/src/message_operations.rs)；原发送设备 48 小时内编辑/撤回，快照与逻辑删除边界保留 |
+| 用户搜索、联系人信任 | 有实现；资料管理不完整 | [添加联系人](../ui/src/components/AddContact.tsx)、[联系人详情](../ui/src/components/ContactDetail.tsx)；用户搜索不是消息全文搜索 |
+| 消息全文搜索、系统通知/托盘 | 本轮未发现完整业务入口 | [桌面契约](../electron/contracts.ts)、[主进程](../electron/main.ts)、[旧清单 D-04/D-06](DEVELOPMENT_BACKLOG.md)；适合作为首批新增 |
+| 图片/文件、附件缓存 | 有附件模型和清理入口，未形成传输闭环 | [附件模型](../core/src/db/models.rs)、[存储界面](../ui/src/components/StorageManager.tsx)、[服务路由](../server/src/main.rs)；不能把附件计数视为已经可以发文件 |
+| 跨设备与换机 | 内测主动限制 | [登录及设备接口](../server/src/auth/handlers.rs)要求原设备/原密钥；设备创建和密钥替换关闭。原 E-01 的“部分实现”不意味着可用的多设备产品 |
 | 群、频道、语音/视频、机器人 | 本轮未发现 Windows 完整流程 | 当前消息正文、桥接和服务路由以单聊为中心；按新增设计，不只加按钮 |
 
 现有待办继续使用 [DEVELOPMENT_BACKLOG.md](DEVELOPMENT_BACKLOG.md) 中的 W/D/E/S 编号。下文 T 编号用于试做切片，便于把一个大功能拆成可完成、可验收的工作；同一项不要在两份文档分别宣称完成。

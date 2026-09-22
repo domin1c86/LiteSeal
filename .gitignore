@@ -21,14 +21,9 @@ dist-electron/
 release/
 
 # Compose
-.compose/
+/.compose/
+/docs/compose/
 
-# Project docs (managed separately)
-docs/
-plan-book.md
+# Local previews
 deisng-preview.html
 design-architecture.html
-
-# AI
-CLAUDE.md
-AGENTS.md
