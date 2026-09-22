@@ -3,6 +3,10 @@ import type { RegisterResult, ConnectResult, SendMessageResult, PollMessagesResu
 } from "../ui/src/types";
 
 export interface CommandMap {
+  list_contact_requests: { args: {}; result: { peer_id: string; username: string; status: string }[] };
+  set_contact_policy: { args: { peerId: string; status: "accepted" | "blocked" | "rejected" | "pending" }; result: void };
+  list_account_sessions: { args: {}; result: { id: string; device_id: string; name: string; revoked: boolean; current: boolean; expires_at: string }[] };
+  logout_all_sessions: { args: {}; result: void };
   select_attachment: { args: { peerId: string }; result: AttachmentTask | null };
   list_attachment_tasks: { args: {}; result: AttachmentTask[] };
   attachment_step: { args: { id: string }; result: AttachmentTask };
@@ -65,6 +69,7 @@ export type DesktopApi = {
   [K in CommandName]: (args: CommandMap[K]["args"]) => Promise<CommandMap[K]["result"]>;
 };
 export const commandNames = [
+  "list_contact_requests", "set_contact_policy", "list_account_sessions", "logout_all_sessions",
   "select_attachment", "list_attachment_tasks", "attachment_step", "publish_attachment", "begin_attachment_download", "export_attachment", "forget_attachment_task", "attachment_cache_stats", "clear_attachment_cache",
   "get_personal_organizer",
   "save_personal_organizer",

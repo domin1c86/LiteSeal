@@ -52,6 +52,7 @@ export default function AddContact({
     setError(null);
     try {
       await addContact(user.user_id, user.username, user.public_key, user.ed25519_pk);
+      await window.desktop.set_contact_policy({ peerId: user.user_id, status: "accepted" });
       onAdded();
     } catch (err) {
       setError(String(err));

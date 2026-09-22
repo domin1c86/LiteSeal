@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useConversationPreferences } from "./hooks/useConversationPreferences";
 import { useOrganizer } from "./hooks/useOrganizer";
 import OrganizerPanel from "./components/OrganizerPanel";
+import AccountPanel from "./components/AccountPanel";
 import Login from "./components/Login";
 import Chat from "./components/Chat";
 import ContactList from "./components/ContactList";
@@ -33,6 +34,7 @@ export default function App() {
   const preferences = useConversationPreferences(session);
   const organizer = useOrganizer(session?.user_id);
   const [showOrganizer, setShowOrganizer] = useState(false);
+  const [showAccount, setShowAccount] = useState(false);
   const { drafts } = preferences;
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [activeConversation, setActiveConversation] = useState<string | null>(
@@ -232,6 +234,7 @@ export default function App() {
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
       <div role="status" style={{ padding: "6px 12px", background: "var(--surface)", color: "var(--text-muted)", fontSize: 12 }}>
+        <button onClick={() => setShowAccount(true)}>账号与消息请求</button>
         {{ online: "已连接", connecting: "正在连接…", reconnecting: "正在重连…", offline: "离线", auth_required: "需要重新登录" }[connection]}
         {connectionError && <span> · {connectionError}</span>}
         {connection === "auth_required"
@@ -323,6 +326,7 @@ export default function App() {
       {organizer.error && <p role="alert">本机整理数据不可用：{organizer.error}</p>}
       {showOrganizer && organizer.ready && <OrganizerPanel organizer={organizer} userId={session.user_id} contacts={contacts}
         onClose={() => setShowOrganizer(false)} onOpen={peerId => { setActiveConversation(peerId); setSidebarTab("chats"); }} />}
+      {showAccount && <AccountPanel contacts={contacts} onClose={() => setShowAccount(false)} onContactsChanged={refreshContacts} onLogout={() => { setShowAccount(false); void handleLogout(); }} />}
     </div>
     </div>
   );

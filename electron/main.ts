@@ -134,13 +134,14 @@ else {
             clipboard.writeText(text);
             return { ok: true, result: null };
           }
-          if (name === "sign_out" || name === "clear_keypair") notifications.context(null, null);
+          if (name === "sign_out" || name === "clear_keypair" || name === "logout_all_sessions") notifications.context(null, null);
           const result = await bridge.call(name, args as never);
           if (name === "poll_messages") {
             // A failed notification must never consume or fail a persisted relay batch.
             await notifications.receive(result as import("../ui/src/types").PollMessagesResult).catch(() => {});
           }
           if (name === "set_conversation_muted") notifications.dismiss((args as { peerId: string }).peerId);
+          if (name === "set_contact_policy") notifications.dismiss((args as { peerId: string }).peerId);
           if (name === "submit_message_operation" || (name === "sync_message_operations" && result)) notifications.clear();
           return { ok: true, result };
         }

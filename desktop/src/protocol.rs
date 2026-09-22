@@ -104,6 +104,14 @@ pub enum Command {
     },
     #[serde(rename = "poll_messages")]
     PollMessages {},
+    #[serde(rename="list_contact_requests")]
+    ListContactRequests {},
+    #[serde(rename="set_contact_policy")]
+    SetContactPolicy { #[serde(rename="peerId")] peer_id: String, status: String },
+    #[serde(rename="list_account_sessions")]
+    ListAccountSessions {},
+    #[serde(rename="logout_all_sessions")]
+    LogoutAllSessions {},
     #[serde(rename = "select_attachment")]
     SelectAttachment { path: String, #[serde(rename="peerId")] peer_id: String },
     #[serde(rename = "list_attachment_tasks")]
@@ -339,6 +347,10 @@ impl Response {
 
 pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, String> {
     let result = match command {
+        Command::ListContactRequests {} => serde_json::to_value(commands::account::policies(state).await?),
+        Command::SetContactPolicy {peer_id,status} => serde_json::to_value(commands::account::policy(state,peer_id,status).await?),
+        Command::ListAccountSessions {} => serde_json::to_value(commands::account::sessions(state).await?),
+        Command::LogoutAllSessions {} => serde_json::to_value(commands::account::logout_all(state).await?),
         Command::SelectAttachment {path,peer_id} => serde_json::to_value(commands::attachments::stage(state,path,peer_id).await?),
         Command::ListAttachmentTasks {} => serde_json::to_value(commands::attachments::pending(state)?),
         Command::AttachmentStep {id} => serde_json::to_value(commands::attachments::step(state,id).await?),

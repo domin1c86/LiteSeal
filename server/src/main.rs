@@ -1,5 +1,6 @@
 mod auth;
 mod attachments;
+mod contact_policy;
 mod config;
 mod db;
 #[cfg(test)]
@@ -57,6 +58,7 @@ fn build_router(state: AppState, allowed_origin: HeaderValue) -> Router {
         .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]);
 
     Router::new()
+        .route("/contact-policy", get(contact_policy::list).post(contact_policy::change))
         .route("/attachments", post(attachments::create))
         .route("/attachments/:id/:part", get(attachments::download).put(attachments::upload))
         .route("/healthz", get(|| async { "ok" }))
@@ -78,6 +80,7 @@ fn build_router(state: AppState, allowed_origin: HeaderValue) -> Router {
         .route("/auth/refresh", post(auth::handlers::refresh))
         .route("/auth/logout", post(auth::handlers::logout))
         .route("/auth/logout_all", post(auth::handlers::logout_all))
+        .route("/auth/sessions", get(auth::handlers::list_sessions))
         .route(
             "/devices",
             get(auth::handlers::list_devices).post(auth::handlers::register_device),
