@@ -13,6 +13,9 @@ dist/
 .DS_Store
 Thumbs.db
 
+# Automation workflow
+.github/
+
 # Electron
 dist-electron/
 release/
