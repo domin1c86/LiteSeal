@@ -4,6 +4,8 @@
 
 完整入口、环境配置、邀请码、功能清单及手动测试用例见 [Windows 开发与测试指南](WINDOWS_TESTING_GUIDE.md)。桥接协议及迁移说明见 [Electron 架构说明](ELECTRON_ARCHITECTURE.md)。后续缺项、优先级和完成标准见 [开发清单](DEVELOPMENT_BACKLOG.md)。
 
+基于官方资料整理的竞品功能对照、最小实现范围与验收条件见 [WhatsApp / Telegram 功能调研与试做清单](FEATURE_RESEARCH_AND_TRIAL_CHECKLIST.md)。
+
 ## 项目结构
 
 | 目录 | 职责 |
