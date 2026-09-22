@@ -1,4 +1,8 @@
 pub mod auth;
+pub mod account;
+pub mod windows_lock;
+pub mod reactions;
+pub mod attachments;
 pub mod chat;
 pub mod contacts;
 pub mod keystore;

@@ -3,6 +3,35 @@ import type { RegisterResult, ConnectResult, SendMessageResult, PollMessagesResu
 } from "../ui/src/types";
 
 export interface CommandMap {
+  configure_app_lock: { args: { enabled: boolean; password: string }; result: void };
+  preview_attachment_task: { args: { id: string }; result: string };
+  check_app_update: { args: {}; result: { current: string; latest: string; available: boolean } };
+  open_app_release: { args: {}; result: void };
+  app_lock_state: { args: {}; result: boolean };
+  lock_app: { args: {}; result: void };
+  unlock_app: { args: { password: string }; result: void };
+  submit_reaction: { args: { targetId: string; peerId: string; emoji: string }; result: void };
+  sync_reactions: { args: {}; result: number };
+  get_reactions: { args: { conversationId: string }; result: { target_id: string; actor: string; emoji: string }[] };
+  list_contact_requests: { args: {}; result: { peer_id: string; username: string; status: string }[] };
+  set_contact_policy: { args: { peerId: string; status: "accepted" | "blocked" | "rejected" | "pending" }; result: void };
+  list_account_sessions: { args: {}; result: { id: string; device_id: string; name: string; revoked: boolean; current: boolean; expires_at: string }[] };
+  logout_all_sessions: { args: {}; result: void };
+  select_attachment: { args: { peerId: string }; result: AttachmentTask | null };
+  list_attachment_tasks: { args: {}; result: AttachmentTask[] };
+  attachment_step: { args: { id: string }; result: AttachmentTask };
+  publish_attachment: { args: { id: string }; result: string };
+  begin_attachment_download: { args: { messageId: string }; result: AttachmentTask };
+  export_attachment: { args: { messageId: string; preview?: boolean }; result: string | null };
+  forget_attachment_task: { args: { id: string }; result: void };
+  attachment_cache_stats: { args: {}; result: { cache_bytes: number; database_allocated: number; database_reusable: number; disk_bytes: number; limit: number } };
+  clear_attachment_cache: { args: { peerId?: string }; result: number };
+  get_personal_organizer: { args: {}; result: string };
+  save_personal_organizer: { args: { content: string }; result: void };
+  get_message_context: { args: { userId: string; conversationId: string; messageId: string }; result: Message[] };
+  set_conversation_muted: { args: { userId: string; peerId: string; muted: boolean }; result: void };
+  set_notification_context: { args: { userId: string | null; activePeerId: string | null }; result: void };
+  take_notification_target: { args: {}; result: { userId: string; peerId: string } | null };
   submit_message_operation: { args: { targetId: string; kind: "edit" | "revoke"; content: string; baseRevision: number }; result: string };
   sync_message_operations: { args: {}; result: number };
   get_message_operations: { args: { conversationId?: string }; result: MessageOperation[] };
@@ -45,10 +74,24 @@ export interface CommandMap {
   clear_downloaded_attachments: { args: {  }; result: number };
 }
 export type CommandName = keyof CommandMap;
+export interface AttachmentTask { id: string; peer_id: string; message_id: string; name: string; size: number; mime: string; offset: number; total: number; direction: string }
 export type DesktopApi = {
   [K in CommandName]: (args: CommandMap[K]["args"]) => Promise<CommandMap[K]["result"]>;
 };
 export const commandNames = [
+  "configure_app_lock",
+  "preview_attachment_task",
+  "check_app_update", "open_app_release",
+  "app_lock_state", "lock_app", "unlock_app",
+  "submit_reaction", "sync_reactions", "get_reactions",
+  "list_contact_requests", "set_contact_policy", "list_account_sessions", "logout_all_sessions",
+  "select_attachment", "list_attachment_tasks", "attachment_step", "publish_attachment", "begin_attachment_download", "export_attachment", "forget_attachment_task", "attachment_cache_stats", "clear_attachment_cache",
+  "get_personal_organizer",
+  "save_personal_organizer",
+  "get_message_context",
+  "set_conversation_muted",
+  "set_notification_context",
+  "take_notification_target",
   "submit_message_operation",
   "sync_message_operations",
   "get_message_operations",

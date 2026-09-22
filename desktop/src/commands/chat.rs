@@ -84,7 +84,7 @@ pub async fn decrypt_message(
     sender_public_key: Vec<u8>,
     state: &AppState,
 ) -> Result<Vec<u8>, String> {
-    chat::decrypt_message(ciphertext, sender_public_key, state.identity()?.secret_key)
+    super::attachments::public_plaintext(chat::decrypt_message(ciphertext, sender_public_key, state.identity()?.secret_key)?)
 }
 
 pub async fn sign_message(message: Vec<u8>, state: &AppState) -> Result<Vec<u8>, String> {
@@ -117,6 +117,7 @@ pub async fn get_local_message_page(
     if !(1..=101).contains(&limit) || before_timestamp.is_some() != before_id.is_some() {
         return Err("Invalid pagination cursor or limit".into());
     }
+    if state.identity()?.user_id != user_id { return Err("Account mismatch".into()); }
     state
         .client
         .db

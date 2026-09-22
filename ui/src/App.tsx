@@ -1,5 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import { useConversationPreferences } from "./hooks/useConversationPreferences";
+import { useOrganizer } from "./hooks/useOrganizer";
+import OrganizerPanel from "./components/OrganizerPanel";
+import AccountPanel from "./components/AccountPanel";
 import Login from "./components/Login";
 import Chat from "./components/Chat";
 import ContactList from "./components/ContactList";
@@ -29,6 +32,9 @@ interface Session {
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const preferences = useConversationPreferences(session);
+  const organizer = useOrganizer(session?.user_id);
+  const [showOrganizer, setShowOrganizer] = useState(false);
+  const [showAccount, setShowAccount] = useState(false);
   const { drafts } = preferences;
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [activeConversation, setActiveConversation] = useState<string | null>(
@@ -46,6 +52,23 @@ export default function App() {
   const [retry, setRetry] = useState(0);
   const connectionWork = useRef<Promise<void>>(Promise.resolve());
   const [relayBatch, setRelayBatch] = useState<RelayBatch | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    const takeTarget = async () => {
+      try {
+        const target = await window.desktop.take_notification_target({});
+        if (active && target && target.userId === session?.user_id) {
+          setActiveConversation(target.peerId); setSidebarTab("chats");
+        }
+      } catch { /* Notification routing never interrupts the message pump. */ }
+    };
+    void window.desktop.set_notification_context({ userId: session?.user_id ?? null,
+      activePeerId: sidebarTab === "chats" ? activeConversation : null }).catch(() => {});
+    const timer = setInterval(takeTarget, 500);
+    window.addEventListener("focus", takeTarget);
+    return () => { active = false; clearInterval(timer); window.removeEventListener("focus", takeTarget); };
+  }, [session?.user_id, activeConversation, sidebarTab]);
 
   // One serialized pump owns reconnect and polling; renders never overlap requests.
   useEffect(() => {
@@ -94,9 +117,10 @@ export default function App() {
         // Deliver the persisted message batch even when operation sync later fails.
         if (result.messages.length || result.events.length) setRelayBatch({ seq: ++seq, ...result });
         const operationChanges = await syncMessageOperations();
+        const reactionChanges = await window.desktop.sync_reactions({});
         if (!active) return;
         setConnection("online"); setConnectionError(null); failures = 0;
-        if (operationChanges) setRelayBatch({ seq: ++seq, ...result });
+        if (operationChanges || reactionChanges) setRelayBatch({ seq: ++seq, ...result });
         schedule(1000);
       } catch (error) {
         if (!active) return;
@@ -153,6 +177,7 @@ export default function App() {
   }, []);
 
   async function handleLogout() {
+    if (organizer.busy) return;
     setLoading(true);
     try { await preferences.flush(); }
     catch { setLoading(false); return; }
@@ -210,6 +235,8 @@ export default function App() {
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
       <div role="status" style={{ padding: "6px 12px", background: "var(--surface)", color: "var(--text-muted)", fontSize: 12 }}>
+        <button onClick={() => setShowAccount(true)}>账号与消息请求</button>
+        <button onClick={() => { void preferences.flush().then(() => window.desktop.lock_app({})).catch(error => setConnectionError(String(error))); }}>锁定</button>
         {{ online: "已连接", connecting: "正在连接…", reconnecting: "正在重连…", offline: "离线", auth_required: "需要重新登录" }[connection]}
         {connectionError && <span> · {connectionError}</span>}
         {connection === "auth_required"
@@ -225,6 +252,11 @@ export default function App() {
         signingPublicKey={session.ed25519Pk}
         contacts={contacts}
         flags={preferences.flags}
+        aliases={organizer.value.aliases}
+        lists={organizer.value.lists}
+        onOrganizer={() => { if (organizer.ready) setShowOrganizer(true); }}
+        muted={preferences.muted}
+        onMutedChange={(id, value) => { void preferences.saveMuted(id, value).catch(() => {}); }}
         drafts={drafts}
         preferencesReady={preferences.ready}
         onFlagsChange={(id, flags) => { void preferences.saveFlags(id, flags).catch(() => {}); }}
@@ -241,7 +273,10 @@ export default function App() {
       {sidebarTab === "contacts" ? (
         detailContact ? (
           <ContactDetail
+            key={detailContact.user_id}
             contact={detailContact}
+            alias={organizer.value.aliases[detailContact.user_id] ?? ""}
+            onAlias={alias => organizer.update(value => ({ ...value, aliases: { ...value.aliases, [detailContact.user_id]: alias } }))}
             onMessage={() => {
               setActiveConversation(detailContact.user_id);
               setSidebarTab("chats");
@@ -255,6 +290,7 @@ export default function App() {
         )
       ) : !preferences.ready ? <div role="status">正在恢复会话设置和草稿…</div> : (
         <Chat
+          onFavorite={messageId => organizer.update(value => ({ ...value, favorites: value.favorites.some(item => item.messageId === messageId) ? value.favorites : [...value.favorites, { messageId, peerId: activeConversation! }] }))}
           key={`${session.user_id}:${activeConversation}`}
           draft={drafts[activeConversation ?? ""] ?? { text: "" }}
           onForward={async (peerId, draft) => {
@@ -289,6 +325,10 @@ export default function App() {
       {showStorage && (
         <StorageManager onClose={() => setShowStorage(false)} />
       )}
+      {organizer.error && <p role="alert">本机整理数据不可用：{organizer.error}</p>}
+      {showOrganizer && organizer.ready && <OrganizerPanel organizer={organizer} userId={session.user_id} contacts={contacts}
+        onClose={() => setShowOrganizer(false)} onOpen={peerId => { setActiveConversation(peerId); setSidebarTab("chats"); }} />}
+      {showAccount && <AccountPanel contacts={contacts} onClose={() => setShowAccount(false)} onContactsChanged={refreshContacts} onLogout={() => { setShowAccount(false); void handleLogout(); }} />}
     </div>
     </div>
   );

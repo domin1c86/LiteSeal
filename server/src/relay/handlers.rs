@@ -123,7 +123,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, remote_ip: std::net::
                         let id = envelopes.first().map(|e| e.message_id.clone()).unwrap_or_default();
                         if let Err((code, message)) = handle_v2_send(&state, &tx, &session.user_id, &session.device_id, remote_ip, envelopes).await {
                             send_message(&tx, &ServerMessage::MessageError { message_id: id, code: code.into(), message: message.into(),
-                                retryable: matches!(code, "rate_limited" | "storage_error" | "offline_quota_exceeded") });
+                                retryable: matches!(code, "rate_limited" | "storage_error" | "offline_quota_exceeded" | "request_pending") });
                         }
                     }
                     ClientMessage::DeliveryQuery { message_ids } => {
@@ -270,6 +270,8 @@ async fn handle_v2_send(
     if stored == StoreOfflineOutcome::QuotaExceeded {
         return Err(("offline_quota_exceeded", "Recipient offline queue is full"));
     }
+    if stored == StoreOfflineOutcome::RequestPending { return Err(("request_pending", "等待对方接受消息请求，原消息将保留以便重试")); }
+    if stored == StoreOfflineOutcome::Blocked { return Err(("recipient_unavailable", "对方当前不接受消息，请保留原消息编号")); }
 
     let updates = state
         .db

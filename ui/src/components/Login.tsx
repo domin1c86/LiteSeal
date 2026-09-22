@@ -120,7 +120,7 @@ export default function Login({ onLogin }: LoginProps) {
           liteseal<span style={styles.titleCursor}>▌</span>
         </h1>
         <p style={styles.subtitle}>end-to-end encrypted messaging</p>
-        <p style={{ color: "var(--text-muted)", fontSize: 12 }}>普通退出保留本机密钥。同账号登录可继续读取历史；丢失密钥后，仅凭账号密码无法恢复旧消息。</p>
+        <p style={{ color: "var(--text-muted)", fontSize: 12 }}>内测仅支持原设备与原密钥登录，不支持换机或新增设备。普通退出保留本机密钥；丢失密钥后，仅凭账号密码无法恢复旧消息或恢复原设备身份。</p>
         <div style={styles.segmented}>
           <button
             type="button"

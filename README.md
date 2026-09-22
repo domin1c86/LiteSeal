@@ -6,6 +6,8 @@
 
 基于官方资料整理的竞品功能对照、最小实现范围与验收条件见 [WhatsApp / Telegram 功能调研与试做清单](docs/FEATURE_RESEARCH_AND_TRIAL_CHECKLIST.md)。
 
+本轮 P0/P1 源码与迁移范围见 [功能实现记录](docs/FEATURE_IMPLEMENTATION_STATUS.md)，使用边界见 [日常单聊说明](docs/DAILY_CHAT_GUIDE.md)，安装升级见 [升级与回滚](docs/UPGRADE_AND_ROLLBACK.md)。本轮代码未运行检查、构建或测试，尚未完成双机验收；P2/P3 暂缓。
+
 ## 项目结构
 
 | 目录 | 职责 |

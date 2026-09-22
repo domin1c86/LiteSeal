@@ -58,7 +58,7 @@
         }
       ],
       "icon": "electron/icons/icon.svg",
-      "signExecutable": false
+      "signAndEditExecutable": false
     },
     "nsis": {
       "oneClick": false,

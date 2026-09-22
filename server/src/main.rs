@@ -1,4 +1,7 @@
 mod auth;
+mod attachments;
+mod contact_policy;
+mod reactions;
 mod config;
 mod db;
 #[cfg(test)]
@@ -30,6 +33,11 @@ async fn main() {
         .await
         .expect("failed to connect to Postgres");
     let mut state = AppState::new(db);
+    let attachment_pool=state.db.pool().clone();
+    tokio::spawn(async move {
+        let mut interval=tokio::time::interval(std::time::Duration::from_secs(3600));
+        loop { interval.tick().await; if attachments::cleanup(&attachment_pool).await.is_err(){tracing::warn!("Attachment cleanup deferred");} }
+    });
     state.invite_codes = std::sync::Arc::new(config.invite_codes);
     let allowed_origin = HeaderValue::from_str(&config.cors_allow_origin)
         .expect("LITESEAL_CORS_ALLOW_ORIGIN is not a valid origin");
@@ -56,6 +64,10 @@ fn build_router(state: AppState, allowed_origin: HeaderValue) -> Router {
         .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]);
 
     Router::new()
+        .route("/reactions", get(reactions::list).post(reactions::submit))
+        .route("/contact-policy", get(contact_policy::list).post(contact_policy::change))
+        .route("/attachments", post(attachments::create))
+        .route("/attachments/:id/:part", get(attachments::download).put(attachments::upload))
         .route("/healthz", get(|| async { "ok" }))
         .route(
             "/readyz",
@@ -75,6 +87,7 @@ fn build_router(state: AppState, allowed_origin: HeaderValue) -> Router {
         .route("/auth/refresh", post(auth::handlers::refresh))
         .route("/auth/logout", post(auth::handlers::logout))
         .route("/auth/logout_all", post(auth::handlers::logout_all))
+        .route("/auth/sessions", get(auth::handlers::list_sessions))
         .route(
             "/devices",
             get(auth::handlers::list_devices).post(auth::handlers::register_device),

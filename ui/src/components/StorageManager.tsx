@@ -15,6 +15,9 @@ function formatBytes(bytes: number): string {
 }
 
 export default function StorageManager({ onClose }: StorageManagerProps) {
+  const [cache, setCache] = useState<{ cache_bytes: number; database_allocated: number; database_reusable: number; disk_bytes: number; limit: number } | null>(null);
+  const [peerId, setPeerId] = useState("");
+  const [peers, setPeers] = useState<{user_id: string; username: string}[]>([]);
   const [stats, setStats] = useState<StorageStats | null>(null);
   const [clearing, setClearing] = useState(false);
   const [result, setResult] = useState<string | null>(null);
@@ -22,6 +25,8 @@ export default function StorageManager({ onClose }: StorageManagerProps) {
     useDesktop();
 
   useEffect(() => {
+    void window.desktop.attachment_cache_stats({}).then(setCache).catch(error => setResult(String(error)));
+    void window.desktop.get_contacts({}).then(setPeers).catch(error => setResult(String(error)));
     getStorageStats()
       .then(setStats)
       .catch((err) => console.error("Failed to load storage stats:", err));
@@ -69,6 +74,15 @@ export default function StorageManager({ onClose }: StorageManagerProps) {
 
         {stats ? (
           <div style={styles.body}>
+            {cache && <section><p>附件密文缓存：{formatBytes(cache.cache_bytes)} / {formatBytes(cache.limit)}。数据库已分配：{formatBytes(cache.database_allocated)}；内部可复用：{formatBytes(cache.database_reusable)}；数据库和日志文件合计：{formatBytes(cache.disk_bytes)}。</p>
+              <select aria-label="附件清理会话" value={peerId} onChange={event => setPeerId(event.target.value)}><option value="">所有会话</option>{peers.map(peer => <option key={peer.user_id} value={peer.user_id}>{peer.username}</option>)}</select>
+              <button disabled={clearing} onClick={async () => {
+                setClearing(true);
+                try { const before = cache.cache_bytes; await window.desktop.clear_attachment_cache({ peerId: peerId || undefined }); const after = await window.desktop.attachment_cache_stats({}); setCache(after); setResult(`已移除 ${formatBytes(before - after.cache_bytes)} 密文缓存，文件大小减少 ${formatBytes(Math.max(0, cache.disk_bytes - after.disk_bytes))}。SQLite 空间可复用，文件未必缩小；没有删除正文、链或待发任务。`); }
+                catch (failure) { setResult(String(failure)); } finally { setClearing(false); }
+              }}>清理已下载附件缓存</button>
+              <p>远端附件保留 30 天，期限内可重新下载；已过期或无权限会明确报错。待发附件不会被此操作清除。</p>
+            </section>}
             <div style={styles.statsGrid}>
               <StatCard
                 label="Messages"

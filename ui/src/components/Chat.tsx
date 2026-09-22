@@ -1,4 +1,8 @@
 import { latestOperations } from "../lib/messageOperations";
+import { deliveryStatusLabel } from "../lib/deliveryStatus";
+import { projectMessage } from "../lib/messageProjection";
+import MessageSearch from "./MessageSearch";
+import { AttachmentCard, AttachmentComposer } from "./Attachments";
 import { decodeContent, encodeContent } from "../lib/messageContent";
 import { useState, useEffect, useRef, useLayoutEffect } from "react";
 import { useDesktop } from "../hooks/useDesktop";
@@ -8,6 +12,7 @@ import type { RelayBatch } from "../App";
 import type { Draft, MessageOperation, Message, IncomingMessage, Contact, RelayEvent } from "../types";
 
 interface ChatProps {
+  onFavorite: (messageId: string) => Promise<void>;
   draft: Draft;
   onForward: (peerId: string, draft: Draft) => Promise<void>;
   onDraftChange: (draft: Draft) => Promise<void>;
@@ -22,9 +27,20 @@ interface ChatProps {
   onContactsChanged: () => void;
 }
 
-export default function Chat({ draft, onDraftChange, onForward, online, conversationId, userId, deviceId, token, serverUrl, contacts, relayBatch, onContactsChanged }: ChatProps) {
+export default function Chat({ onFavorite, draft, onDraftChange, onForward, online, conversationId, userId, deviceId, token, serverUrl, contacts, relayBatch, onContactsChanged }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
+  const [reactions, setReactions] = useState<{ target_id: string; actor: string; emoji: string }[]>([]);
+  const [reactionBusy, setReactionBusy] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchRevision, setSearchRevision] = useState(0);
+  const [attachmentRevision, setAttachmentRevision] = useState(0);
+  const [highlightId, setHighlightId] = useState<string | null>(null);
+  const [contextMessages, setContextMessages] = useState<Message[] | null>(null);
   const input = draft.text;
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  const composing = useRef(false);
+  const compositionEnded = useRef(0);
+  const composer = useRef<HTMLTextAreaElement>(null);
   const [operationsLoaded, setOperationsLoaded] = useState(false);
   const [operations, setOperations] = useState<MessageOperation[]>([]);
   const [operationError, setOperationError] = useState<string | null>(null);
@@ -60,6 +76,34 @@ export default function Chat({ draft, onDraftChange, onForward, online, conversa
   const activeContact = contacts.find((c) => c.user_id === conversationId);
   // conversationId prop is the peer's user id; storage/relay use the canonical DM id.
   const storageConversationId = conversationId ? dmConversationId(userId, conversationId) : null;
+
+  useEffect(() => {
+    let active = true;
+    if (storageConversationId) void window.desktop.get_reactions({ conversationId: storageConversationId }).then(value => { if (active) setReactions(value); }).catch(error => { if (active) setActionStatus(String(error)); });
+    return () => { active = false; };
+  }, [storageConversationId, relayBatch, reactionBusy]);
+
+  useEffect(() => {
+    const shortcut = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f" && conversationId) {
+        event.preventDefault(); setSearchOpen(true);
+      }
+    };
+    window.addEventListener("keydown", shortcut);
+    return () => window.removeEventListener("keydown", shortcut);
+  }, [conversationId]);
+
+  useLayoutEffect(() => {
+    if (highlightId) document.getElementById(`message-${highlightId}`)?.scrollIntoView({ block: "center" });
+  }, [contextMessages, highlightId]);
+
+  async function locateMessage(messageId: string) {
+    if (!storageConversationId) return;
+    const rows = await window.desktop.get_message_context({ userId, conversationId: storageConversationId, messageId });
+    const decoded = await decodeHistory(rows);
+    if (!alive.current) return;
+    setContextMessages(decoded); setHighlightId(messageId);
+  }
 
   const { markMessagesRead } = useDesktop();
   const [readError, setReadError] = useState<string | null>(null);
@@ -142,7 +186,7 @@ export default function Chat({ draft, onDraftChange, onForward, online, conversa
     }).catch(error => { if (active) setHistoryError(String(error)); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [storageConversationId, userId, contacts]);
+  }, [storageConversationId, userId, contacts, attachmentRevision]);
 
   async function loadOlder() {
     if (!storageConversationId || !cursor.current || loadingOlder || loading) return;
@@ -255,7 +299,7 @@ export default function Chat({ draft, onDraftChange, onForward, online, conversa
 
   async function handleSend(e: React.FormEvent) {
     e.preventDefault();
-    if (!online || sending || !input.trim() || !conversationId) return;
+    if (!online || sending || composing.current || Date.now() - compositionEnded.current < 100 || !input.trim() || !conversationId) return;
 
     const text = input.trim();
     const messageId = draft.messageId ?? crypto.randomUUID();
@@ -336,7 +380,13 @@ export default function Chat({ draft, onDraftChange, onForward, online, conversa
   }
 
   return (
-    <div style={styles.container}>
+    <div style={styles.container} onKeyDown={event => {
+      if (event.key !== "Escape" || event.nativeEvent.isComposing) return;
+      if (!operationBusy) setOperationDialog(null);
+      if (!deleting) setDeleteTarget(null);
+      if (!forwarding) setForwardDraft(null);
+      setEmojiOpen(false); setSearchOpen(false); composer.current?.focus();
+    }}>
       <div className="chat-header" style={styles.header}>
         <div style={styles.headerInner}>
           <div style={styles.headerText}>
@@ -369,12 +419,17 @@ export default function Chat({ draft, onDraftChange, onForward, online, conversa
           )}
         </div>
       </div>
+      {activeContact && <button onClick={() => setSearchOpen(value => !value)}>搜索历史（Ctrl+F）</button>}
+      {searchOpen && storageConversationId && activeContact && operationsLoaded && <MessageSearch
+        userId={userId} conversationId={storageConversationId} peerKey={activeContact.public_key}
+        operations={operations} revision={searchRevision} onSelect={locateMessage} onClose={() => setSearchOpen(false)} />}
       <div ref={scrollArea} className="chat-messages" style={styles.messages}>
-        {hasOlder && <button disabled={loadingOlder || loading} onClick={loadOlder}>{loadingOlder ? "正在加载…" : "加载更早消息"}</button>}
+        {contextMessages ? <button onClick={() => { setContextMessages(null); setHighlightId(null); }}>返回最新消息</button>
+          : hasOlder && <button disabled={loadingOlder || loading} onClick={loadOlder}>{loadingOlder ? "正在加载…" : "加载更早消息"}</button>}
         {historyError && <div role="alert">历史加载失败：{historyError}</div>}
         {loading && <p style={styles.loadingText}>loading…</p>}
         {!operationsLoaded && <p role="status">正在读取本机消息变更…</p>}
-        {operationsLoaded && messages.map((msg) => {
+        {operationsLoaded && (contextMessages ?? messages).filter(msg => !deletedIds.current.has(msg.id)).map((msg) => {
           const isMine = msg.sender_id === userId;
           let text = "";
           try {
@@ -383,8 +438,7 @@ export default function Chat({ draft, onDraftChange, onForward, online, conversa
             text = "[encrypted]";
           }
           const operation = latest.get(msg.id);
-          const revoked = operation?.kind === "revoke";
-          const content = decodeContent(operation?.kind === "edit" && operation.content !== null ? operation.content : text);
+          const { revoked, content } = projectMessage(text, operation);
           const pending = operations.some(item => item.target_id === msg.id && item.status === "pending");
           const notices = operations.filter(item => item.target_id === msg.id && item.status !== "accepted" && item.revision >= (operation?.revision ?? 0));
           const canModify = isMine && msg.sender_device_id === deviceId && Date.now() - msg.timestamp <= 48 * 60 * 60 * 1000
@@ -397,6 +451,7 @@ export default function Chat({ draft, onDraftChange, onForward, online, conversa
               key={msg.id}
               style={{
                 ...styles.messageRow,
+                outline: highlightId === msg.id ? "2px solid var(--accent)" : undefined,
                 justifyContent: isMine ? "flex-end" : "flex-start",
               }}
             >
@@ -413,15 +468,26 @@ export default function Chat({ draft, onDraftChange, onForward, online, conversa
                 }}>回复 {content.reply.sender}：{content.reply.text}</button>}
                 {!revoked && content.forwarded && <div style={{ fontSize: 12 }}>转发内容（来源由转发者提供）：{content.forwarded.sender}</div>}
                 <span style={styles.messageText}>{revoked ? "此消息已被发送者撤回" : content.text}</span>
+                {!revoked && content.attachment && <AttachmentCard messageId={msg.id} name={content.attachment.name} image={content.attachment.mime.startsWith("image/")} />}
+                {!revoked && <div aria-label="消息回应">
+                  {reactions.filter(item => item.target_id === msg.id).map(item => <span key={item.actor} title={item.actor}>{item.emoji} {item.actor === userId ? "我" : contacts.find(peer => peer.user_id === item.actor)?.username ?? item.actor} </span>)}
+                  <select aria-label="回应或撤销回应" disabled={!online || reactionBusy} value={reactions.find(item => item.target_id === msg.id && item.actor === userId)?.emoji ?? ""} onChange={async event => {
+                    setReactionBusy(true);
+                    try { await window.desktop.submit_reaction({ targetId: msg.id, peerId: conversationId, emoji: event.target.value }); }
+                    catch (failure) { if (alive.current) setActionStatus(String(failure)); }
+                    finally { if (alive.current) setReactionBusy(false); }
+                  }}><option value="">无回应 / 撤销</option>{["👍", "❤️", "😂", "😮", "😢", "🙏"].map(emoji => <option key={emoji} value={emoji}>{emoji}</option>)}</select>
+                </div>}
                 {operation?.kind === "edit" && <span style={styles.timestamp}>已编辑 · 版本 {operation.revision}</span>}
                 {notices.map(item => <div key={item.id} role="status">{item.status === "pending" ? "变更等待服务端确认，将自动重试" : item.error ?? "变更未通过校验"}</div>)}
                 <div style={{ display: "flex", gap: 6 }}>
                   {!revoked && <button onClick={() => { void copyMessageText(content.text).then(() => setActionStatus("已复制消息正文")).catch(error => setActionStatus(String(error))); }}>复制</button>}
+                  {!revoked && <button onClick={() => { void onFavorite(msg.id).then(() => setActionStatus("已收藏本机引用")).catch(error => setActionStatus(String(error))); }}>收藏</button>}
                   {!revoked && <button disabled={sending || !!draft.messageId} onClick={() => { void onDraftChange({ ...draft, reply: reference }).catch(error => setActionStatus(String(error))); }}>回复</button>}
                   <button disabled={sending || deleting || draft.messageId === msg.id} onClick={() => setDeleteTarget(msg.id)}>从本机删除</button>
                   {!revoked && <button onClick={() => { setForwardDraft({ text: content.text, forwarded: reference }); setForwardTarget(""); }}>转发</button>}
                   {isMine && !revoked && <>
-                    <button disabled={!canModify} title="原发送设备可在服务器首次接收后的 48 小时内编辑" onClick={() => { setOperationDialog({ targetId: msg.id, kind: "edit", content, revision: operation?.revision ?? 0 }); setEditedText(content.text); }}>编辑</button>
+                    <button disabled={!canModify || !!content.attachment} title="原发送设备可在服务器首次接收后的 48 小时内编辑文字消息" onClick={() => { setOperationDialog({ targetId: msg.id, kind: "edit", content, revision: operation?.revision ?? 0 }); setEditedText(content.text); }}>编辑</button>
                     <button disabled={!canModify} title="原发送设备可在服务器首次接收后的 48 小时内撤回" onClick={() => setOperationDialog({ targetId: msg.id, kind: "revoke", content, revision: operation?.revision ?? 0 })}>撤回</button>
                   </>}
                 </div>
@@ -431,7 +497,7 @@ export default function Chat({ draft, onDraftChange, onForward, online, conversa
                     hour: "2-digit",
                     minute: "2-digit",
                   })}
-                  {isMine && msg.local_state ? ` · ${({ pending: "等待确认", queued: "服务器已保存，等待设备确认", stored_offline: "服务器已保存，设备离线", received: "全部目标设备已保存（非已读）", partially_received: "部分设备已保存", delivered: "旧版投递状态（非已读）", failed: "投递失败，可重试" } as Record<string, string>)[msg.local_state] ?? msg.local_state}` : ""}
+                  {isMine && msg.local_state ? ` · ${deliveryStatusLabel(msg.local_state)}` : ""}
                   {isMine && ["failed", "pending"].includes(msg.local_state ?? "") && (
                     <button disabled={!online || sending} onClick={async () => {
                       setSending(true);
@@ -479,6 +545,7 @@ export default function Chat({ draft, onDraftChange, onForward, online, conversa
             deletedIds.current.add(id);
             if (!alive.current) return;
             setMessages(previous => previous.filter(message => message.id !== id));
+            setSearchRevision(value => value + 1);
             setDeleteTarget(null);
             setActionStatus("已从本机聊天中删除；未撤回对方消息。");
           } catch (error) { if (alive.current) setActionStatus(String(error)); }
@@ -511,13 +578,40 @@ export default function Chat({ draft, onDraftChange, onForward, online, conversa
       </div>}
       <form className="chat-composer" onSubmit={handleSend} style={styles.inputBar}>
         <span style={styles.prompt}>›</span>
-        <input
+        <button type="button" aria-expanded={emojiOpen} aria-label="选择 emoji" disabled={sending || !!draft.messageId} onClick={() => setEmojiOpen(value => !value)}>☺</button>
+        {emojiOpen && <div role="dialog" aria-label="emoji 选择器" onKeyDown={event => {
+          if (event.key === "Escape") { event.preventDefault(); setEmojiOpen(false); composer.current?.focus(); }
+          const buttons = Array.from(event.currentTarget.querySelectorAll("button"));
+          const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
+          if (["ArrowLeft", "ArrowRight"].includes(event.key)) {
+            event.preventDefault(); buttons[(current + (event.key === "ArrowRight" ? 1 : -1) + buttons.length) % buttons.length]?.focus();
+          }
+        }} style={{ display: "flex", flexWrap: "wrap", maxWidth: 200 }}>
+          {["😀", "😂", "❤️", "👍", "🙏", "🎉", "😊", "😢", "👀", "✅", "🔥", "👋"].map(emoji => <button type="button" key={emoji} onClick={() => {
+            const field = composer.current;
+            const start = field?.selectionStart ?? input.length, end = field?.selectionEnd ?? input.length;
+            void onDraftChange({ ...draft, text: input.slice(0, start) + emoji + input.slice(end) }).catch(error => setActionStatus(String(error)));
+            setEmojiOpen(false); field?.focus();
+          }}>{emoji}</button>)}
+          <button type="button" onClick={() => { setEmojiOpen(false); composer.current?.focus(); }}>关闭</button>
+        </div>}
+        <textarea
+          ref={composer}
           className="composer-input"
-          type="text"
+          aria-label="消息正文，Enter 发送，Shift+Enter 换行"
+          rows={2}
           placeholder="type a message…"
           value={input}
           disabled={sending || !!draft.messageId}
           onChange={(e) => { void onDraftChange({ ...draft, text: e.target.value }).catch(() => {}); }}
+          onCompositionStart={() => { composing.current = true; }}
+          onCompositionEnd={() => { composing.current = false; compositionEnded.current = Date.now(); }}
+          onKeyDown={event => {
+            if (event.key === "Enter" && !event.shiftKey) {
+              if (event.nativeEvent.isComposing || composing.current || event.keyCode === 229 || Date.now() - compositionEnded.current < 100) return;
+              event.preventDefault(); event.currentTarget.form?.requestSubmit();
+            }
+          }}
           style={styles.input}
         />
         <button
@@ -529,6 +623,7 @@ export default function Chat({ draft, onDraftChange, onForward, online, conversa
           {sending ? "Sending..." : draft.messageId ? "重试原消息" : "Send"}
         </button>
       </form>
+      <AttachmentComposer peerId={conversationId} online={online} onSent={() => setAttachmentRevision(value => value + 1)} />
     </div>
   );
 }
@@ -649,6 +744,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   messageText: {
     fontSize: "14px",
+    whiteSpace: "pre-wrap",
     wordBreak: "break-word",
   },
   timestamp: {
@@ -667,6 +763,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   inputBar: {
     display: "flex",
+    flexWrap: "wrap",
     alignItems: "center",
     width: "calc(100% - 48px)",
     maxWidth: "840px",

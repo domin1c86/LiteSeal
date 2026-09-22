@@ -7,3 +7,5 @@ const api = Object.fromEntries(commandNames.map(name => [name, async (args: obje
   return response.result;
 }])) as DesktopApi;
 contextBridge.exposeInMainWorld("desktop", Object.freeze(api));
+// A fixed event only; no raw ipcRenderer or arbitrary channel subscription.
+ipcRenderer.on("liteseal:locked", () => window.dispatchEvent(new Event("liteseal-app-locked")));

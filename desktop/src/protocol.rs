@@ -53,6 +53,14 @@ pub enum Command {
         #[serde(rename = "userId")]
         user_id: String,
     },
+    #[serde(rename = "set_conversation_muted")]
+    SetConversationMuted {
+        #[serde(rename = "userId")]
+        user_id: String,
+        #[serde(rename = "peerId")]
+        peer_id: String,
+        muted: bool,
+    },
     #[serde(rename = "save_conversation_preference")]
     SaveConversationPreference {
         #[serde(rename = "userId")]
@@ -96,6 +104,44 @@ pub enum Command {
     },
     #[serde(rename = "poll_messages")]
     PollMessages {},
+    #[serde(rename="unlock_app")]
+    UnlockApp {password:String},
+    #[serde(rename="submit_reaction")]
+    SubmitReaction { #[serde(rename="targetId")] target_id:String, #[serde(rename="peerId")] peer_id:String, emoji:String },
+    #[serde(rename="sync_reactions")]
+    SyncReactions {},
+    #[serde(rename="get_reactions")]
+    GetReactions { #[serde(rename="conversationId")] conversation_id:String },
+    #[serde(rename="list_contact_requests")]
+    ListContactRequests {},
+    #[serde(rename="set_contact_policy")]
+    SetContactPolicy { #[serde(rename="peerId")] peer_id: String, status: String },
+    #[serde(rename="list_account_sessions")]
+    ListAccountSessions {},
+    #[serde(rename="logout_all_sessions")]
+    LogoutAllSessions {},
+    #[serde(rename = "select_attachment")]
+    SelectAttachment { path: String, #[serde(rename="peerId")] peer_id: String },
+    #[serde(rename = "list_attachment_tasks")]
+    ListAttachmentTasks {},
+    #[serde(rename = "attachment_step")]
+    AttachmentStep { id: String },
+    #[serde(rename = "publish_attachment")]
+    PublishAttachment { id: String },
+    #[serde(rename = "begin_attachment_download")]
+    BeginAttachmentDownload { #[serde(rename="messageId")] message_id: String },
+    #[serde(rename = "export_attachment")]
+    ExportAttachment { #[serde(rename="messageId")] message_id: String, path: Option<String>, offset: Option<usize>, #[serde(rename="taskId")] task_id: Option<String> },
+    #[serde(rename = "forget_attachment_task")]
+    ForgetAttachmentTask { id: String },
+    #[serde(rename = "attachment_cache_stats")]
+    AttachmentCacheStats {},
+    #[serde(rename = "clear_attachment_cache")]
+    ClearAttachmentCache { #[serde(rename="peerId")] peer_id: Option<String> },
+    #[serde(rename = "get_personal_organizer")]
+    GetPersonalOrganizer {},
+    #[serde(rename = "save_personal_organizer")]
+    SavePersonalOrganizer { content: String },
     #[serde(rename = "get_local_message_page")]
     GetLocalMessagePage {
         #[serde(rename = "userId", default)]
@@ -107,6 +153,15 @@ pub enum Command {
         before_timestamp: Option<i64>,
         #[serde(rename = "beforeId", default)]
         before_id: Option<String>,
+    },
+    #[serde(rename = "get_message_context")]
+    GetMessageContext {
+        #[serde(rename = "userId")]
+        user_id: String,
+        #[serde(rename = "conversationId")]
+        conversation_id: String,
+        #[serde(rename = "messageId")]
+        message_id: String,
     },
     #[serde(rename = "get_local_messages")]
     GetLocalMessages {
@@ -300,6 +355,64 @@ impl Response {
 
 pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, String> {
     let result = match command {
+        Command::UnlockApp {password} => serde_json::to_value(commands::windows_lock::verify(password)?),
+        Command::SubmitReaction {target_id,peer_id,emoji} => serde_json::to_value(commands::reactions::submit(state,target_id,peer_id,emoji).await?),
+        Command::SyncReactions {} => serde_json::to_value(commands::reactions::sync(state).await?),
+        Command::GetReactions {conversation_id} => serde_json::to_value(commands::reactions::views(state,conversation_id)?),
+        Command::ListContactRequests {} => serde_json::to_value(commands::account::policies(state).await?),
+        Command::SetContactPolicy {peer_id,status} => serde_json::to_value(commands::account::policy(state,peer_id,status).await?),
+        Command::ListAccountSessions {} => serde_json::to_value(commands::account::sessions(state).await?),
+        Command::LogoutAllSessions {} => serde_json::to_value(commands::account::logout_all(state).await?),
+        Command::SelectAttachment {path,peer_id} => serde_json::to_value(commands::attachments::stage(state,path,peer_id).await?),
+        Command::ListAttachmentTasks {} => serde_json::to_value(commands::attachments::pending(state)?),
+        Command::AttachmentStep {id} => serde_json::to_value(commands::attachments::step(state,id).await?),
+        Command::PublishAttachment {id} => serde_json::to_value(commands::attachments::publish(state,id).await?),
+        Command::BeginAttachmentDownload {message_id} => serde_json::to_value(commands::attachments::begin_download(state,message_id).await?),
+        Command::ExportAttachment {message_id,path,offset,task_id} => match (path,task_id) {
+            (Some(path),None) => serde_json::to_value(commands::attachments::export(state,message_id,path)?),
+            (None,Some(id)) => serde_json::to_value(commands::attachments::pending_preview_chunk(state,id,offset.unwrap_or(0))?),
+            (None,None) => serde_json::to_value(commands::attachments::preview_chunk(state,message_id,offset.unwrap_or(0))?),
+            _ => return Err("无效附件导出请求".into()),
+        },
+        Command::ForgetAttachmentTask {id} => {
+            let user=state.identity()?.user_id;
+            state.client.db.lock().map_err(|e|e.to_string())?.forget_attachment_transfer(&user,&id).map_err(|e|e.to_string())?;
+            serde_json::to_value(())
+        }
+        Command::AttachmentCacheStats {} => {
+            let user=state.identity()?.user_id;
+            let db=state.client.db.lock().map_err(|e|e.to_string())?;
+            let (allocated,free)=db.database_disk_stats().map_err(|e|e.to_string())?;
+            let disk_bytes:u64=["","-wal","-shm","-journal"].iter().map(|suffix| {
+                let mut path=state.db_path.as_os_str().to_os_string();path.push(suffix);
+                std::fs::metadata(std::path::PathBuf::from(path)).map(|m|m.len()).unwrap_or(0)
+            }).sum();
+            serde_json::to_value(serde_json::json!({"cache_bytes":db.attachment_cache_bytes(&user).map_err(|e|e.to_string())?,"database_allocated":allocated,"database_reusable":free,"disk_bytes":disk_bytes,"limit":256*1024*1024}))
+        }
+        Command::ClearAttachmentCache {peer_id} => {
+            let user=state.identity()?.user_id;
+            serde_json::to_value(state.client.db.lock().map_err(|e|e.to_string())?.clear_attachment_cache(&user,peer_id.as_deref()).map_err(|e|e.to_string())?)
+        }
+        Command::GetPersonalOrganizer {} => {
+            let saved = state.identity()?;
+            let bytes = state.client.db.lock().map_err(|e| e.to_string())?.personal_organizer(&saved.user_id).map_err(|e| e.to_string())?;
+            let content = if bytes.is_empty() { String::new() } else {
+                String::from_utf8(liteseal_core::chat::decrypt_message(bytes, saved.public_key, saved.secret_key)?).map_err(|_| "Invalid organizer encoding")?
+            };
+            serde_json::to_value(content)
+        }
+        Command::SavePersonalOrganizer { content } => {
+            if content.len() > 1024 * 1024 { return Err("本机列表和便笺总量不能超过 1 MiB".into()); }
+            let saved = state.identity()?;
+            let encrypted = liteseal_core::chat::encrypt_message(content.into_bytes(), saved.public_key, saved.secret_key)?;
+            state.client.db.lock().map_err(|e| e.to_string())?.save_personal_organizer(&saved.user_id, &encrypted).map_err(|e| e.to_string())?;
+            serde_json::to_value(())
+        }
+        Command::GetMessageContext { user_id, conversation_id, message_id } => {
+            if state.identity()?.user_id != user_id { return Err("Account mismatch".into()); }
+            serde_json::to_value(state.client.db.lock().map_err(|e| e.to_string())?
+                .message_context(&user_id, &conversation_id, &message_id).map_err(|e| e.to_string())?)
+        }
         Command::SubmitMessageOperation {
             target_id,
             kind,
@@ -341,6 +454,12 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
                 .locally_deleted_ids(&user_id, &conversation_id)
                 .map_err(|e| e.to_string())?,
         ),
+        Command::SetConversationMuted { user_id, peer_id, muted } => {
+            if state.identity()?.user_id != user_id { return Err("Account mismatch".into()); }
+            state.client.db.lock().map_err(|e| e.to_string())?
+                .set_conversation_muted(&user_id, &peer_id, muted).map_err(|e| e.to_string())?;
+            serde_json::to_value(())
+        }
         Command::GetConversationPreferences { user_id } => serde_json::to_value(
             state
                 .client

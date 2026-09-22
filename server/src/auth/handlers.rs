@@ -182,6 +182,15 @@ pub struct LogoutRequest {
     pub access_token: String,
 }
 
+pub async fn list_sessions(State(state): State<AppState>, headers: HeaderMap) -> Result<Json<serde_json::Value>,StatusCode> {
+    use sqlx::Row;
+    let user=user_from_bearer(&state,&headers).await?;
+    let token=headers.get("authorization").and_then(|v|v.to_str().ok()).and_then(|v|v.strip_prefix("Bearer ")).ok_or(StatusCode::UNAUTHORIZED)?;
+    let rows=sqlx::query("SELECT s.id,s.device_id,d.name,s.revoked,(s.access_token_hash=$2) AS current, s.expires_at::TEXT AS expires_at FROM sessions s JOIN devices d ON d.id=s.device_id WHERE s.user_id=$1 ORDER BY s.created_at DESC LIMIT 100")
+        .bind(user).bind(service::hash_token(token)).fetch_all(state.db.pool()).await.map_err(|_|StatusCode::SERVICE_UNAVAILABLE)?;
+    Ok(Json(serde_json::Value::Array(rows.iter().map(|r|serde_json::json!({"id":r.get::<String,_>("id"),"device_id":r.get::<String,_>("device_id"),"name":r.get::<String,_>("name"),"revoked":r.get::<bool,_>("revoked"),"current":r.get::<bool,_>("current"),"expires_at":r.get::<String,_>("expires_at")})).collect())))
+}
+
 #[derive(Deserialize)]
 pub struct RefreshRequest {
     pub refresh_token: String,

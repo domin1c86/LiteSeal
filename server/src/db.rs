@@ -44,6 +44,8 @@ pub enum StoreOfflineOutcome {
     Duplicate,
     QuotaExceeded,
     Conflict,
+    RequestPending,
+    Blocked,
 }
 
 pub struct AckedMessage {
@@ -98,6 +100,9 @@ impl Db {
             (1_i64, MIGRATIONS),
             (2, BETA_MIGRATIONS),
             (3, OPERATION_MIGRATIONS),
+            (4, crate::attachments::MIGRATION),
+            (5, crate::contact_policy::MIGRATION),
+            (6, crate::reactions::MIGRATION),
         ] {
             let applied = sqlx::query("SELECT 1 FROM schema_migrations WHERE version = $1")
                 .bind(version)
@@ -372,6 +377,20 @@ impl Db {
             .execute(&mut *transaction)
             .await?;
 
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 2))").bind(&msg.recipient_user_id).execute(&mut *transaction).await?;
+        let policy: Option<String> = sqlx::query_scalar("SELECT status FROM contact_policy WHERE user_id=$1 AND peer_id=$2")
+            .bind(&msg.recipient_user_id).bind(&msg.from_user_id).fetch_optional(&mut *transaction).await?;
+        match policy.as_deref() {
+            Some("accepted") => {},
+            Some("blocked" | "rejected") => return Ok(StoreOfflineOutcome::Blocked),
+            _ => {
+                let count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM contact_policy WHERE user_id=$1 AND status='pending'").bind(&msg.recipient_user_id).fetch_one(&mut *transaction).await?;
+                if count<100 { sqlx::query("INSERT INTO contact_policy(user_id,peer_id,status) VALUES($1,$2,'pending') ON CONFLICT DO NOTHING").bind(&msg.recipient_user_id).bind(&msg.from_user_id).execute(&mut *transaction).await?; }
+                transaction.commit().await?;
+                return Ok(StoreOfflineOutcome::RequestPending);
+            }
+        }
+
         let envelope = msg.envelope();
         let digest = envelope
             .digest()
@@ -476,6 +495,7 @@ impl Db {
                     ciphertext, signature, timestamp
              FROM offline_messages
              WHERE recipient_device_id = $1 AND acked = false
+             AND EXISTS (SELECT 1 FROM contact_policy p WHERE p.user_id=offline_messages.recipient_user_id AND p.peer_id=offline_messages.from_user_id AND p.status='accepted')
              ORDER BY delivery_order ASC LIMIT $2",
         )
         .bind(device_id)

@@ -7,10 +7,15 @@ interface ContactDetailProps {
   contact: Contact;
   onMessage: () => void;
   onContactsChanged: () => void;
+  alias: string;
+  onAlias: (value: string) => Promise<void>;
 }
 
-export default function ContactDetail({ contact, onMessage, onContactsChanged }: ContactDetailProps) {
-  const { setContactTrust } = useDesktop();
+export default function ContactDetail({ contact, alias, onAlias, onMessage, onContactsChanged }: ContactDetailProps) {
+  const { setContactTrust, removeContact } = useDesktop();
+  const [remark, setRemark] = useState(alias);
+  const [error, setError] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [busy, setBusy] = useState(false);
   const trust = trustLabel(contact);
   const verified = contact.trust_state === "verified";
@@ -22,6 +27,7 @@ export default function ContactDetail({ contact, onMessage, onContactsChanged }:
       onContactsChanged();
     } catch (err) {
       console.error("Failed to update trust:", err);
+      setError(String(err));
     } finally {
       setBusy(false);
     }
@@ -32,6 +38,12 @@ export default function ContactDetail({ contact, onMessage, onContactsChanged }:
       <div style={styles.card}>
         <div style={styles.avatar}>{contact.username.charAt(0).toUpperCase()}</div>
         <div style={styles.name}>{contact.username}</div>
+        <p style={{ overflowWrap: "anywhere" }}>身份：{contact.user_id}</p>
+        <label>本机备注 <input maxLength={80} value={remark} disabled={busy} onChange={event => setRemark(event.target.value)} /></label>
+        <button disabled={busy || remark === alias} onClick={async () => {
+          setBusy(true); try { await onAlias(remark.trim()); setError(""); } catch (failure) { setError(String(failure)); } finally { setBusy(false); }
+        }}>保存备注</button>
+        <p>备注仅用于本机显示，不修改账号、密钥或验签身份。</p>
         <div style={styles.fingerprint}>
           {contact.fingerprint
             ? contact.fingerprint.match(/.{1,4}/g)?.join(" ")
@@ -51,6 +63,15 @@ export default function ContactDetail({ contact, onMessage, onContactsChanged }:
             {verified ? "Unverify" : "Verify"}
           </button>
         </div>
+        <button disabled={busy} onClick={() => setConfirmDelete(true)}>删除联系人</button>
+        {confirmDelete && <div role="alertdialog" aria-label="删除联系人确认">
+          <p>删除联系人保留加密历史和消息链。恢复同一身份与公钥后可再次读取；这不是撤回或拉黑，不能阻止对方发消息。</p>
+          <button disabled={busy} onClick={async () => {
+            setBusy(true); try { await removeContact(contact.user_id); onContactsChanged(); } catch (failure) { setError(String(failure)); } finally { setBusy(false); }
+          }}>确认删除联系人</button>
+          <button disabled={busy} onClick={() => setConfirmDelete(false)}>取消</button>
+        </div>}
+        {error && <p role="alert">{error}</p>}
       </div>
     </div>
   );

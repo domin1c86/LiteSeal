@@ -26,6 +26,7 @@ pub struct ConversationPreference {
     pub pinned: bool,
     pub archived: bool,
     pub draft: Vec<u8>,
+    pub muted: bool,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -40,6 +41,12 @@ pub struct LocalOperation {
 
 pub struct MessageRepository {
     conn: Connection,
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct AttachmentTransfer {
+    pub id: String, pub user_id: String, pub peer_id: String, pub message_id: String,
+    pub metadata: Vec<u8>, pub ciphertext: Vec<u8>, pub offset: i64, pub direction: String,
 }
 
 impl MessageRepository {
@@ -76,6 +83,22 @@ impl MessageRepository {
                 user_id TEXT NOT NULL, peer_id TEXT NOT NULL,
                 pinned INTEGER NOT NULL DEFAULT 0, archived INTEGER NOT NULL DEFAULT 0,
                 draft BLOB NOT NULL DEFAULT X'', PRIMARY KEY(user_id, peer_id)
+            );
+            CREATE TABLE IF NOT EXISTS conversation_notifications (
+                user_id TEXT NOT NULL, peer_id TEXT NOT NULL,
+                muted INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(user_id, peer_id)
+            );
+            CREATE TABLE IF NOT EXISTS personal_organizer (
+                user_id TEXT PRIMARY KEY, ciphertext BLOB NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS local_reactions (
+                user_id TEXT NOT NULL,id TEXT NOT NULL,seq INTEGER NOT NULL,body TEXT NOT NULL,
+                PRIMARY KEY(user_id,id)
+            );
+            CREATE TABLE IF NOT EXISTS attachment_transfers (
+                id TEXT NOT NULL, user_id TEXT NOT NULL, peer_id TEXT NOT NULL, message_id TEXT NOT NULL,
+                metadata BLOB NOT NULL, ciphertext BLOB NOT NULL, offset INTEGER NOT NULL DEFAULT 0,
+                direction TEXT NOT NULL, PRIMARY KEY(user_id,id)
             );
             CREATE TABLE IF NOT EXISTS local_message_operations (
                 user_id TEXT NOT NULL, device_id TEXT NOT NULL, id TEXT NOT NULL,
@@ -359,13 +382,14 @@ impl MessageRepository {
         &self,
         user_id: &str,
     ) -> Result<Vec<ConversationPreference>, DbError> {
-        let mut stmt = self.conn.prepare("SELECT peer_id, pinned, archived, draft FROM conversation_preferences WHERE user_id = ?1")?;
+        let mut stmt = self.conn.prepare("SELECT p.peer_id, p.pinned, p.archived, p.draft, COALESCE(n.muted, 0) FROM conversation_preferences p LEFT JOIN conversation_notifications n ON n.user_id = p.user_id AND n.peer_id = p.peer_id WHERE p.user_id = ?1")?;
         let rows = stmt.query_map([user_id], |row| {
             Ok(ConversationPreference {
                 peer_id: row.get(0)?,
                 pinned: row.get(1)?,
                 archived: row.get(2)?,
                 draft: row.get(3)?,
+                muted: row.get(4)?,
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -384,6 +408,62 @@ impl MessageRepository {
             ON CONFLICT(user_id, peer_id) DO UPDATE SET
             pinned = COALESCE(?3, pinned), archived = COALESCE(?4, archived), draft = COALESCE(?5, draft)",
             params![user_id, peer_id, pinned, archived, draft])?;
+        Ok(())
+    }
+
+    pub fn attachment_transfer(&self, user: &str, id: &str) -> Result<AttachmentTransfer, DbError> {
+        Ok(self.conn.query_row("SELECT id,user_id,peer_id,message_id,metadata,ciphertext,offset,direction FROM attachment_transfers WHERE user_id=?1 AND id=?2", params![user,id], |r| Ok(AttachmentTransfer {
+            id:r.get(0)?,user_id:r.get(1)?,peer_id:r.get(2)?,message_id:r.get(3)?,metadata:r.get(4)?,ciphertext:r.get(5)?,offset:r.get(6)?,direction:r.get(7)?
+        }))?)
+    }
+    pub fn save_attachment_transfer(&self, item: &AttachmentTransfer) -> Result<(), DbError> {
+        self.conn.execute("INSERT INTO attachment_transfers(id,user_id,peer_id,message_id,metadata,ciphertext,offset,direction) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
+            ON CONFLICT(user_id,id) DO UPDATE SET metadata=excluded.metadata,ciphertext=excluded.ciphertext,offset=excluded.offset,direction=excluded.direction",
+            params![item.id,item.user_id,item.peer_id,item.message_id,item.metadata,item.ciphertext,item.offset,item.direction])?;
+        Ok(())
+    }
+    pub fn attachment_transfer_ids(&self, user: &str) -> Result<Vec<String>, DbError> {
+        let mut stmt=self.conn.prepare("SELECT id FROM attachment_transfers WHERE user_id=?1 AND direction='upload'")?;
+        let rows=stmt.query_map([user],|r|r.get(0))?.collect::<Result<Vec<_>,_>>()?; Ok(rows)
+    }
+    pub fn attachment_cache_bytes(&self, user: &str) -> Result<i64, DbError> {
+        Ok(self.conn.query_row("SELECT COALESCE(SUM(length(ciphertext)),0) FROM attachment_transfers WHERE user_id=?1", [user], |r|r.get(0))?)
+    }
+    pub fn clear_attachment_cache(&self, user: &str, peer: Option<&str>) -> Result<usize, DbError> {
+        Ok(self.conn.execute("DELETE FROM attachment_transfers WHERE user_id=?1 AND direction='download' AND (?2 IS NULL OR peer_id=?2)",params![user,peer])?)
+    }
+    pub fn forget_attachment_transfer(&self, user: &str, id: &str) -> Result<(), DbError> {
+        self.conn.execute("DELETE FROM attachment_transfers WHERE user_id=?1 AND id=?2",params![user,id])?; Ok(())
+    }
+    pub fn database_disk_stats(&self) -> Result<(i64,i64),DbError> {
+        let pages:i64=self.conn.query_row("PRAGMA page_count",[],|r|r.get(0))?;
+        let free:i64=self.conn.query_row("PRAGMA freelist_count",[],|r|r.get(0))?;
+        let size:i64=self.conn.query_row("PRAGMA page_size",[],|r|r.get(0))?;
+        Ok((pages*size,free*size))
+    }
+
+    pub fn reaction_rows(&self,user:&str)->Result<Vec<(i64,String)>,DbError>{
+        let mut stmt=self.conn.prepare("SELECT seq,body FROM local_reactions WHERE user_id=?1 ORDER BY seq")?;
+        let rows=stmt.query_map([user],|r|Ok((r.get(0)?,r.get(1)?)))?.collect::<Result<Vec<_>,_>>()?;Ok(rows)
+    }
+    pub fn save_reaction(&self,user:&str,id:&str,seq:i64,body:&str)->Result<(),DbError>{
+        self.conn.execute("INSERT INTO local_reactions(user_id,id,seq,body) VALUES(?1,?2,?3,?4) ON CONFLICT(user_id,id) DO UPDATE SET seq=excluded.seq,body=excluded.body",params![user,id,seq,body])?;Ok(())
+    }
+    pub fn personal_organizer(&self, user_id: &str) -> Result<Vec<u8>, DbError> {
+        use rusqlite::OptionalExtension;
+        Ok(self.conn.query_row("SELECT ciphertext FROM personal_organizer WHERE user_id = ?1", [user_id], |row| row.get(0)).optional()?.unwrap_or_default())
+    }
+
+    pub fn save_personal_organizer(&self, user_id: &str, ciphertext: &[u8]) -> Result<(), DbError> {
+        self.conn.execute("INSERT INTO personal_organizer(user_id, ciphertext) VALUES (?1, ?2)
+            ON CONFLICT(user_id) DO UPDATE SET ciphertext = excluded.ciphertext", params![user_id, ciphertext])?;
+        Ok(())
+    }
+
+    pub fn set_conversation_muted(&self, user_id: &str, peer_id: &str, muted: bool) -> Result<(), DbError> {
+        self.save_conversation_preference(user_id, peer_id, None, None, None)?;
+        self.conn.execute("INSERT INTO conversation_notifications(user_id, peer_id, muted) VALUES (?1, ?2, ?3)
+            ON CONFLICT(user_id, peer_id) DO UPDATE SET muted = excluded.muted", params![user_id, peer_id, muted])?;
         Ok(())
     }
 
@@ -714,6 +794,24 @@ impl MessageRepository {
             messages.push(row?);
         }
         Ok(messages)
+    }
+
+    pub fn message_context(&self, user_id: &str, conversation_id: &str, message_id: &str) -> Result<Vec<MessageModel>, DbError> {
+        let target = self.get_message(message_id)?.ok_or(DbError::NotFound)?;
+        if target.conversation_id != conversation_id || self.locally_deleted_ids(user_id, conversation_id)?.contains(&target.id) {
+            return Err(DbError::NotFound);
+        }
+        let mut older = self.get_visible_message_page(conversation_id, 20, user_id, Some(target.timestamp), Some(&target.id))?;
+        older.reverse();
+        let mut stmt = self.conn.prepare("SELECT id FROM messages m WHERE conversation_id = ?1
+            AND (timestamp > ?2 OR (timestamp = ?2 AND id > ?3))
+            AND NOT EXISTS (SELECT 1 FROM locally_deleted_messages d WHERE d.user_id = ?4 AND d.message_id = m.id)
+            ORDER BY timestamp, id LIMIT 20")?;
+        let ids = stmt.query_map(params![conversation_id, target.timestamp, target.id, user_id], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        older.push(target);
+        for id in ids { if let Some(message) = self.get_message(&id)? { older.push(message); } }
+        Ok(older)
     }
 
     pub fn get_latest_message_for_sender(
