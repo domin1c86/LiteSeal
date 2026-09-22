@@ -8,6 +8,7 @@ export default function AccountPanel({ contacts, onClose, onContactsChanged, onL
   const [requests, setRequests] = useState<CommandMap["list_contact_requests"]["result"]>([]);
   const [sessions, setSessions] = useState<CommandMap["list_account_sessions"]["result"]>([]);
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
+  const [update, setUpdate] = useState<CommandMap["check_app_update"]["result"] | null>(null);
   async function refresh() {
     const [policies, active] = await Promise.all([window.desktop.list_contact_requests({}), window.desktop.list_account_sessions({})]);
     setRequests(policies); setSessions(active);
@@ -37,6 +38,12 @@ export default function AccountPanel({ contacts, onClose, onContactsChanged, onL
       try { await window.desktop.logout_all_sessions({}); onLogout(); }
       catch (failure) { setError(String(failure)); setBusy(false); }
     }}>退出全部会话</button>
+    <h2>版本与升级</h2>
+    <button disabled={busy} onClick={async () => {
+      setBusy(true); setError(""); try { setUpdate(await window.desktop.check_app_update({})); } catch (failure) { setError(String(failure)); } finally { setBusy(false); }
+    }}>检查正式版本</button>
+    {update && <p>当前 {update.current} · 最新 {update.latest} · {update.available ? "有可用更新" : "无需更新"} <button onClick={() => { void window.desktop.open_app_release({}).catch(failure => setError(String(failure))); }}>打开此版本发布页</button></p>}
+    <p>升级前完全退出应用并备份本机身份和数据库，核对安装包签名。安装不自动执行；升级失败可按升级指南恢复原版本和对应数据快照。</p>
     {error && <p role="alert">{error}</p>}
   </section>;
 }

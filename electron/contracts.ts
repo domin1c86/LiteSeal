@@ -3,6 +3,8 @@ import type { RegisterResult, ConnectResult, SendMessageResult, PollMessagesResu
 } from "../ui/src/types";
 
 export interface CommandMap {
+  check_app_update: { args: {}; result: { current: string; latest: string; available: boolean } };
+  open_app_release: { args: {}; result: void };
   app_lock_state: { args: {}; result: boolean };
   lock_app: { args: {}; result: void };
   unlock_app: { args: { password: string }; result: void };
@@ -75,6 +77,7 @@ export type DesktopApi = {
   [K in CommandName]: (args: CommandMap[K]["args"]) => Promise<CommandMap[K]["result"]>;
 };
 export const commandNames = [
+  "check_app_update", "open_app_release",
   "app_lock_state", "lock_app", "unlock_app",
   "submit_reaction", "sync_reactions", "get_reactions",
   "list_contact_requests", "set_contact_policy", "list_account_sessions", "logout_all_sessions",

@@ -1,4 +1,4 @@
-import { app, clipboard, BrowserWindow, dialog, ipcMain, Menu, net, powerMonitor, protocol, session, Tray } from "electron";
+import { app, clipboard, BrowserWindow, dialog, ipcMain, Menu, net, powerMonitor, protocol, session, shell, Tray } from "electron";
 import { ChatNotifications } from "./notifications";
 import path from "node:path";
 import fs from "node:fs/promises";
@@ -21,6 +21,7 @@ let lockEnabled = false;
 let lockGeneration = 0;
 let unlockAfter = 0;
 let unlockBusy = false;
+let releaseUrl: string | null = null;
 function lockApp() {
   if (!lockEnabled || locked) return;
   locked = true; lockGeneration++;
@@ -115,6 +116,26 @@ else {
           }
           if (locked) throw new Error("应用已锁定，请先验证 Windows 身份");
           const generation = lockGeneration;
+          if (name === "check_app_update") {
+            const response = await net.fetch("https://api.github.com/repos/domin1c86/LiteSeal/releases/latest", { headers: { Accept: "application/vnd.github+json" }, signal: AbortSignal.timeout(15000) });
+            if (!response.ok) throw new Error(response.status === 404 ? "尚无正式发布版本" : `版本检查失败：${response.status}`);
+            const release = await response.json();
+            const tag = String(release.tag_name ?? "");
+            if (!/^v?\d+\.\d+\.\d+$/.test(tag)) throw new Error("发布版本号格式不支持");
+            const latest = tag.replace(/^v/, "");
+            const compare = (a: string, b: string) => {
+              const left = a.split(".").map(Number), right = b.split(".").map(Number);
+              for (let i = 0; i < 3; i++) { if (left[i] !== right[i]) return left[i] > right[i]; }
+              return false;
+            };
+            releaseUrl = `https://github.com/domin1c86/LiteSeal/releases/tag/${encodeURIComponent(tag)}`;
+            return { ok: true, result: { current: app.getVersion(), latest, available: compare(latest, app.getVersion()) } };
+          }
+          if (name === "open_app_release") {
+            if (!releaseUrl) throw new Error("请先检查版本");
+            await shell.openExternal(releaseUrl);
+            return { ok: true, result: null };
+          }
           if (name === "select_attachment") {
             const peerId = (args as { peerId: string }).peerId;
             if (typeof peerId !== "string" || peerId.length > 128) throw new Error("无效联系人");
