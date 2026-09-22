@@ -32,6 +32,10 @@ export default function Chat({ draft, onDraftChange, onForward, online, conversa
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const [contextMessages, setContextMessages] = useState<Message[] | null>(null);
   const input = draft.text;
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  const composing = useRef(false);
+  const compositionEnded = useRef(0);
+  const composer = useRef<HTMLTextAreaElement>(null);
   const [operationsLoaded, setOperationsLoaded] = useState(false);
   const [operations, setOperations] = useState<MessageOperation[]>([]);
   const [operationError, setOperationError] = useState<string | null>(null);
@@ -284,7 +288,7 @@ export default function Chat({ draft, onDraftChange, onForward, online, conversa
 
   async function handleSend(e: React.FormEvent) {
     e.preventDefault();
-    if (!online || sending || !input.trim() || !conversationId) return;
+    if (!online || sending || composing.current || Date.now() - compositionEnded.current < 100 || !input.trim() || !conversationId) return;
 
     const text = input.trim();
     const messageId = draft.messageId ?? crypto.randomUUID();
@@ -546,13 +550,40 @@ export default function Chat({ draft, onDraftChange, onForward, online, conversa
       </div>}
       <form className="chat-composer" onSubmit={handleSend} style={styles.inputBar}>
         <span style={styles.prompt}>›</span>
-        <input
+        <button type="button" aria-expanded={emojiOpen} aria-label="选择 emoji" disabled={sending || !!draft.messageId} onClick={() => setEmojiOpen(value => !value)}>☺</button>
+        {emojiOpen && <div role="dialog" aria-label="emoji 选择器" onKeyDown={event => {
+          if (event.key === "Escape") { event.preventDefault(); setEmojiOpen(false); composer.current?.focus(); }
+          const buttons = Array.from(event.currentTarget.querySelectorAll("button"));
+          const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
+          if (["ArrowLeft", "ArrowRight"].includes(event.key)) {
+            event.preventDefault(); buttons[(current + (event.key === "ArrowRight" ? 1 : -1) + buttons.length) % buttons.length]?.focus();
+          }
+        }} style={{ display: "flex", flexWrap: "wrap", maxWidth: 200 }}>
+          {["😀", "😂", "❤️", "👍", "🙏", "🎉", "😊", "😢", "👀", "✅", "🔥", "👋"].map(emoji => <button type="button" key={emoji} onClick={() => {
+            const field = composer.current;
+            const start = field?.selectionStart ?? input.length, end = field?.selectionEnd ?? input.length;
+            void onDraftChange({ ...draft, text: input.slice(0, start) + emoji + input.slice(end) }).catch(error => setActionStatus(String(error)));
+            setEmojiOpen(false); field?.focus();
+          }}>{emoji}</button>)}
+          <button type="button" onClick={() => { setEmojiOpen(false); composer.current?.focus(); }}>关闭</button>
+        </div>}
+        <textarea
+          ref={composer}
           className="composer-input"
-          type="text"
+          aria-label="消息正文，Enter 发送，Shift+Enter 换行"
+          rows={2}
           placeholder="type a message…"
           value={input}
           disabled={sending || !!draft.messageId}
           onChange={(e) => { void onDraftChange({ ...draft, text: e.target.value }).catch(() => {}); }}
+          onCompositionStart={() => { composing.current = true; }}
+          onCompositionEnd={() => { composing.current = false; compositionEnded.current = Date.now(); }}
+          onKeyDown={event => {
+            if (event.key === "Enter" && !event.shiftKey) {
+              if (event.nativeEvent.isComposing || composing.current || event.keyCode === 229 || Date.now() - compositionEnded.current < 100) return;
+              event.preventDefault(); event.currentTarget.form?.requestSubmit();
+            }
+          }}
           style={styles.input}
         />
         <button
@@ -684,6 +715,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   messageText: {
     fontSize: "14px",
+    whiteSpace: "pre-wrap",
     wordBreak: "break-word",
   },
   timestamp: {
@@ -702,6 +734,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   inputBar: {
     display: "flex",
+    flexWrap: "wrap",
     alignItems: "center",
     width: "calc(100% - 48px)",
     maxWidth: "840px",
