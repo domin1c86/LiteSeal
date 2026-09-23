@@ -7,6 +7,7 @@ mod db;
 mod http_tests;
 mod keys;
 mod message_operations;
+mod profile;
 mod reactions;
 mod relay;
 #[cfg(test)]
@@ -70,6 +71,8 @@ fn build_router(state: AppState, allowed_origin: HeaderValue) -> Router {
 
     Router::new()
         .route("/reactions", get(reactions::list).post(reactions::submit))
+        .route("/users/me/profile", axum::routing::put(profile::update))
+        .route("/users/:user_id/profile", get(profile::get))
         .route(
             "/contact-policy",
             get(contact_policy::list).post(contact_policy::change),

@@ -12,7 +12,7 @@ import AddContact from "./components/AddContact";
 import StorageManager from "./components/StorageManager";
 import { useDesktop } from "./hooks/useDesktop";
 import type { SidebarTab } from "./components/ContactList";
-import type { RegisterResult, Contact, IncomingMessage, RelayEvent } from "./types";
+import type { RegisterResult, Contact, IncomingMessage, RelayEvent, PublicProfile } from "./types";
 
 export interface RelayBatch {
   seq: number;
@@ -38,6 +38,7 @@ export default function App() {
   const [showAccount, setShowAccount] = useState(false);
   const { drafts } = preferences;
   const [contacts, setContacts] = useState<Contact[]>([]);
+  const [profiles, setProfiles] = useState<Record<string, PublicProfile>>({});
   const [activeConversation, setActiveConversation] = useState<string | null>(
     null
   );
@@ -211,6 +212,18 @@ export default function App() {
     refreshContacts();
   }, [session]);
 
+  useEffect(() => {
+    let active = true;
+    if (!session || !contacts.length) { setProfiles({}); return; }
+    void Promise.allSettled(contacts.map(contact => getDesktopApi().get_public_profile({ userId: contact.user_id }))).then(results => {
+      if (!active) return;
+      const next: Record<string, PublicProfile> = {};
+      results.forEach((result, index) => { if (result.status === "fulfilled") next[contacts[index].user_id] = result.value; });
+      setProfiles(next);
+    });
+    return () => { active = false; };
+  }, [session?.user_id, contacts]);
+
   function handleContactAdded() {
     getContacts()
       .then(setContacts)
@@ -253,6 +266,7 @@ export default function App() {
         userId={session.user_id}
         signingPublicKey={session.ed25519Pk}
         contacts={contacts}
+        profiles={profiles}
         flags={preferences.flags}
         aliases={organizer.value.aliases}
         lists={organizer.value.lists}
@@ -277,6 +291,7 @@ export default function App() {
           <ContactDetail
             key={detailContact.user_id}
             contact={detailContact}
+            profile={profiles[detailContact.user_id]}
             alias={organizer.value.aliases[detailContact.user_id] ?? ""}
             onAlias={alias => organizer.update(value => ({ ...value, aliases: { ...value.aliases, [detailContact.user_id]: alias } }))}
             onMessage={() => {
@@ -330,7 +345,7 @@ export default function App() {
       {organizer.error && <p role="alert">本机整理数据不可用：{organizer.error}</p>}
       {showOrganizer && organizer.ready && <OrganizerPanel organizer={organizer} userId={session.user_id} contacts={contacts}
         onClose={() => setShowOrganizer(false)} onOpen={peerId => { setActiveConversation(peerId); setSidebarTab("chats"); }} />}
-      {showAccount && <AccountPanel contacts={contacts} onClose={() => setShowAccount(false)} onContactsChanged={refreshContacts} onLogout={() => { setShowAccount(false); void handleLogout(); }} />}
+      {showAccount && <AccountPanel userId={session.user_id} contacts={contacts} onClose={() => setShowAccount(false)} onContactsChanged={refreshContacts} onLogout={() => { setShowAccount(false); void handleLogout(); }} />}
     </div>
     </div>
   );

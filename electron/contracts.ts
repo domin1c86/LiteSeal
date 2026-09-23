@@ -16,6 +16,9 @@ export interface CommandMap {
   list_contact_requests: { args: {}; result: { peer_id: string; username: string; status: string }[] };
   set_contact_policy: { args: { peerId: string; status: "accepted" | "blocked" | "rejected" | "pending" }; result: void };
   list_account_sessions: { args: {}; result: { id: string; device_id: string; name: string; revoked: boolean; current: boolean; expires_at: string }[] };
+  get_public_profile: { args: { userId: string }; result: { user_id: string; username: string; display_name: string; avatar_png: string | null } };
+  update_public_profile: { args: { displayName: string; avatarPng: string | null }; result: { user_id: string; username: string; display_name: string; avatar_png: string | null } };
+  choose_profile_avatar: { args: {}; result: string | null };
   logout_all_sessions: { args: {}; result: void };
   change_password: { args: { currentPassword: string; newPassword: string }; result: void };
   select_attachment: { args: { peerId: string }; result: AttachmentTask | null };
@@ -87,7 +90,7 @@ export const commandNames = [
   "check_app_update", "open_app_release",
   "app_lock_state", "lock_app", "unlock_app",
   "submit_reaction", "sync_reactions", "get_reactions",
-  "list_contact_requests", "set_contact_policy", "list_account_sessions", "logout_all_sessions", "change_password",
+  "list_contact_requests", "set_contact_policy", "list_account_sessions", "get_public_profile", "update_public_profile", "choose_profile_avatar", "logout_all_sessions", "change_password",
   "select_attachment", "stage_attachment_file", "stage_clipboard_image", "list_attachment_tasks", "attachment_step", "publish_attachment", "begin_attachment_download", "export_attachment", "forget_attachment_task", "attachment_cache_stats", "clear_attachment_cache",
   "get_personal_organizer",
   "save_personal_organizer",

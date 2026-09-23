@@ -90,6 +90,52 @@ pub async fn sessions(state: &AppState) -> Result<Value, String> {
     )
     .await
 }
+pub async fn public_profile(state: &AppState, user_id: String) -> Result<Value, String> {
+    if uuid::Uuid::parse_str(&user_id).is_err() {
+        return Err("无效用户身份".into());
+    }
+    let saved = state.identity()?;
+    response(
+        client()?
+            .get(format!(
+                "{}/users/{}/profile",
+                normalize_server_url(&saved.server_url)?,
+                user_id
+            ))
+            .bearer_auth(saved.token)
+            .send()
+            .await
+            .map_err(|_| "公开资料读取失败")?,
+    )
+    .await
+}
+pub async fn update_public_profile(
+    state: &AppState,
+    display_name: String,
+    avatar_png: Option<String>,
+) -> Result<Value, String> {
+    if display_name.chars().count() > 40
+        || avatar_png
+            .as_ref()
+            .is_some_and(|value| value.len() > 90_000)
+    {
+        return Err("公开资料过长".into());
+    }
+    let saved = state.identity()?;
+    response(
+        client()?
+            .put(format!(
+                "{}/users/me/profile",
+                normalize_server_url(&saved.server_url)?
+            ))
+            .bearer_auth(saved.token)
+            .json(&json!({"display_name":display_name,"avatar_png":avatar_png}))
+            .send()
+            .await
+            .map_err(|_| "公开资料保存失败")?,
+    )
+    .await
+}
 pub async fn logout_all(state: &AppState) -> Result<(), String> {
     let mut saved = state.identity()?;
     response(

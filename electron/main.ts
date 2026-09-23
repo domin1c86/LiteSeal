@@ -191,6 +191,18 @@ else {
             if (locked || generation !== lockGeneration) throw new Error("应用已锁定");
             return { ok: true, result };
           }
+          if (name === "choose_profile_avatar") {
+            const selected = await dialog.showOpenDialog(mainWindow, { title: "选择公开头像", properties: ["openFile"], filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp"] }] });
+            if (locked || generation !== lockGeneration) throw new Error("应用已锁定");
+            if (selected.canceled || !selected.filePaths[0]) return { ok: true, result: null };
+            const filePath = selected.filePaths[0];
+            if ((await fs.stat(filePath)).size > 20 * 1024 * 1024) throw new Error("头像源文件不能超过 20 MiB");
+            const picture = nativeImage.createFromPath(filePath);
+            if (picture.isEmpty()) throw new Error("头像图片损坏或格式不支持");
+            const bytes = picture.resize({ width: 128, height: 128, quality: "best" }).toPNG();
+            if (bytes.length > 64 * 1024) throw new Error("处理后头像仍超过 64 KiB，请选择更简单的图片");
+            return { ok: true, result: bytes.toString("base64") };
+          }
           if (name === "export_attachment" || name === "preview_attachment_task") {
             const pendingId = name === "preview_attachment_task" ? (args as { id: string }).id : undefined;
             const input = pendingId ? { messageId: "", preview: true } : args as { messageId: string; preview?: boolean };

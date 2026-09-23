@@ -105,6 +105,13 @@ export interface Contact {
   added_at: number;
 }
 
+export interface PublicProfile {
+  user_id: string;
+  username: string;
+  display_name: string;
+  avatar_png: string | null;
+}
+
 export interface UserSearchResult {
   user_id: string;
   username: string;

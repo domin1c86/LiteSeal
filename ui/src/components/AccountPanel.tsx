@@ -3,21 +3,25 @@ import { useEffect, useState } from "react";
 import type { Contact } from "../types";
 import type { CommandMap } from "../../../electron/contracts";
 
-export default function AccountPanel({ contacts, onClose, onContactsChanged, onLogout }: {
-  contacts: Contact[]; onClose: () => void; onContactsChanged: () => void; onLogout: () => void;
+export default function AccountPanel({ userId, contacts, onClose, onContactsChanged, onLogout }: {
+  userId: string; contacts: Contact[]; onClose: () => void; onContactsChanged: () => void; onLogout: () => void;
 }) {
   const [requests, setRequests] = useState<CommandMap["list_contact_requests"]["result"]>([]);
   const [sessions, setSessions] = useState<CommandMap["list_account_sessions"]["result"]>([]);
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
   const [update, setUpdate] = useState<CommandMap["check_app_update"]["result"] | null>(null);
+  const [profileName, setProfileName] = useState("");
+  const [profileAvatar, setProfileAvatar] = useState<string | null>(null);
+  const [accountName, setAccountName] = useState("");
   const [windowsPassword, setWindowsPassword] = useState("");
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [lockStatus, setLockStatus] = useState("");
   async function refresh() {
-    const [policies, active] = await Promise.all([getDesktopApi().list_contact_requests({}), getDesktopApi().list_account_sessions({})]);
+    const [policies, active, profile] = await Promise.all([getDesktopApi().list_contact_requests({}), getDesktopApi().list_account_sessions({}), getDesktopApi().get_public_profile({ userId })]);
     setRequests(policies); setSessions(active);
+    setProfileName(profile.display_name); setProfileAvatar(profile.avatar_png); setAccountName(profile.username);
   }
   useEffect(() => { void refresh().catch(failure => setError(String(failure))); }, []);
   async function policy(peerId: string, status: CommandMap["set_contact_policy"]["args"]["status"]) {
@@ -28,6 +32,20 @@ export default function AccountPanel({ contacts, onClose, onContactsChanged, onL
   const peers = [...requests, ...contacts.filter(peer => !requests.some(row => row.peer_id === peer.user_id)).map(peer => ({ peer_id: peer.user_id, username: peer.username, status: "未设置" }))];
   return <section role="dialog" aria-modal="true" aria-label="账号与消息请求" style={{ position: "fixed", inset: "8%", zIndex: 25, background: "var(--surface)", color: "var(--text)", padding: 24, overflow: "auto" }}>
     <button onClick={onClose} disabled={busy}>关闭</button><button disabled={busy} onClick={() => void refresh().catch(failure => setError(String(failure)))}>刷新</button>
+    <h2>公开资料</h2>
+    <p>账号名 {accountName || "读取中…"} 和身份密钥保持不变。公开昵称与头像可被其他已登录用户看到，不作为验签依据。</p>
+    <label>公开昵称 <input maxLength={40} value={profileName} disabled={busy} onChange={event => setProfileName(event.target.value)} /></label>
+    {profileAvatar && <img src={`data:image/png;base64,${profileAvatar}`} alt="当前公开头像" style={{ display: "block", width: 64, height: 64, objectFit: "cover" }} />}
+    <button disabled={busy} onClick={async () => {
+      setBusy(true); setError(""); try { const avatar = await getDesktopApi().choose_profile_avatar({}); if (avatar) setProfileAvatar(avatar); }
+      catch (failure) { setError(String(failure)); } finally { setBusy(false); }
+    }}>选择头像</button>
+    <button disabled={busy || !profileAvatar} onClick={() => setProfileAvatar(null)}>移除头像</button>
+    <button disabled={busy} onClick={async () => {
+      setBusy(true); setError("");
+      try { const profile = await getDesktopApi().update_public_profile({ displayName: profileName.trim(), avatarPng: profileAvatar }); setProfileName(profile.display_name); setProfileAvatar(profile.avatar_png); }
+      catch (failure) { setError(String(failure)); } finally { setBusy(false); }
+    }}>保存公开资料</button>
     <h2>消息请求与拉黑</h2>
     <p>接受前只保存请求身份，消息正文留在发送方，不进入正常通知和未读。已有联系人升级后也需要允许接收。请核对指纹。</p>
     {peers.map(peer => <div key={peer.peer_id}><span>{peer.username} · {peer.peer_id.slice(0, 8)} · {peer.status}</span>

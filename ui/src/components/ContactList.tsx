@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useConversationSummaries } from "../hooks/useConversationSummaries";
-import type { Contact, Draft } from "../types";
+import type { Contact, Draft, PublicProfile } from "../types";
 
 export type SidebarTab = "chats" | "contacts";
 
@@ -8,6 +8,7 @@ interface ContactListProps {
   userId: string;
   signingPublicKey: number[];
   contacts: Contact[];
+  profiles: Record<string, PublicProfile>;
   flags: Record<string, { pinned: boolean; archived: boolean }>;
   muted: Record<string, boolean>;
   onMutedChange: (id: string, muted: boolean) => void;
@@ -37,7 +38,7 @@ export function trustLabel(contact: Contact): { text: string; color: string } {
 }
 
 export default function ContactList({
-  contacts, userId, signingPublicKey, flags, muted, onMutedChange, aliases, lists, onOrganizer, drafts, preferencesReady, onFlagsChange,
+  contacts, profiles, userId, signingPublicKey, flags, muted, onMutedChange, aliases, lists, onOrganizer, drafts, preferencesReady, onFlagsChange,
   activeConversation,
   tab,
   onTabChange,
@@ -120,10 +121,12 @@ export default function ContactList({
             onClick={() => onSelect(contact.user_id)}
           >
             <div style={{ ...styles.avatar, ...(isActive ? styles.avatarActive : {}) }}>
-              {contact.username.charAt(0).toUpperCase()}
+              {profiles[contact.user_id]?.avatar_png
+                ? <img src={`data:image/png;base64,${profiles[contact.user_id].avatar_png}`} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: "inherit" }} />
+                : contact.username.charAt(0).toUpperCase()}
             </div>
             <div style={styles.info}>
-              <span className="contact-name" style={styles.name} title={`${contact.username} · ${contact.user_id}`}>{tab === "chats" && preference.pinned ? "📌 " : ""}{aliases[contact.user_id] || contact.username}</span>
+              <span className="contact-name" style={styles.name} title={`${contact.username} · ${contact.user_id}`}>{tab === "chats" && preference.pinned ? "📌 " : ""}{aliases[contact.user_id] || profiles[contact.user_id]?.display_name || contact.username}</span>
               {tab === "chats" ? <span style={styles.trust} title={summary}>{summary}</span>
                 : <span style={{ ...styles.trust, color: trust.color }}>{trust.text}</span>}
             </div>

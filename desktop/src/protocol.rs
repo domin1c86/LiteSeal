@@ -131,6 +131,18 @@ pub enum Command {
     },
     #[serde(rename = "list_account_sessions")]
     ListAccountSessions {},
+    #[serde(rename = "get_public_profile")]
+    GetPublicProfile {
+        #[serde(rename = "userId")]
+        user_id: String,
+    },
+    #[serde(rename = "update_public_profile")]
+    UpdatePublicProfile {
+        #[serde(rename = "displayName")]
+        display_name: String,
+        #[serde(rename = "avatarPng")]
+        avatar_png: Option<String>,
+    },
     #[serde(rename = "logout_all_sessions")]
     LogoutAllSessions {},
     #[serde(rename = "change_password")]
@@ -421,6 +433,15 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
         Command::ListAccountSessions {} => {
             serde_json::to_value(commands::account::sessions(state).await?)
         }
+        Command::GetPublicProfile { user_id } => {
+            serde_json::to_value(commands::account::public_profile(state, user_id).await?)
+        }
+        Command::UpdatePublicProfile {
+            display_name,
+            avatar_png,
+        } => serde_json::to_value(
+            commands::account::update_public_profile(state, display_name, avatar_png).await?,
+        ),
         Command::LogoutAllSessions {} => {
             serde_json::to_value(commands::account::logout_all(state).await?)
         }

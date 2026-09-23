@@ -1,17 +1,18 @@
 import { useState } from "react";
 import { useDesktop } from "../hooks/useDesktop";
 import { trustLabel } from "./ContactList";
-import type { Contact } from "../types";
+import type { Contact, PublicProfile } from "../types";
 
 interface ContactDetailProps {
   contact: Contact;
+  profile?: PublicProfile;
   onMessage: () => void;
   onContactsChanged: () => void;
   alias: string;
   onAlias: (value: string) => Promise<void>;
 }
 
-export default function ContactDetail({ contact, alias, onAlias, onMessage, onContactsChanged }: ContactDetailProps) {
+export default function ContactDetail({ contact, profile, alias, onAlias, onMessage, onContactsChanged }: ContactDetailProps) {
   const { setContactTrust, removeContact } = useDesktop();
   const [remark, setRemark] = useState(alias);
   const [error, setError] = useState("");
@@ -36,8 +37,11 @@ export default function ContactDetail({ contact, alias, onAlias, onMessage, onCo
   return (
     <div style={styles.container}>
       <div style={styles.card}>
-        <div style={styles.avatar}>{contact.username.charAt(0).toUpperCase()}</div>
-        <div style={styles.name}>{contact.username}</div>
+        <div style={styles.avatar}>{profile?.avatar_png
+          ? <img src={`data:image/png;base64,${profile.avatar_png}`} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: "inherit" }} />
+          : contact.username.charAt(0).toUpperCase()}</div>
+        <div style={styles.name}>{profile?.display_name || contact.username}</div>
+        {profile?.display_name && <p>账号名：{contact.username}</p>}
         <p style={{ overflowWrap: "anywhere" }}>身份：{contact.user_id}</p>
         <label>本机备注 <input maxLength={80} value={remark} disabled={busy} onChange={event => setRemark(event.target.value)} /></label>
         <button disabled={busy || remark === alias} onClick={async () => {

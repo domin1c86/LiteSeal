@@ -10,6 +10,8 @@ const vm = require('node:vm');
 test('main process restricts IPC origins, navigation and packaged assets without opening a GUI', { timeout: 10000 }, async t => {
   const handlers = new Map();
   const userData = await fs.mkdtemp(path.join(os.tmpdir(), 'liteseal-main-test-'));
+  const avatarPath = path.join(userData, 'avatar.png');
+  await fs.writeFile(avatarPath, Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
   t.after(() => fs.rm(userData, { recursive: true, force: true }));
   let protocolHandler, window, preferences, startupError;
   let loaded;
@@ -44,7 +46,8 @@ test('main process restricts IPC origins, navigation and packaged assets without
       close() { this.emit('closed'); }
       async loadURL(url) { assert.equal(url, 'liteseal://app/index.html'); loaded(); }
     },
-    dialog: { showErrorBox(_title, error) { startupError = error; loaded(); } },
+    dialog: { showErrorBox(_title, error) { startupError = error; loaded(); }, async showOpenDialog() { return { canceled: false, filePaths: [avatarPath] }; } },
+    nativeImage: { createFromPath() { return { isEmpty: () => false, resize() { return { toPNG: () => Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]) }; } }; } },
     ipcMain: { handle(name, handler) { handlers.set(name, handler); } },
     protocol: { registerSchemesAsPrivileged() {}, handle(scheme, handler) { assert.equal(scheme, 'liteseal'); protocolHandler = handler; } },
     net: { async fetch() { return new Response('<html></html>', { headers: { 'content-type': 'text/html' } }); } },
@@ -79,6 +82,7 @@ test('main process restricts IPC origins, navigation and packaged assets without
   const handler = handlers.get('liteseal:get_contacts');
   const valid = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
   assert.equal((await handler(valid, {})).ok, true);
+  assert.equal((await handlers.get('liteseal:choose_profile_avatar')(valid, {})).result, Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).toString('base64'));
   assert.equal((await handlers.get('liteseal:stage_clipboard_image')(valid, { peerId: 'bob' })).ok, true);
   const lock = handlers.get('liteseal:lock_app');
   const configure = handlers.get('liteseal:configure_app_lock');
