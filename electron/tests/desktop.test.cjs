@@ -20,15 +20,26 @@ async function start(t, dbPath, keystorePath = path.join(os.tmpdir(), `liteseal-
 test('preload exposes exactly the typed business commands, with error propagation', async () => {
   let exposed;
   let fail = false;
+  const selectedFile = {};
   vm.runInNewContext(await fs.readFile('dist-electron/preload.cjs', 'utf8'), {
     require(name) {
       assert.equal(name, 'electron');
       return { contextBridge: { exposeInMainWorld(key, value) { assert.equal(key, 'desktop'); exposed = value; } },
-        ipcRenderer: { on() {}, async invoke(channel, args) { assert.equal(channel, 'liteseal:get_contacts'); assert.deepEqual(args, {}); return fail ? { ok: false, error: 'test error' } : { ok: true, result: [] }; } } };
+        webUtils: { getPathForFile(file) { return file === selectedFile ? 'C:\\test.png' : ''; } },
+        ipcRenderer: { on() {}, async invoke(channel, args) {
+          if (channel === 'liteseal:stage_attachment_file') {
+            assert.equal(args.peerId, 'bob'); assert.equal(args.path, 'C:\\test.png');
+            return { ok: true, result: { id: 'staged' } };
+          }
+          assert.equal(channel, 'liteseal:get_contacts'); assert.deepEqual(args, {});
+          return fail ? { ok: false, error: 'test error' } : { ok: true, result: [] };
+        } } };
     },
   });
   assert.deepEqual(Object.keys(exposed).sort(), [...commandNames].sort());
   assert.deepEqual(await exposed.get_contacts({}), []);
+  assert.equal((await exposed.stage_attachment_file({ peerId: 'bob', file: selectedFile })).id, 'staged');
+  await assert.rejects(exposed.stage_attachment_file({ peerId: 'bob', file: {} }), /没有本机路径/);
   fail = true;
   await assert.rejects(exposed.get_contacts({}), /test error/);
 });
@@ -54,6 +65,11 @@ test('real Rust process supports crypto, contacts, storage, errors and database 
   assert.equal(await bridge.call('verify_message', { message: plaintext, signature, senderPublicKey: identity.ed25519_pk }), true);
   assert.equal(await bridge.call('verify_message', { message: [1], signature, senderPublicKey: identity.ed25519_pk }), false);
   assert.deepEqual(await bridge.call('add_contact', { userId: 'bob', username: 'Bob', publicKey: identity.public_key, ed25519Pk: identity.ed25519_pk }), { success: true });
+  await assert.rejects(bridge.call('stage_clipboard_image', { peerId: 'bob', encoded: 'invalid' }), /剪贴板图片编码无效/);
+  const staged = await bridge.call('stage_clipboard_image', { peerId: 'bob', encoded: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).toString('base64') });
+  assert.equal(staged.name, 'clipboard-image.png');
+  assert.equal(staged.mime, 'image/png');
+  assert.equal((await bridge.call('list_attachment_tasks', {}))[0].id, staged.id);
   await bridge.call('set_contact_trust', { userId: 'bob', trustState: 'verified' });
   assert.equal((await bridge.call('get_contacts', {}))[0].trust_state, 'verified');
   assert.deepEqual(await bridge.call('get_local_messages', { conversationId: 'dm:alice:bob', limit: 50, offset: 0 }), []);

@@ -11,6 +11,31 @@ export function AttachmentComposer({ peerId, online, onSent }: { peerId: string;
   const alive = useRef(true);
   const reload = () => getDesktopApi().list_attachment_tasks({}).then(rows => { if (alive.current) setTasks(rows.filter(row => row.peer_id === peerId)); });
   useEffect(() => { alive.current = true; void reload().catch(failure => setError(String(failure))); return () => { alive.current = false; cancelled.current = true; }; }, [peerId]);
+  async function stageFile(file: File, pasted = false) {
+    if (busy) return;
+    setBusy(true); setError("");
+    try {
+      if (pasted && file.type.startsWith("image/")) {
+        try { await getDesktopApi().stage_clipboard_image({ peerId }); }
+        catch { await getDesktopApi().stage_attachment_file({ peerId, file }); }
+      } else {
+        await getDesktopApi().stage_attachment_file({ peerId, file });
+      }
+      if (alive.current) await reload();
+    } catch (failure) { if (alive.current) setError(String(failure)); }
+    finally { if (alive.current) setBusy(false); }
+  }
+  useEffect(() => {
+    const paste = (event: ClipboardEvent) => {
+      if (event.target instanceof Element && event.target.closest('[role="dialog"]')) return;
+      const file = event.clipboardData?.files[0];
+      if (!file) return;
+      event.preventDefault();
+      void stageFile(file, true);
+    };
+    window.addEventListener("paste", paste);
+    return () => window.removeEventListener("paste", paste);
+  }, [peerId, busy]);
   async function send(task: AttachmentTask) {
     if (busy) return;
     cancelled.current = false; setBusy(true); setError("");
@@ -28,7 +53,14 @@ export function AttachmentComposer({ peerId, online, onSent }: { peerId: string;
     } catch (failure) { if (alive.current) { setError(String(failure)); await reload().catch(() => {}); } }
     finally { if (alive.current) setBusy(false); }
   }
-  return <section aria-label="发送加密附件" style={{ padding: "6px 24px" }}>
+  return <section aria-label="发送加密附件" style={{ padding: "6px 24px" }} onDragOver={event => {
+    if (event.dataTransfer.types.includes("Files")) event.preventDefault();
+  }} onDrop={event => {
+    if (!event.dataTransfer.files.length) return;
+    event.preventDefault();
+    void stageFile(event.dataTransfer.files[0]);
+  }}>
+    <p>可拖入一个文件，或按 Ctrl+V 粘贴图片及已复制的文件。</p>
     <button disabled={busy} onClick={async () => {
       setBusy(true); setError("");
       try { await getDesktopApi().select_attachment({ peerId }); await reload(); } catch (failure) { if (alive.current) setError(String(failure)); }

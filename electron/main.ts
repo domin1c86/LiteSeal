@@ -1,4 +1,4 @@
-import { app, clipboard, BrowserWindow, dialog, ipcMain, Menu, net, powerMonitor, protocol, session, shell, Tray } from "electron";
+import { app, clipboard, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, powerMonitor, protocol, session, shell, Tray } from "electron";
 import { ChatNotifications } from "./notifications";
 import path from "node:path";
 import fs from "node:fs/promises";
@@ -156,13 +156,38 @@ else {
             await shell.openExternal(releaseUrl);
             return { ok: true, result: null };
           }
-          if (name === "select_attachment") {
+          if (name === "select_attachment" || name === "stage_attachment_file") {
             const peerId = (args as { peerId: string }).peerId;
             if (typeof peerId !== "string" || peerId.length > 128) throw new Error("无效联系人");
-            const selected = await dialog.showOpenDialog(mainWindow, { title: "选择文件（最大 20 MiB）", properties: ["openFile"] });
+            let filePath: string;
+            if (name === "select_attachment") {
+              const selected = await dialog.showOpenDialog(mainWindow, { title: "选择文件（最大 20 MiB）", properties: ["openFile"] });
+              if (locked || generation !== lockGeneration) throw new Error("应用已锁定");
+              if (selected.canceled || !selected.filePaths[0]) return { ok: true, result: null };
+              filePath = selected.filePaths[0];
+            } else {
+              filePath = (args as { path: string }).path;
+              if (typeof filePath !== "string" || !path.isAbsolute(filePath) || filePath.length > 32767) throw new Error("无效文件路径");
+            }
+            const result = await bridge.call("select_attachment", { peerId, path: filePath } as never);
             if (locked || generation !== lockGeneration) throw new Error("应用已锁定");
-            if (selected.canceled || !selected.filePaths[0]) return { ok: true, result: null };
-            const result = await bridge.call("select_attachment", { peerId, path: selected.filePaths[0] } as never);
+            return { ok: true, result };
+          }
+          if (name === "stage_clipboard_image") {
+            const peerId = (args as { peerId: string }).peerId;
+            if (typeof peerId !== "string" || peerId.length > 128) throw new Error("无效联系人");
+            const items = await clipboard.read();
+            const image = items.flatMap(item => item.types.filter(type => type.startsWith("image/")).map(type => ({ item, type })))[0];
+            if (!image) throw new Error("剪贴板中没有图片");
+            const blob = await image.item.getType(image.type);
+            if (!(blob instanceof Blob)) throw new Error("剪贴板图片格式无效");
+            if (blob.size > 11 * 1024 * 1024) throw new Error("剪贴板图片过大，请保存为文件后选择发送");
+            const source = Buffer.from(await blob.arrayBuffer());
+            const picture = image.type === "image/png" ? null : nativeImage.createFromBuffer(source);
+            if (picture?.isEmpty()) throw new Error("剪贴板图片损坏");
+            const bytes = picture ? picture.toPNG() : source;
+            if (bytes.length > 11 * 1024 * 1024) throw new Error("剪贴板图片过大，请保存为文件后选择发送");
+            const result = await bridge.call("stage_clipboard_image", { peerId, encoded: bytes.toString("base64") } as never);
             if (locked || generation !== lockGeneration) throw new Error("应用已锁定");
             return { ok: true, result };
           }

@@ -18,6 +18,8 @@ export interface CommandMap {
   list_account_sessions: { args: {}; result: { id: string; device_id: string; name: string; revoked: boolean; current: boolean; expires_at: string }[] };
   logout_all_sessions: { args: {}; result: void };
   select_attachment: { args: { peerId: string }; result: AttachmentTask | null };
+  stage_attachment_file: { args: { peerId: string; file: File }; result: AttachmentTask };
+  stage_clipboard_image: { args: { peerId: string }; result: AttachmentTask };
   list_attachment_tasks: { args: {}; result: AttachmentTask[] };
   attachment_step: { args: { id: string }; result: AttachmentTask };
   publish_attachment: { args: { id: string }; result: string };
@@ -85,7 +87,7 @@ export const commandNames = [
   "app_lock_state", "lock_app", "unlock_app",
   "submit_reaction", "sync_reactions", "get_reactions",
   "list_contact_requests", "set_contact_policy", "list_account_sessions", "logout_all_sessions",
-  "select_attachment", "list_attachment_tasks", "attachment_step", "publish_attachment", "begin_attachment_download", "export_attachment", "forget_attachment_task", "attachment_cache_stats", "clear_attachment_cache",
+  "select_attachment", "stage_attachment_file", "stage_clipboard_image", "list_attachment_tasks", "attachment_step", "publish_attachment", "begin_attachment_download", "export_attachment", "forget_attachment_task", "attachment_cache_stats", "clear_attachment_cache",
   "get_personal_organizer",
   "save_personal_organizer",
   "get_message_context",

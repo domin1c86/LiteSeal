@@ -102,10 +102,34 @@ fn safe_name(path: &std::path::Path) -> String {
         .to_string()
 }
 pub async fn stage(state: &AppState, path: String, peer_id: String) -> Result<View, String> {
+    let path = std::path::Path::new(&path);
+    let file = std::fs::File::open(path).map_err(|_| "无法读取所选文件")?;
+    if !file.metadata().map_err(|e| e.to_string())?.is_file() {
+        return Err("请选择普通文件".into());
+    }
+    let mut bytes = Vec::new();
+    file.take((LIMIT + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "读取文件失败")?;
+    if bytes.len() > LIMIT {
+        return Err("单文件不能超过 20 MiB".into());
+    }
+    stage_bytes(state, bytes, safe_name(path), peer_id).await
+}
+
+pub async fn stage_bytes(
+    state: &AppState,
+    bytes: Vec<u8>,
+    name: String,
+    peer_id: String,
+) -> Result<View, String> {
     let _guard = GATE
         .get_or_init(|| tokio::sync::Mutex::new(()))
         .lock()
         .await;
+    if bytes.len() > LIMIT {
+        return Err("单文件不能超过 20 MiB".into());
+    }
     let saved = state.identity()?;
     {
         let db = state.client.db.lock().map_err(|e| e.to_string())?;
@@ -124,25 +148,13 @@ pub async fn stage(state: &AppState, path: String, peer_id: String) -> Result<Vi
             return Err("附件缓存上限 256 MiB，请清理已下载缓存或取消待发任务".into());
         }
     }
-    let path = std::path::Path::new(&path);
-    let file = std::fs::File::open(path).map_err(|_| "无法读取所选文件")?;
-    if !file.metadata().map_err(|e| e.to_string())?.is_file() {
-        return Err("请选择普通文件".into());
-    }
-    let mut bytes = Vec::new();
-    file.take((LIMIT + 1) as u64)
-        .read_to_end(&mut bytes)
-        .map_err(|_| "读取文件失败")?;
-    if bytes.len() > LIMIT {
-        return Err("单文件不能超过 20 MiB".into());
-    }
     let mime = media(&bytes).to_string();
     let (ciphertext, key) = crypto::encrypt_attachment(&bytes).map_err(|e| e.to_string())?;
     let id = uuid::Uuid::new_v4().to_string();
     let d = Descriptor {
         version: 1,
         id: id.clone(),
-        name: safe_name(path),
+        name: safe_name(std::path::Path::new(&name)),
         size: bytes.len(),
         mime,
         key,

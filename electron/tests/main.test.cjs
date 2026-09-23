@@ -48,11 +48,12 @@ test('main process restricts IPC origins, navigation and packaged assets without
     ipcMain: { handle(name, handler) { handlers.set(name, handler); } },
     protocol: { registerSchemesAsPrivileged() {}, handle(scheme, handler) { assert.equal(scheme, 'liteseal'); protocolHandler = handler; } },
     net: { async fetch() { return new Response('<html></html>', { headers: { 'content-type': 'text/html' } }); } },
+    clipboard: { async read() { return [{ types: ['image/png'], async getType() { return new Blob([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])]); } }]; } },
     session: { defaultSession: { setPermissionRequestHandler() {}, setPermissionCheckHandler() {}, webRequest: { onHeadersReceived() {} } } },
     powerMonitor: Object.assign(new EventEmitter(), { getSystemIdleTime: () => 0 }),
   };
   vm.runInNewContext(await fs.readFile('dist-electron/main.cjs', 'utf8'), {
-    Buffer, URL, Headers, Response, console, setTimeout, clearTimeout,
+    Blob, Buffer, URL, Headers, Response, console, setTimeout, clearTimeout,
     setInterval: () => ({ unref() {} }),
     process: { platform: process.platform, resourcesPath: '/installed/resources' },
     require(name) {
@@ -78,6 +79,7 @@ test('main process restricts IPC origins, navigation and packaged assets without
   const handler = handlers.get('liteseal:get_contacts');
   const valid = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
   assert.equal((await handler(valid, {})).ok, true);
+  assert.equal((await handlers.get('liteseal:stage_clipboard_image')(valid, { peerId: 'bob' })).ok, true);
   const lock = handlers.get('liteseal:lock_app');
   const configure = handlers.get('liteseal:configure_app_lock');
   const unlock = handlers.get('liteseal:unlock_app');

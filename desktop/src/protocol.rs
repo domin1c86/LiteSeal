@@ -139,6 +139,12 @@ pub enum Command {
         #[serde(rename = "peerId")]
         peer_id: String,
     },
+    #[serde(rename = "stage_clipboard_image")]
+    StageClipboardImage {
+        #[serde(rename = "peerId")]
+        peer_id: String,
+        encoded: String,
+    },
     #[serde(rename = "list_attachment_tasks")]
     ListAttachmentTasks {},
     #[serde(rename = "attachment_step")]
@@ -413,6 +419,27 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
         }
         Command::SelectAttachment { path, peer_id } => {
             serde_json::to_value(commands::attachments::stage(state, path, peer_id).await?)
+        }
+        Command::StageClipboardImage { peer_id, encoded } => {
+            use base64::Engine;
+            if encoded.len() > 15 * 1024 * 1024 {
+                return Err("剪贴板图片过大".into());
+            }
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .map_err(|_| "剪贴板图片编码无效")?;
+            if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+                return Err("剪贴板图片格式无效".into());
+            }
+            serde_json::to_value(
+                commands::attachments::stage_bytes(
+                    state,
+                    bytes,
+                    "clipboard-image.png".into(),
+                    peer_id,
+                )
+                .await?,
+            )
         }
         Command::ListAttachmentTasks {} => {
             serde_json::to_value(commands::attachments::pending(state)?)

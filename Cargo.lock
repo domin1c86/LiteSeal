@@ -1196,6 +1196,7 @@ dependencies = [
 name = "liteseal-desktop"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "dirs",
  "futures-util",
  "liteseal-core",
