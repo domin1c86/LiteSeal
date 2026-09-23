@@ -51,3 +51,4 @@
 - T05 补充原生文件拖入与剪贴板图片/文件入口。原生文件路径仅在 Electron preload 与主进程之间传递；剪贴板图片在内存中转为 PNG 后交给 Rust 加密暂存，最大 PNG 11 MiB。前端/Electron 构建、Clippy、11 项 Electron 和 83 项 Rust 测试通过；实际 Windows 拖入、Ctrl+V 和完整附件网络传输仍待验收。
 - D-08 补充修改账号密码：服务端核验原密码并在同一事务中撤销全部会话，客户端成功后清空本机令牌、保留身份密钥。前端/Electron 构建、Clippy、12 项 Electron 和 83 项 Rust 测试通过；新增的专用 PostgreSQL 用例未执行，当前共 9 项 ignored。真实旧 HTTP/WS/refresh 失效及重登录仍待隔离数据库与双机验收；失去本机密钥仍不可仅凭密码恢复。
 - T07 补充公开资料：PostgreSQL 迁移 7 为用户增加公开昵称和 PNG 头像；资料只向已登录用户读取，头像限 64 KiB、512×512，主进程先将本机图片缩成 128×128 PNG。账号名、联系人备注与验签身份仍分开。前端/Electron 构建、Clippy、12 项 Electron 和 84 项 Rust 测试通过，10 项 PostgreSQL 用例 ignored；公开资料写入、同步与迁移的真实数据库场景待验收。
+- D-08 的失密与换机边界见[账号恢复说明](ACCOUNT_RECOVERY_BOUNDARY.md)：当前修改密码不等于恢复设备密钥，便携加密备份与可信多设备分别留给 T22/T23。
