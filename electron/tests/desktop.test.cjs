@@ -24,7 +24,7 @@ test('preload exposes exactly the typed business commands, with error propagatio
     require(name) {
       assert.equal(name, 'electron');
       return { contextBridge: { exposeInMainWorld(key, value) { assert.equal(key, 'desktop'); exposed = value; } },
-        ipcRenderer: { async invoke(channel, args) { assert.equal(channel, 'liteseal:get_contacts'); assert.deepEqual(args, {}); return fail ? { ok: false, error: 'test error' } : { ok: true, result: [] }; } } };
+        ipcRenderer: { on() {}, async invoke(channel, args) { assert.equal(channel, 'liteseal:get_contacts'); assert.deepEqual(args, {}); return fail ? { ok: false, error: 'test error' } : { ok: true, result: [] }; } } };
     },
   });
   assert.deepEqual(Object.keys(exposed).sort(), [...commandNames].sort());

@@ -3,10 +3,14 @@ const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const { PassThrough } = require('node:stream');
 const fs = require('node:fs/promises');
+const path = require('node:path');
+const os = require('node:os');
 const vm = require('node:vm');
 
 test('main process restricts IPC origins, navigation and packaged assets without opening a GUI', { timeout: 10000 }, async t => {
   const handlers = new Map();
+  const userData = await fs.mkdtemp(path.join(os.tmpdir(), 'liteseal-main-test-'));
+  t.after(() => fs.rm(userData, { recursive: true, force: true }));
   let protocolHandler, window, preferences, startupError;
   let loaded;
   const load = new Promise(resolve => { loaded = resolve; });
@@ -20,7 +24,8 @@ test('main process restricts IPC origins, navigation and packaged assets without
   });
   const app = Object.assign(new EventEmitter(), {
     isPackaged: true, requestSingleInstanceLock: () => true,
-    whenReady: async () => {}, getAppPath: () => process.cwd(), quit: () => {},
+    whenReady: async () => {}, getAppPath: () => process.cwd(), getPath: () => userData,
+    setAppUserModelId() {}, quit: () => {},
   });
   t.after(() => app.emit('before-quit', { preventDefault() {} }));
   const electron = {
@@ -30,10 +35,13 @@ test('main process restricts IPC origins, navigation and packaged assets without
         super(); window = this; preferences = options.webPreferences;
         this.webContents = Object.assign(new EventEmitter(), {
           mainFrame: { url: 'liteseal://app/index.html' },
+          send() {},
           setWindowOpenHandler(handler) { this.openHandler = handler; },
         });
       }
       setMenuBarVisibility() {}
+      isDestroyed() { return false; }
+      close() { this.emit('closed'); }
       async loadURL(url) { assert.equal(url, 'liteseal://app/index.html'); loaded(); }
     },
     dialog: { showErrorBox(_title, error) { startupError = error; loaded(); } },
@@ -41,9 +49,11 @@ test('main process restricts IPC origins, navigation and packaged assets without
     protocol: { registerSchemesAsPrivileged() {}, handle(scheme, handler) { assert.equal(scheme, 'liteseal'); protocolHandler = handler; } },
     net: { async fetch() { return new Response('<html></html>', { headers: { 'content-type': 'text/html' } }); } },
     session: { defaultSession: { setPermissionRequestHandler() {}, setPermissionCheckHandler() {}, webRequest: { onHeadersReceived() {} } } },
+    powerMonitor: Object.assign(new EventEmitter(), { getSystemIdleTime: () => 0 }),
   };
   vm.runInNewContext(await fs.readFile('dist-electron/main.cjs', 'utf8'), {
     Buffer, URL, Headers, Response, console, setTimeout, clearTimeout,
+    setInterval: () => ({ unref() {} }),
     process: { platform: process.platform, resourcesPath: '/installed/resources' },
     require(name) {
       if (name === 'electron') return electron;
@@ -68,6 +78,15 @@ test('main process restricts IPC origins, navigation and packaged assets without
   const handler = handlers.get('liteseal:get_contacts');
   const valid = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
   assert.equal((await handler(valid, {})).ok, true);
+  const lock = handlers.get('liteseal:lock_app');
+  const configure = handlers.get('liteseal:configure_app_lock');
+  const unlock = handlers.get('liteseal:unlock_app');
+  const lockState = handlers.get('liteseal:app_lock_state');
+  assert.equal((await configure(valid, { enabled: true, password: 'test-password' })).ok, true);
+  assert.equal((await lock(valid, {})).ok, true);
+  assert.equal((await lockState(valid, {})).result, true);
+  assert.equal((await handler(valid, {})).ok, false);
+  assert.equal((await unlock(valid, { password: 'test-password' })).ok, false);
   assert.equal((await handler({ ...valid, sender: {} }, {})).ok, false);
   assert.equal((await handler({ ...valid, senderFrame: { url: 'liteseal://app/index.html' } }, {})).ok, false);
   window.webContents.mainFrame.url = 'https://untrusted.example';
