@@ -4,9 +4,11 @@
 
 ## 签名打包
 
-内测仍可运行 `npm run dist:win`。正式包须提供发布证书，将 `LITESEAL_SIGNED_RELEASE=1`，通过受保护环境注入 `CSC_LINK` 和 `CSC_KEY_PASSWORD` 后运行同一命令。启用 `forceCodeSigning`，签名失败必须终止；禁止提交证书、密码或日志中的凭据。使用受信任时间戳服务，由证书持有人维护续期和撤销流程。
+内测仍可运行 `npm run dist:win`。正式包须提供发布证书，将 `LITESEAL_SIGNED_RELEASE=1`，通过受保护环境注入 `CSC_LINK` 和 `CSC_KEY_PASSWORD` 后运行同一命令。缺少凭据时在构建前终止；启用 `forceCodeSigning` 并将 Rust sidecar 纳入 `signExts`。打包完成后 `verify-signed-package.ps1` 检查安装包、应用 EXE 和 Rust sidecar 均为有效签名且证书指纹相同，不合格即失败。禁止提交证书、密码或日志中的凭据；由证书持有人维护时间戳、续期和撤销流程。
 
-打包后对安装 EXE、应用 EXE 和 Rust sidecar 分别运行 `Get-AuthenticodeSignature`，记录签名状态、签发者和文件 SHA256；如 sidecar 未被打包工具签名，发布者必须先用其证书签名该二进制再重新打包。三个签名均有效才可提交人工发布。版本检查只读取固定仓库的正式 Release，不自动下载或执行软件。
+打包后记录三个 EXE 的 SHA256、签名状态和签发者。签名模式如未签上 sidecar，构建必须失败并修复签名配置，不能交付部分签名包。三个签名均有效才可提交人工发布。版本检查只读取固定仓库的正式 Release，不自动下载或执行软件。
+
+2026-09-24 本机 `npm run dist:win` 成功生成未签名 `LiteSeal Setup 0.1.0.exe`，资源校验通过；安装包 SHA256 为 `5D54259AA29FE6DD8B4E5A5C3666945C001B291515424D1C0229E810633F4BB5`。安装包、应用 EXE、Rust sidecar 的 Authenticode 状态均为 `NotSigned`，签名校验脚本按预期拒绝。没有证书、干净 Windows 安装或升级回滚记录；此本地产物不用于发布。
 
 ## 升级前
 

@@ -58,7 +58,8 @@
         }
       ],
       "icon": "electron/icons/icon.svg",
-      "signAndEditExecutable": false
+      "signAndEditExecutable": false,
+      "signExts": ["liteseal-desktop.exe"]
     },
     "nsis": {
       "oneClick": false,
