@@ -265,6 +265,67 @@ pub async fn logout_all(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Deserialize)]
+pub struct ChangePasswordRequest {
+    pub current_password: String,
+    pub new_password: String,
+}
+
+pub async fn change_password(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<ChangePasswordRequest>,
+) -> Result<StatusCode, StatusCode> {
+    let user_id = user_from_bearer(&state, &headers).await?;
+    if !state
+        .db
+        .hit_rate_limit(&format!("change_password:{user_id}"), 5, 60)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
+    {
+        return Err(StatusCode::TOO_MANY_REQUESTS);
+    }
+    let new_hash =
+        service::hash_password(&req.new_password).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let old_hash: String = sqlx::query_scalar("SELECT password_hash FROM users WHERE id=$1")
+        .bind(&user_id)
+        .fetch_one(state.db.pool())
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    if !service::verify_password(&req.current_password, &old_hash) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let mut tx = state
+        .db
+        .pool()
+        .begin()
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let updated = sqlx::query("UPDATE users SET password_hash=$1 WHERE id=$2 AND password_hash=$3")
+        .bind(new_hash)
+        .bind(&user_id)
+        .bind(old_hash)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    if updated.rows_affected() != 1 {
+        return Err(StatusCode::CONFLICT);
+    }
+    sqlx::query("UPDATE sessions SET revoked=true WHERE user_id=$1")
+        .bind(&user_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    tx.commit()
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let _ = state
+        .db
+        .insert_audit_event(Some(&user_id), "change_password")
+        .await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 #[derive(Serialize)]
 pub struct DeviceResponse {
     pub id: String,

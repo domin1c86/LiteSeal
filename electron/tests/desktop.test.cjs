@@ -125,6 +125,32 @@ test('REST bridge preserves invitation, login, refresh and lookup payloads', asy
   assert.equal(received[4].url, '/users/search?q=alice+bob');
 });
 
+test('password change clears local tokens only after server confirmation', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'liteseal-password-test-'));
+  const received = [];
+  const server = http.createServer(async (req, res) => {
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    received.push({ authorization: req.headers.authorization, body: JSON.parse(body) });
+    res.statusCode = JSON.parse(body).current_password === 'correct-old' ? 204 : 403;
+    res.end();
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const bridge = new DesktopBridge(10000);
+  t.after(async () => { await bridge.stop(); await new Promise(resolve => server.close(resolve)); await fs.rm(dir, { recursive: true, force: true }); });
+  await bridge.start(executable, ['--db-path', path.join(dir, 'data.db'), '--keystore-path', path.join(dir, 'keystore.bin')]);
+  const keys = await bridge.call('prepare_identity', {});
+  await bridge.call('save_session', { userId: 'alice', token: 'access-token', refreshToken: 'refresh-token', deviceId: 'device', serverUrl: `http://127.0.0.1:${server.address().port}` });
+  await assert.rejects(bridge.call('change_password', { currentPassword: 'wrong-old', newPassword: 'new-password-123' }), /当前密码错误/);
+  assert.equal((await bridge.call('load_identity', {})).token, 'access-token');
+  await bridge.call('change_password', { currentPassword: 'correct-old', newPassword: 'new-password-123' });
+  const saved = await bridge.call('load_identity', {});
+  assert.equal(saved.token, ''); assert.equal(saved.refresh_token, '');
+  assert.deepEqual(saved.public_key, keys.public_key);
+  assert.equal(received[1].authorization, 'Bearer access-token');
+  assert.equal(received[1].body.new_password, 'new-password-123');
+});
+
 test('Rust stream accepts fragmented requests, rejects unknown commands and exits on EOF', { timeout: 10000 }, async t => {
   const { spawn } = require('node:child_process');
   const { createInterface } = require('node:readline');

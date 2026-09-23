@@ -98,6 +98,10 @@ fn build_router(state: AppState, allowed_origin: HeaderValue) -> Router {
         .route("/auth/refresh", post(auth::handlers::refresh))
         .route("/auth/logout", post(auth::handlers::logout))
         .route("/auth/logout_all", post(auth::handlers::logout_all))
+        .route(
+            "/auth/change_password",
+            post(auth::handlers::change_password),
+        )
         .route("/auth/sessions", get(auth::handlers::list_sessions))
         .route(
             "/devices",

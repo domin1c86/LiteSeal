@@ -26,10 +26,16 @@ async fn parameterized_routes_reach_authentication_instead_of_returning_404() {
         (reqwest::Method::GET, "/users/test-user/devices"),
         (reqwest::Method::DELETE, "/devices/test-device"),
         (reqwest::Method::PUT, "/devices/test-device"),
+        (reqwest::Method::POST, "/auth/change_password"),
     ] {
+        let body = if path == "/auth/change_password" {
+            serde_json::json!({"current_password":"old-password-123","new_password":"new-password-123"})
+        } else {
+            serde_json::json!({ "device_name": "test", "public_key": vec![1; 32], "ed25519_pk": vec![2; 32] })
+        };
         let response = client
             .request(method.clone(), format!("http://{address}{path}"))
-            .json(&serde_json::json!({ "device_name": "test", "public_key": vec![1; 32], "ed25519_pk": vec![2; 32] }))
+            .json(&body)
             .send()
             .await
             .unwrap();
@@ -39,5 +45,86 @@ async fn parameterized_routes_reach_authentication_instead_of_returning_404() {
             "{method} {path}"
         );
     }
+    task.abort();
+}
+
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn changing_password_revokes_access_and_refresh_sessions() {
+    let url = std::env::var("LITESEAL_TEST_DATABASE_URL")
+        .expect("set LITESEAL_TEST_DATABASE_URL to a dedicated test database");
+    let db = Db::connect(&url).await.expect("connect test Postgres");
+    let username = format!("change-password-{}", uuid::Uuid::new_v4());
+    let access = format!("access-{username}");
+    let refresh = format!("refresh-{username}");
+    db.register_user(
+        &username,
+        &auth::service::hash_password("old-password-123").unwrap(),
+        "test device",
+        &[1; 32],
+        &[2; 32],
+        &auth::service::hash_token(&access),
+        &auth::service::hash_token(&refresh),
+    )
+    .await
+    .unwrap();
+    let app = build_router(
+        AppState::new(db.clone()),
+        HeaderValue::from_static("http://localhost:1420"),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        axum::serve(listener, app.into_make_service())
+            .await
+            .unwrap()
+    });
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let endpoint = format!("http://{address}/auth/change_password");
+    let wrong = client
+        .post(&endpoint)
+        .bearer_auth(&access)
+        .json(&serde_json::json!({
+            "current_password":"wrong-password", "new_password":"new-password-123"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(wrong.status(), reqwest::StatusCode::FORBIDDEN);
+    let changed = client
+        .post(&endpoint)
+        .bearer_auth(&access)
+        .json(&serde_json::json!({
+            "current_password":"old-password-123", "new_password":"new-password-123"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(changed.status(), reqwest::StatusCode::NO_CONTENT);
+    let user = db.get_user_by_username(&username).await.unwrap().unwrap();
+    assert!(auth::service::verify_password(
+        "new-password-123",
+        &user.password_hash
+    ));
+    assert!(!auth::service::verify_password(
+        "old-password-123",
+        &user.password_hash
+    ));
+    assert_eq!(
+        db.user_for_access_token(&auth::service::hash_token(&access))
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        db.rotate_refresh_session(
+            &auth::service::hash_token(&refresh),
+            "unused-access",
+            "unused-refresh"
+        )
+        .await
+        .unwrap(),
+        None
+    );
     task.abort();
 }

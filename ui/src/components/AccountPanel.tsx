@@ -11,6 +11,9 @@ export default function AccountPanel({ contacts, onClose, onContactsChanged, onL
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
   const [update, setUpdate] = useState<CommandMap["check_app_update"]["result"] | null>(null);
   const [windowsPassword, setWindowsPassword] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [lockStatus, setLockStatus] = useState("");
   async function refresh() {
     const [policies, active] = await Promise.all([getDesktopApi().list_contact_requests({}), getDesktopApi().list_account_sessions({})]);
@@ -41,6 +44,20 @@ export default function AccountPanel({ contacts, onClose, onContactsChanged, onL
       try { await getDesktopApi().logout_all_sessions({}); onLogout(); }
       catch (failure) { setError(String(failure)); setBusy(false); }
     }}>退出全部会话</button>
+    <h3>修改账号密码</h3>
+    <p>需要当前密码；成功后全部会话立即失效，本机会保留身份密钥和历史并返回登录。密码无法恢复丢失的设备密钥。</p>
+    <input type="password" autoComplete="current-password" aria-label="当前账号密码" value={currentPassword} disabled={busy} onChange={event => setCurrentPassword(event.target.value)} />
+    <input type="password" autoComplete="new-password" aria-label="新账号密码" value={newPassword} disabled={busy} onChange={event => setNewPassword(event.target.value)} />
+    <input type="password" autoComplete="new-password" aria-label="确认新账号密码" value={confirmPassword} disabled={busy} onChange={event => setConfirmPassword(event.target.value)} />
+    <button disabled={busy || !currentPassword || newPassword.length < 8 || newPassword !== confirmPassword} onClick={async () => {
+      setBusy(true); setError("");
+      try {
+        await getDesktopApi().change_password({ currentPassword, newPassword });
+        setCurrentPassword(""); setNewPassword(""); setConfirmPassword("");
+        onLogout();
+      } catch (failure) { setError(String(failure)); }
+      finally { setBusy(false); }
+    }}>验证并修改密码</button>
     <h2>应用锁</h2>
     <p>先验证当前 Windows 账号密码再启用；Windows Hello PIN 不适用于此验证。启用后锁屏、空闲 5 分钟和重启均需解锁。</p>
     <input type="password" autoComplete="off" aria-label="设置应用锁的 Windows 账号密码" value={windowsPassword} onChange={event => setWindowsPassword(event.target.value)} />

@@ -109,3 +109,32 @@ pub async fn logout_all(state: &AppState) -> Result<(), String> {
     saved.refresh_token.clear();
     state.save_identity(saved)
 }
+
+pub async fn change_password(
+    state: &AppState,
+    current_password: String,
+    new_password: String,
+) -> Result<(), String> {
+    let mut saved = state.identity()?;
+    if current_password.is_empty() || new_password.chars().count() < 8 {
+        return Err("当前密码或新密码无效".into());
+    }
+    let change = client()?
+        .post(format!(
+            "{}/auth/change_password",
+            normalize_server_url(&saved.server_url)?
+        ))
+        .bearer_auth(&saved.token)
+        .json(&json!({"current_password":current_password,"new_password":new_password}))
+        .send()
+        .await
+        .map_err(|_| "修改密码失败，网络不可用")?;
+    if change.status() == reqwest::StatusCode::FORBIDDEN {
+        return Err("当前密码错误".into());
+    }
+    response(change).await?;
+    state.client.disconnect().await;
+    saved.token.clear();
+    saved.refresh_token.clear();
+    state.save_identity(saved)
+}

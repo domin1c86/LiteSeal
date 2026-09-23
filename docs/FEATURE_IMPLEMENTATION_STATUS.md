@@ -49,3 +49,4 @@
 - Rust 源码格式已单独整理。测试链接仍提示 LNK4098 库冲突警告，当前通过结果不等于干净 Windows 安装、签名、双机聊天或安全审计通过。
 - `LITESEAL_TEST_DATABASE_URL` 未配置、Docker 服务未运行；T00–T15 的数据库联调与实机场景均未在本次执行，继续保留“待验收”。
 - T05 补充原生文件拖入与剪贴板图片/文件入口。原生文件路径仅在 Electron preload 与主进程之间传递；剪贴板图片在内存中转为 PNG 后交给 Rust 加密暂存，最大 PNG 11 MiB。前端/Electron 构建、Clippy、11 项 Electron 和 83 项 Rust 测试通过；实际 Windows 拖入、Ctrl+V 和完整附件网络传输仍待验收。
+- D-08 补充修改账号密码：服务端核验原密码并在同一事务中撤销全部会话，客户端成功后清空本机令牌、保留身份密钥。前端/Electron 构建、Clippy、12 项 Electron 和 83 项 Rust 测试通过；新增的专用 PostgreSQL 用例未执行，当前共 9 项 ignored。真实旧 HTTP/WS/refresh 失效及重登录仍待隔离数据库与双机验收；失去本机密钥仍不可仅凭密码恢复。

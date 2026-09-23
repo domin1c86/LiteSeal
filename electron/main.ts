@@ -242,7 +242,7 @@ else {
             clipboard.writeText(text);
             return { ok: true, result: null };
           }
-          if (name === "sign_out" || name === "clear_keypair" || name === "logout_all_sessions") notifications.context(null, null);
+          if (name === "sign_out" || name === "clear_keypair" || name === "logout_all_sessions" || name === "change_password") notifications.context(null, null);
           const result = await bridge.call(name, args as never);
           if (locked || generation !== lockGeneration) throw new Error("应用已锁定");
           if (name === "poll_messages") {

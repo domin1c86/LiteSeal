@@ -133,6 +133,13 @@ pub enum Command {
     ListAccountSessions {},
     #[serde(rename = "logout_all_sessions")]
     LogoutAllSessions {},
+    #[serde(rename = "change_password")]
+    ChangePassword {
+        #[serde(rename = "currentPassword")]
+        current_password: String,
+        #[serde(rename = "newPassword")]
+        new_password: String,
+    },
     #[serde(rename = "select_attachment")]
     SelectAttachment {
         path: String,
@@ -417,6 +424,12 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
         Command::LogoutAllSessions {} => {
             serde_json::to_value(commands::account::logout_all(state).await?)
         }
+        Command::ChangePassword {
+            current_password,
+            new_password,
+        } => serde_json::to_value(
+            commands::account::change_password(state, current_password, new_password).await?,
+        ),
         Command::SelectAttachment { path, peer_id } => {
             serde_json::to_value(commands::attachments::stage(state, path, peer_id).await?)
         }
