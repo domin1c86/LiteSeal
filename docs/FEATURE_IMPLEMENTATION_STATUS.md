@@ -41,3 +41,10 @@
 新增 `shared/tests/attachment_reaction_test.rs`，描述篡改/错密钥/截断、空附件和回应签名绑定用例，**未运行**。所有 UI、网络、升级及权限场景见验收模板，均待执行。未使用真实用户数据，没有安装包发布、推送远端或部署。
 
 签名证书、双 Windows 与隔离账号是后续验收环境，不是本轮已获得的结果。不得把源码交付转换成“已验收”，也不在旧开发清单重复宣称通过。
+
+## 2026-09-24 本机复核
+
+- T01–T15 的“源码完成待验收”已记录，本次不重复标记；T00–T15 的复选框仍表示场景验收，尚无勾选依据。后续每项功能须同步更新源码状态、实际执行的验证和未覆盖场景，再按验收结果决定是否勾选。
+- 本机修复了前端 `window.desktop` 可选类型造成的构建失败，并补齐 Electron 测试替身。`npm run build --workspace liteseal-ui`、`npm test`、`cargo fmt --all -- --check`、`cargo clippy --locked --workspace --all-targets -- -D warnings` 均通过；`npm test` 中 11 项 Electron、83 项 Rust 测试通过，8 项需要专用 PostgreSQL 的用例仍为 ignored。
+- Rust 源码格式已单独整理。测试链接仍提示 LNK4098 库冲突警告，当前通过结果不等于干净 Windows 安装、签名、双机聊天或安全审计通过。
+- `LITESEAL_TEST_DATABASE_URL` 未配置、Docker 服务未运行；T00–T15 的数据库联调与实机场景均未在本次执行，继续保留“待验收”。

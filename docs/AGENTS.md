@@ -35,5 +35,6 @@ cargo run -p liteseal-server
 - The relay keeps durable receipts (`beta_receipts`) after ACK deletes ciphertext; message operations find originals through them. Beta accounts are bound to one device: login without the original device and key, device registration and key rotation are refused.
 - `/users/*` lookups require a bearer token. Keep `verify_with_public_key()` rejecting non-64-byte signatures.
 - Current instructions prioritize Windows. Do not run UI interaction tests when the user has excluded them. Commit after completing each requested task.
+- After each feature change, update the source-delivery status and actual verification record in the feature documents. Check an acceptance box only after its stated scenario has been executed and recorded; keep skipped scenarios explicit.
 
 See WINDOWS_TESTING_GUIDE.md for startup and manual acceptance; ELECTRON_ARCHITECTURE.md for lifecycle, compatibility and bridge details.
