@@ -8,6 +8,8 @@
 
 P0/P1 源码与迁移范围、当前本机验证结果见 [功能实现记录](docs/FEATURE_IMPLEMENTATION_STATUS.md)，使用边界见 [日常单聊说明](docs/DAILY_CHAT_GUIDE.md)，安装升级见 [升级与回滚](docs/UPGRADE_AND_ROLLBACK.md)。双机与数据库场景尚未验收；P2/P3 暂缓。
 
+逐项复核结果和剩余 Windows 验收顺序见 [P0/P1 功能复核](docs/P0_P1_REVIEW_2026-09-24.md)。
+
 ## 项目结构
 
 | 目录 | 职责 |
