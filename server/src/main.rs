@@ -1,13 +1,13 @@
-mod auth;
 mod attachments;
-mod contact_policy;
-mod reactions;
+mod auth;
 mod config;
+mod contact_policy;
 mod db;
 #[cfg(test)]
 mod http_tests;
 mod keys;
 mod message_operations;
+mod reactions;
 mod relay;
 #[cfg(test)]
 mod relay_tests;
@@ -33,10 +33,15 @@ async fn main() {
         .await
         .expect("failed to connect to Postgres");
     let mut state = AppState::new(db);
-    let attachment_pool=state.db.pool().clone();
+    let attachment_pool = state.db.pool().clone();
     tokio::spawn(async move {
-        let mut interval=tokio::time::interval(std::time::Duration::from_secs(3600));
-        loop { interval.tick().await; if attachments::cleanup(&attachment_pool).await.is_err(){tracing::warn!("Attachment cleanup deferred");} }
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+        loop {
+            interval.tick().await;
+            if attachments::cleanup(&attachment_pool).await.is_err() {
+                tracing::warn!("Attachment cleanup deferred");
+            }
+        }
     });
     state.invite_codes = std::sync::Arc::new(config.invite_codes);
     let allowed_origin = HeaderValue::from_str(&config.cors_allow_origin)
@@ -65,9 +70,15 @@ fn build_router(state: AppState, allowed_origin: HeaderValue) -> Router {
 
     Router::new()
         .route("/reactions", get(reactions::list).post(reactions::submit))
-        .route("/contact-policy", get(contact_policy::list).post(contact_policy::change))
+        .route(
+            "/contact-policy",
+            get(contact_policy::list).post(contact_policy::change),
+        )
         .route("/attachments", post(attachments::create))
-        .route("/attachments/:id/:part", get(attachments::download).put(attachments::upload))
+        .route(
+            "/attachments/:id/:part",
+            get(attachments::download).put(attachments::upload),
+        )
         .route("/healthz", get(|| async { "ok" }))
         .route(
             "/readyz",

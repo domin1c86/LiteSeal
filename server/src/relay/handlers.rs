@@ -270,8 +270,18 @@ async fn handle_v2_send(
     if stored == StoreOfflineOutcome::QuotaExceeded {
         return Err(("offline_quota_exceeded", "Recipient offline queue is full"));
     }
-    if stored == StoreOfflineOutcome::RequestPending { return Err(("request_pending", "等待对方接受消息请求，原消息将保留以便重试")); }
-    if stored == StoreOfflineOutcome::Blocked { return Err(("recipient_unavailable", "对方当前不接受消息，请保留原消息编号")); }
+    if stored == StoreOfflineOutcome::RequestPending {
+        return Err((
+            "request_pending",
+            "等待对方接受消息请求，原消息将保留以便重试",
+        ));
+    }
+    if stored == StoreOfflineOutcome::Blocked {
+        return Err((
+            "recipient_unavailable",
+            "对方当前不接受消息，请保留原消息编号",
+        ));
+    }
 
     let updates = state
         .db

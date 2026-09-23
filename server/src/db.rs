@@ -377,15 +377,29 @@ impl Db {
             .execute(&mut *transaction)
             .await?;
 
-        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 2))").bind(&msg.recipient_user_id).execute(&mut *transaction).await?;
-        let policy: Option<String> = sqlx::query_scalar("SELECT status FROM contact_policy WHERE user_id=$1 AND peer_id=$2")
-            .bind(&msg.recipient_user_id).bind(&msg.from_user_id).fetch_optional(&mut *transaction).await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 2))")
+            .bind(&msg.recipient_user_id)
+            .execute(&mut *transaction)
+            .await?;
+        let policy: Option<String> =
+            sqlx::query_scalar("SELECT status FROM contact_policy WHERE user_id=$1 AND peer_id=$2")
+                .bind(&msg.recipient_user_id)
+                .bind(&msg.from_user_id)
+                .fetch_optional(&mut *transaction)
+                .await?;
         match policy.as_deref() {
-            Some("accepted") => {},
+            Some("accepted") => {}
             Some("blocked" | "rejected") => return Ok(StoreOfflineOutcome::Blocked),
             _ => {
-                let count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM contact_policy WHERE user_id=$1 AND status='pending'").bind(&msg.recipient_user_id).fetch_one(&mut *transaction).await?;
-                if count<100 { sqlx::query("INSERT INTO contact_policy(user_id,peer_id,status) VALUES($1,$2,'pending') ON CONFLICT DO NOTHING").bind(&msg.recipient_user_id).bind(&msg.from_user_id).execute(&mut *transaction).await?; }
+                let count: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM contact_policy WHERE user_id=$1 AND status='pending'",
+                )
+                .bind(&msg.recipient_user_id)
+                .fetch_one(&mut *transaction)
+                .await?;
+                if count < 100 {
+                    sqlx::query("INSERT INTO contact_policy(user_id,peer_id,status) VALUES($1,$2,'pending') ON CONFLICT DO NOTHING").bind(&msg.recipient_user_id).bind(&msg.from_user_id).execute(&mut *transaction).await?;
+                }
                 transaction.commit().await?;
                 return Ok(StoreOfflineOutcome::RequestPending);
             }
