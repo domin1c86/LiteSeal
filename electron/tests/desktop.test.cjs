@@ -70,6 +70,12 @@ test('real Rust process supports crypto, contacts, storage, errors and database 
   assert.equal(staged.name, 'clipboard-image.png');
   assert.equal(staged.mime, 'image/png');
   assert.equal((await bridge.call('list_attachment_tasks', {}))[0].id, staged.id);
+  const voiceBytes = Buffer.concat([Buffer.from([0x1a, 0x45, 0xdf, 0xa3]), Buffer.from('webmA_OPUSOpusHead')]);
+  await assert.rejects(bridge.call('stage_recorded_audio', { peerId: 'bob', encoded: voiceBytes.toString('base64'), durationMs: 60_001 }), /语音长度或大小超出限制/);
+  await assert.rejects(bridge.call('stage_recorded_audio', { peerId: 'bob', encoded: 'bm90LWF1ZGlv', durationMs: 1200 }), /录音格式、时长或大小无效/);
+  const voice = await bridge.call('stage_recorded_audio', { peerId: 'bob', encoded: voiceBytes.toString('base64'), durationMs: 1200 });
+  assert.equal(voice.mime, 'audio/webm');
+  assert.equal(voice.duration_ms, 1200);
   await bridge.call('set_contact_trust', { userId: 'bob', trustState: 'verified' });
   assert.equal((await bridge.call('get_contacts', {}))[0].trust_state, 'verified');
   assert.deepEqual(await bridge.call('get_local_messages', { conversationId: 'dm:alice:bob', limit: 50, offset: 0 }), []);

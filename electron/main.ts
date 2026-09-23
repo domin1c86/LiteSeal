@@ -75,7 +75,7 @@ else {
     powerMonitor.on("lock-screen", () => { notifications.lock(true); lockApp(); });
     powerMonitor.on("unlock-screen", () => { if (!locked) notifications.lock(false); });
     setInterval(() => { if (powerMonitor.getSystemIdleTime() >= 300) lockApp(); }, 1000).unref();
-    const csp = `default-src 'self'; script-src 'self'${app.isPackaged ? "" : " 'unsafe-inline'"}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'${app.isPackaged ? "" : " ws://127.0.0.1:1420"}; object-src 'none'; base-uri 'none'; frame-src 'none'`;
+    const csp = `default-src 'self'; script-src 'self'${app.isPackaged ? "" : " 'unsafe-inline'"}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' data: blob:; connect-src 'self'${app.isPackaged ? "" : " ws://127.0.0.1:1420"}; object-src 'none'; base-uri 'none'; frame-src 'none'`;
     protocol.handle("liteseal", async request => {
       const url = new URL(request.url);
       if (url.host !== "app" || request.method !== "GET") return new Response(null, { status: 403 });
@@ -94,8 +94,14 @@ else {
         return app.isPackaged ? url.protocol === "liteseal:" && url.host === "app" : url.origin === devUrl;
       } catch { return false; }
     };
-    session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-    session.defaultSession.setPermissionCheckHandler(() => false);
+    session.defaultSession.setPermissionRequestHandler((contents, permission, callback, details) => {
+      callback(permission === "media" && !locked && contents === mainWindow?.webContents
+        && trustedUrl(details.requestingUrl) && "mediaTypes" in details
+        && details.mediaTypes?.length === 1 && details.mediaTypes[0] === "audio");
+    });
+    session.defaultSession.setPermissionCheckHandler((contents, permission, origin, details) =>
+      permission === "media" && !locked && contents === mainWindow?.webContents
+      && details.isMainFrame && details.mediaType === "audio" && trustedUrl(details.requestingUrl ?? origin));
     session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
       callback({ responseHeaders: { ...details.responseHeaders,
         "Content-Security-Policy": [csp],
@@ -191,6 +197,17 @@ else {
             if (locked || generation !== lockGeneration) throw new Error("应用已锁定");
             return { ok: true, result };
           }
+          if (name === "stage_recorded_audio") {
+            const input = args as { peerId: string; encoded: string; durationMs: number };
+            if (typeof input.peerId !== "string" || input.peerId.length > 128
+              || typeof input.encoded !== "string" || input.encoded.length > 15 * 1024 * 1024
+              || !Number.isInteger(input.durationMs) || input.durationMs < 1 || input.durationMs > 60_000) throw new Error("语音长度或大小无效");
+            const bytes = Buffer.from(input.encoded, "base64");
+            if (bytes.length > 11 * 1024 * 1024 || !bytes.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))) throw new Error("录音格式或大小无效");
+            const result = await bridge.call("stage_recorded_audio", input as never);
+            if (locked || generation !== lockGeneration) throw new Error("应用已锁定");
+            return { ok: true, result };
+          }
           if (name === "choose_profile_avatar") {
             const selected = await dialog.showOpenDialog(mainWindow, { title: "选择公开头像", properties: ["openFile"], filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp"] }] });
             if (locked || generation !== lockGeneration) throw new Error("应用已锁定");
@@ -205,11 +222,12 @@ else {
           }
           if (name === "export_attachment" || name === "preview_attachment_task") {
             const pendingId = name === "preview_attachment_task" ? (args as { id: string }).id : undefined;
-            const input = pendingId ? { messageId: "", preview: true } : args as { messageId: string; preview?: boolean };
+            const input = pendingId ? { messageId: "", preview: true, media: "image" as const } : args as { messageId: string; preview?: boolean; media?: "image" | "audio" };
             if (typeof input.messageId !== "string" || input.messageId.length > 128) throw new Error("无效附件消息");
             if (input.preview) {
               const metadata = pendingId ? (await bridge.call("list_attachment_tasks", {})).find(task => task.id === pendingId) : await bridge.call("begin_attachment_download", { messageId: input.messageId });
-              if (!metadata || (!pendingId && metadata.offset !== metadata.total) || metadata.size > 20 * 1024 * 1024) throw new Error("请先完成下载或重新选择文件");
+              if (!metadata || (!pendingId && metadata.offset !== metadata.total) || metadata.size > 20 * 1024 * 1024
+                || (input.media === "audio" && (metadata.mime !== "audio/webm" || !metadata.duration_ms))) throw new Error("请先完成下载或重新选择文件");
               const chunks: Buffer[] = [];
               for (let offset = 0; offset < metadata.size; offset += 1024 * 1024) {
                 const bytes = await bridge.call("export_attachment", { messageId: input.messageId, taskId: pendingId, offset } as never) as unknown as number[];
@@ -220,6 +238,10 @@ else {
               const mime = bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10])) ? "image/png"
                 : bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255 ? "image/jpeg"
                 : bytes.subarray(0,4).toString() === "RIFF" && bytes.subarray(8,12).toString() === "WEBP" ? "image/webp" : null;
+              if (input.media === "audio") {
+                if (!bytes.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3])) || bytes.length > 11 * 1024 * 1024) throw new Error("语音格式或大小不支持");
+                return { ok: true, result: `data:audio/webm;base64,${bytes.toString("base64")}` };
+              }
               if (!mime) throw new Error("不支持此文件的图片预览");
               return { ok: true, result: `data:${mime};base64,${bytes.toString("base64")}` };
             }

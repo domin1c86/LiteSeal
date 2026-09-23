@@ -13,7 +13,7 @@ test('main process restricts IPC origins, navigation and packaged assets without
   const avatarPath = path.join(userData, 'avatar.png');
   await fs.writeFile(avatarPath, Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
   t.after(() => fs.rm(userData, { recursive: true, force: true }));
-  let protocolHandler, window, preferences, startupError;
+  let protocolHandler, window, preferences, startupError, permissionRequest, permissionCheck;
   let loaded;
   const load = new Promise(resolve => { loaded = resolve; });
   const child = new EventEmitter();
@@ -52,7 +52,7 @@ test('main process restricts IPC origins, navigation and packaged assets without
     protocol: { registerSchemesAsPrivileged() {}, handle(scheme, handler) { assert.equal(scheme, 'liteseal'); protocolHandler = handler; } },
     net: { async fetch() { return new Response('<html></html>', { headers: { 'content-type': 'text/html' } }); } },
     clipboard: { async read() { return [{ types: ['image/png'], async getType() { return new Blob([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])]); } }]; } },
-    session: { defaultSession: { setPermissionRequestHandler() {}, setPermissionCheckHandler() {}, webRequest: { onHeadersReceived() {} } } },
+    session: { defaultSession: { setPermissionRequestHandler(handler) { permissionRequest = handler; }, setPermissionCheckHandler(handler) { permissionCheck = handler; }, webRequest: { onHeadersReceived() {} } } },
     powerMonitor: Object.assign(new EventEmitter(), { getSystemIdleTime: () => 0 }),
   };
   vm.runInNewContext(await fs.readFile('dist-electron/main.cjs', 'utf8'), {
@@ -82,6 +82,17 @@ test('main process restricts IPC origins, navigation and packaged assets without
   const handler = handlers.get('liteseal:get_contacts');
   const valid = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
   assert.equal((await handler(valid, {})).ok, true);
+  const permission = (kind, details, contents = window.webContents) => new Promise(resolve => permissionRequest(contents, kind, resolve, details));
+  assert.equal(await permission('media', { requestingUrl: 'liteseal://app/index.html', mediaTypes: ['audio'] }), true);
+  assert.equal(await permission('media', { requestingUrl: 'liteseal://app/index.html', mediaTypes: ['video'] }), false);
+  assert.equal(await permission('media', { requestingUrl: 'https://untrusted.example', mediaTypes: ['audio'] }), false);
+  assert.equal(await permission('media', { requestingUrl: 'liteseal://app/index.html', mediaTypes: ['audio'] }, {}), false);
+  assert.equal(permissionCheck(window.webContents, 'media', 'liteseal://app', { isMainFrame: true, mediaType: 'audio', requestingUrl: 'liteseal://app/index.html' }), true);
+  assert.equal(permissionCheck(window.webContents, 'media', 'liteseal://app', { isMainFrame: false, mediaType: 'audio', requestingUrl: 'liteseal://app/index.html' }), false);
+  assert.equal(permissionCheck(window.webContents, 'media', 'liteseal://app', { isMainFrame: true, mediaType: 'video', requestingUrl: 'liteseal://app/index.html' }), false);
+  assert.equal((await handlers.get('liteseal:stage_recorded_audio')(valid, { peerId: 'bob', encoded: '', durationMs: 1000 })).ok, false);
+  assert.equal((await handlers.get('liteseal:stage_recorded_audio')(valid, { peerId: 'bob', encoded: Buffer.from([0x1a, 0x45, 0xdf, 0xa3]).toString('base64'), durationMs: 60_001 })).ok, false);
+  assert.equal((await handlers.get('liteseal:stage_recorded_audio')(valid, { peerId: 'bob', encoded: Buffer.from([0x1a, 0x45, 0xdf, 0xa3]).toString('base64'), durationMs: 1000 })).ok, true);
   assert.equal((await handlers.get('liteseal:choose_profile_avatar')(valid, {})).result, Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).toString('base64'));
   assert.equal((await handlers.get('liteseal:stage_clipboard_image')(valid, { peerId: 'bob' })).ok, true);
   const lock = handlers.get('liteseal:lock_app');
@@ -91,6 +102,8 @@ test('main process restricts IPC origins, navigation and packaged assets without
   assert.equal((await configure(valid, { enabled: true, password: 'test-password' })).ok, true);
   assert.equal((await lock(valid, {})).ok, true);
   assert.equal((await lockState(valid, {})).result, true);
+  assert.equal(await permission('media', { requestingUrl: 'liteseal://app/index.html', mediaTypes: ['audio'] }), false);
+  assert.equal(permissionCheck(window.webContents, 'media', 'liteseal://app', { isMainFrame: true, mediaType: 'audio', requestingUrl: 'liteseal://app/index.html' }), false);
   assert.equal((await handler(valid, {})).ok, false);
   assert.equal((await unlock(valid, { password: 'test-password' })).ok, false);
   assert.equal((await handler({ ...valid, sender: {} }, {})).ok, false);

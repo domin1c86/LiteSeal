@@ -164,6 +164,14 @@ pub enum Command {
         peer_id: String,
         encoded: String,
     },
+    #[serde(rename = "stage_recorded_audio")]
+    StageRecordedAudio {
+        #[serde(rename = "peerId")]
+        peer_id: String,
+        encoded: String,
+        #[serde(rename = "durationMs")]
+        duration_ms: u32,
+    },
     #[serde(rename = "list_attachment_tasks")]
     ListAttachmentTasks {},
     #[serde(rename = "attachment_step")]
@@ -473,6 +481,23 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
                     peer_id,
                 )
                 .await?,
+            )
+        }
+        Command::StageRecordedAudio {
+            peer_id,
+            encoded,
+            duration_ms,
+        } => {
+            use base64::Engine;
+            if encoded.len() > 15 * 1024 * 1024 || !(1..=60_000).contains(&duration_ms) {
+                return Err("语音长度或大小超出限制".into());
+            }
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .map_err(|_| "语音编码无效")?;
+            serde_json::to_value(
+                commands::attachments::stage_recorded_audio(state, bytes, peer_id, duration_ms)
+                    .await?,
             )
         }
         Command::ListAttachmentTasks {} => {

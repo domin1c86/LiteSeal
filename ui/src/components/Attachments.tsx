@@ -1,6 +1,7 @@
 import { getDesktopApi } from "../lib/desktopApi";
 import { useEffect, useRef, useState } from "react";
 import type { AttachmentTask } from "../../../electron/contracts";
+import { VoiceRecorder } from "./VoiceRecorder";
 
 export function AttachmentComposer({ peerId, online, onSent }: { peerId: string; online: boolean; onSent: () => void }) {
   const [tasks, setTasks] = useState<AttachmentTask[]>([]);
@@ -66,6 +67,7 @@ export function AttachmentComposer({ peerId, online, onSent }: { peerId: string;
       try { await getDesktopApi().select_attachment({ peerId }); await reload(); } catch (failure) { if (alive.current) setError(String(failure)); }
       finally { if (alive.current) setBusy(false); }
     }}>选择文件或图片（20 MiB）</button>
+    <VoiceRecorder key={peerId} peerId={peerId} onStaged={reload} />
     {tasks.map(task => <div key={task.id}>
       <span>{task.name} · {(task.size / 1024).toFixed(1)} KiB</span>
       {task.mime.startsWith("image/") && <button disabled={busy} onClick={async () => {
@@ -83,7 +85,7 @@ export function AttachmentComposer({ peerId, online, onSent }: { peerId: string;
   </section>;
 }
 
-export function AttachmentCard({ messageId, name, image }: { messageId: string; name: string; image: boolean }) {
+export function AttachmentCard({ messageId, name, image, audio }: { messageId: string; name: string; image: boolean; audio: boolean }) {
   const [progress, setProgress] = useState<AttachmentTask | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -91,7 +93,7 @@ export function AttachmentCard({ messageId, name, image }: { messageId: string; 
   const [expanded, setExpanded] = useState(false);
   const cancelled = useRef(false), alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; cancelled.current = true; }; }, []);
-  async function download(show: boolean) {
+  async function download(show: false | "image" | "audio") {
     if (busy) return;
     setBusy(true); setError(""); cancelled.current = false;
     try {
@@ -101,16 +103,18 @@ export function AttachmentCard({ messageId, name, image }: { messageId: string; 
         if (alive.current) setProgress(task);
       }
       if (cancelled.current) return;
-      const result = await getDesktopApi().export_attachment({ messageId, preview: show });
+      const result = await getDesktopApi().export_attachment({ messageId, preview: !!show, media: show || undefined });
       if (alive.current && show) setPreview(result);
     } catch (failure) { if (alive.current) setError(String(failure)); }
     finally { if (alive.current) setBusy(false); }
   }
   return <div>
     <button disabled={busy} onClick={() => void download(false)}>下载并另存为</button>
-    {image && <button disabled={busy} onClick={() => void download(true)}>验证并预览图片</button>}
+    {image && <button disabled={busy} onClick={() => void download("image")}>验证并预览图片</button>}
+    {audio && <button disabled={busy} onClick={() => void download("audio")}>验证并播放语音</button>}
     {busy && <><progress value={progress?.offset ?? 0} max={progress?.total ?? 1} /><button onClick={() => { cancelled.current = true; }}>取消下载</button></>}
-    {preview && <button aria-label="查看大图" onClick={() => setExpanded(value => !value)}><img src={preview} alt={name} decoding="async" style={{ maxWidth: expanded ? "min(70vw, 100%)" : 180, maxHeight: expanded ? "60vh" : 140 }} onError={() => { setPreview(null); setError("图片损坏或格式不支持"); }} onLoad={event => {
+    {preview && audio && <audio controls src={preview} aria-label={name} onError={() => { setPreview(null); setError("语音损坏或格式不支持"); }} />}
+    {preview && image && <button aria-label="查看大图" onClick={() => setExpanded(value => !value)}><img src={preview} alt={name} decoding="async" style={{ maxWidth: expanded ? "min(70vw, 100%)" : 180, maxHeight: expanded ? "60vh" : 140 }} onError={() => { setPreview(null); setError("图片损坏或格式不支持"); }} onLoad={event => {
       if (event.currentTarget.naturalWidth * event.currentTarget.naturalHeight > 40_000_000) { setPreview(null); setError("图片尺寸过大，请另存为后查看"); }
     }} /></button>}
     {preview && <button onClick={() => setPreview(null)}>关闭预览</button>}

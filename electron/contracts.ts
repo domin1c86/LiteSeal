@@ -28,7 +28,8 @@ export interface CommandMap {
   attachment_step: { args: { id: string }; result: AttachmentTask };
   publish_attachment: { args: { id: string }; result: string };
   begin_attachment_download: { args: { messageId: string }; result: AttachmentTask };
-  export_attachment: { args: { messageId: string; preview?: boolean }; result: string | null };
+  export_attachment: { args: { messageId: string; preview?: boolean; media?: "image" | "audio" }; result: string | null };
+  stage_recorded_audio: { args: { peerId: string; encoded: string; durationMs: number }; result: AttachmentTask };
   forget_attachment_task: { args: { id: string }; result: void };
   attachment_cache_stats: { args: {}; result: { cache_bytes: number; database_allocated: number; database_reusable: number; disk_bytes: number; limit: number } };
   clear_attachment_cache: { args: { peerId?: string }; result: number };
@@ -80,7 +81,7 @@ export interface CommandMap {
   clear_downloaded_attachments: { args: {  }; result: number };
 }
 export type CommandName = keyof CommandMap;
-export interface AttachmentTask { id: string; peer_id: string; message_id: string; name: string; size: number; mime: string; offset: number; total: number; direction: string }
+export interface AttachmentTask { id: string; peer_id: string; message_id: string; name: string; size: number; mime: string; duration_ms?: number; offset: number; total: number; direction: string }
 export type DesktopApi = {
   [K in CommandName]: (args: CommandMap[K]["args"]) => Promise<CommandMap[K]["result"]>;
 };
@@ -91,7 +92,7 @@ export const commandNames = [
   "app_lock_state", "lock_app", "unlock_app",
   "submit_reaction", "sync_reactions", "get_reactions",
   "list_contact_requests", "set_contact_policy", "list_account_sessions", "get_public_profile", "update_public_profile", "choose_profile_avatar", "logout_all_sessions", "change_password",
-  "select_attachment", "stage_attachment_file", "stage_clipboard_image", "list_attachment_tasks", "attachment_step", "publish_attachment", "begin_attachment_download", "export_attachment", "forget_attachment_task", "attachment_cache_stats", "clear_attachment_cache",
+  "select_attachment", "stage_attachment_file", "stage_clipboard_image", "stage_recorded_audio", "list_attachment_tasks", "attachment_step", "publish_attachment", "begin_attachment_download", "export_attachment", "forget_attachment_task", "attachment_cache_stats", "clear_attachment_cache",
   "get_personal_organizer",
   "save_personal_organizer",
   "get_message_context",

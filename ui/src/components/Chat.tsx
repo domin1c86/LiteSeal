@@ -469,7 +469,7 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
                 }}>回复 {content.reply.sender}：{content.reply.text}</button>}
                 {!revoked && content.forwarded && <div style={{ fontSize: 12 }}>转发内容（来源由转发者提供）：{content.forwarded.sender}</div>}
                 <span style={styles.messageText}>{revoked ? "此消息已被发送者撤回" : content.text}</span>
-                {!revoked && content.attachment && <AttachmentCard messageId={msg.id} name={content.attachment.name} image={content.attachment.mime.startsWith("image/")} />}
+                {!revoked && content.attachment && <AttachmentCard messageId={msg.id} name={content.attachment.name} image={content.attachment.mime.startsWith("image/")} audio={content.attachment.mime === "audio/webm" && !!content.attachment.durationMs} />}
                 {!revoked && <div aria-label="消息回应">
                   {reactions.filter(item => item.target_id === msg.id).map(item => <span key={item.actor} title={item.actor}>{item.emoji} {item.actor === userId ? "我" : contacts.find(peer => peer.user_id === item.actor)?.username ?? item.actor} </span>)}
                   <select aria-label="回应或撤销回应" disabled={!online || reactionBusy} value={reactions.find(item => item.target_id === msg.id && item.actor === userId)?.emoji ?? ""} onChange={async event => {

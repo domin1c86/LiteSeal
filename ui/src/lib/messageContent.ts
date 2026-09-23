@@ -1,5 +1,5 @@
 export interface MessageReference { messageId: string; sender: string; text: string }
-export interface MessageContent { text: string; reply?: MessageReference; forwarded?: MessageReference; attachment?: { id: string; name: string; size: number; mime: string } }
+export interface MessageContent { text: string; reply?: MessageReference; forwarded?: MessageReference; attachment?: { id: string; name: string; size: number; mime: string; durationMs?: number } }
 const prefix = "\u001eLiteSeal:1:";
 function reference(value: unknown): value is MessageReference {
   if (!value || typeof value !== "object") return false;
@@ -13,7 +13,8 @@ export function decodeContent(value: string): MessageContent {
     try {
       const item = JSON.parse(value.slice("\u001eLiteSeal:2:".length));
       if (item.version === 1 && typeof item.id === "string" && typeof item.name === "string" && typeof item.size === "number" && typeof item.mime === "string") {
-        return { text: `[附件] ${item.name} (${item.size} B)`, attachment: { id: item.id, name: item.name, size: item.size, mime: item.mime } };
+        const durationMs = Number.isInteger(item.duration_ms) && item.duration_ms > 0 && item.duration_ms <= 60_000 ? item.duration_ms : undefined;
+        return { text: durationMs && item.mime === "audio/webm" ? `[语音] ${Math.ceil(durationMs / 1000)} 秒` : `[附件] ${item.name} (${item.size} B)`, attachment: { id: item.id, name: item.name, size: item.size, mime: item.mime, durationMs } };
       }
     } catch { /* Never show unknown attachment internals or key material. */ }
     return { text: "[不支持或损坏的附件消息]" };

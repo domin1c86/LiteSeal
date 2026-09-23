@@ -17,6 +17,8 @@ struct Descriptor {
     name: String,
     size: usize,
     mime: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    duration_ms: Option<u32>,
     key: Vec<u8>,
 }
 #[derive(Serialize)]
@@ -27,6 +29,8 @@ pub struct View {
     name: String,
     size: usize,
     mime: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    duration_ms: Option<u32>,
     offset: i64,
     total: usize,
     direction: String,
@@ -55,6 +59,7 @@ fn view(state: &AppState, item: &AttachmentTransfer) -> Result<View, String> {
         name: d.name,
         size: d.size,
         mime: d.mime,
+        duration_ms: d.duration_ms,
         offset: item.offset,
         total: d.size + 40,
         direction: item.direction.clone(),
@@ -86,9 +91,20 @@ fn media(bytes: &[u8]) -> &'static str {
         "image/jpeg"
     } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
         "image/webp"
+    } else if voice_format(bytes) {
+        "audio/webm"
     } else {
         "application/octet-stream"
     }
+}
+fn voice_format(bytes: &[u8]) -> bool {
+    if !bytes.starts_with(&[0x1a, 0x45, 0xdf, 0xa3]) {
+        return false;
+    }
+    let header = &bytes[..bytes.len().min(4096)];
+    header.windows(4).any(|part| part == b"webm")
+        && header.windows(6).any(|part| part == b"A_OPUS")
+        && header.windows(8).any(|part| part == b"OpusHead")
 }
 fn safe_name(path: &std::path::Path) -> String {
     path.file_name()
@@ -122,6 +138,36 @@ pub async fn stage_bytes(
     bytes: Vec<u8>,
     name: String,
     peer_id: String,
+) -> Result<View, String> {
+    stage_bytes_with_duration(state, bytes, name, peer_id, None).await
+}
+pub async fn stage_recorded_audio(
+    state: &AppState,
+    bytes: Vec<u8>,
+    peer_id: String,
+    duration_ms: u32,
+) -> Result<View, String> {
+    if !(1..=60_000).contains(&duration_ms)
+        || bytes.len() > 11 * 1024 * 1024
+        || media(&bytes) != "audio/webm"
+    {
+        return Err("录音格式、时长或大小无效".into());
+    }
+    stage_bytes_with_duration(
+        state,
+        bytes,
+        "voice-message.webm".into(),
+        peer_id,
+        Some(duration_ms),
+    )
+    .await
+}
+async fn stage_bytes_with_duration(
+    state: &AppState,
+    bytes: Vec<u8>,
+    name: String,
+    peer_id: String,
+    duration_ms: Option<u32>,
 ) -> Result<View, String> {
     let _guard = GATE
         .get_or_init(|| tokio::sync::Mutex::new(()))
@@ -157,6 +203,7 @@ pub async fn stage_bytes(
         name: safe_name(std::path::Path::new(&name)),
         size: bytes.len(),
         mime,
+        duration_ms,
         key,
     };
     let metadata = liteseal_core::chat::encrypt_message(
@@ -419,6 +466,8 @@ fn from_message(state: &AppState, message_id: &str) -> Result<(Descriptor, Strin
         || d.size > LIMIT
         || d.key.len() != 32
         || uuid::Uuid::parse_str(&d.id).is_err()
+        || d.duration_ms
+            .is_some_and(|duration| !(1..=60_000).contains(&duration) || d.mime != "audio/webm")
     {
         return Err("附件版本或大小不支持".into());
     }
@@ -494,8 +543,14 @@ pub fn preview_chunk(
     let (d, _) = from_message(state, &message_id)?;
     let item = load(state, &d.id)?;
     let bytes = crypto::decrypt_attachment(&item.ciphertext, &d.key).map_err(|_| "附件认证失败")?;
-    if bytes.len() != d.size || !media(&bytes).starts_with("image/") || offset > bytes.len() {
-        return Err("图片格式或大小不支持".into());
+    if bytes.len() != d.size
+        || !(media(&bytes).starts_with("image/")
+            || (d.duration_ms.is_some()
+                && d.size <= 11 * 1024 * 1024
+                && media(&bytes) == "audio/webm"))
+        || offset > bytes.len()
+    {
+        return Err("媒体格式或大小不支持".into());
     }
     Ok(bytes[offset..(offset + CHUNK).min(bytes.len())].to_vec())
 }
@@ -522,7 +577,31 @@ pub fn public_plaintext(bytes: Vec<u8>) -> Result<Vec<u8>, String> {
     if let Some(raw) = text.strip_prefix(PREFIX) {
         let d: Descriptor = serde_json::from_str(raw).map_err(|_| "附件描述格式不支持")?;
         // Strip ALL decryption material before crossing the desktop bridge.
-        return Ok(format!("{PREFIX}{}",serde_json::json!({"version":d.version,"id":d.id,"name":d.name,"size":d.size,"mime":d.mime})).into_bytes());
+        return Ok(format!("{PREFIX}{}",serde_json::json!({"version":d.version,"id":d.id,"name":d.name,"size":d.size,"mime":d.mime,"duration_ms":d.duration_ms})).into_bytes());
     }
     Ok(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{media, public_plaintext, Descriptor, PREFIX};
+
+    #[test]
+    fn voice_descriptor_exposes_duration_but_not_key() {
+        let descriptor = Descriptor {
+            version: 1,
+            id: "voice-id".into(),
+            name: "voice-message.webm".into(),
+            size: 256,
+            mime: "audio/webm".into(),
+            duration_ms: Some(1200),
+            key: vec![42; 32],
+        };
+        let plaintext = format!("{PREFIX}{}", serde_json::to_string(&descriptor).unwrap());
+        let visible = String::from_utf8(public_plaintext(plaintext.into_bytes()).unwrap()).unwrap();
+        assert!(visible.contains("\"duration_ms\":1200"));
+        assert!(!visible.contains("\"key\""));
+        assert_eq!(media(b"\x1a\x45\xdf\xa3webmA_OPUSOpusHead"), "audio/webm");
+        assert_eq!(media(b"\x1a\x45\xdf\xa3webm"), "application/octet-stream");
+    }
 }
