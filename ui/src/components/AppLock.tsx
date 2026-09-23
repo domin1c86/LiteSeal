@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { getDesktopApi } from "../lib/desktopApi";
 export default function AppLock({ children }: { children: React.ReactNode }) {
   const [locked, setLocked] = useState(true);
   const [loading, setLoading] = useState(true);
@@ -8,7 +9,9 @@ export default function AppLock({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let active = true;
     const lock = () => { setPassword(""); setLocked(true); };
-    const refresh = () => { void window.desktop.app_lock_state({}).then(value => { if (active) { setLocked(value); setLoading(false); } }).catch(failure => { if (active) setError(String(failure)); }); };
+    // Browser preview has no preload bridge and cannot enable the application lock.
+    if (!window.desktop) { setLocked(false); setLoading(false); return; }
+    const refresh = () => { void getDesktopApi().app_lock_state({}).then(value => { if (active) { setLocked(value); setLoading(false); } }).catch(failure => { if (active) setError(String(failure)); }); };
     refresh(); const timer = setInterval(refresh, 500);
     window.addEventListener("liteseal-app-locked", lock);
     return () => { active = false; clearInterval(timer); window.removeEventListener("liteseal-app-locked", lock); };
@@ -20,7 +23,7 @@ export default function AppLock({ children }: { children: React.ReactNode }) {
     <form onSubmit={async event => {
       event.preventDefault(); if (busy) return; setBusy(true); setError("");
       const secret = password; setPassword("");
-      try { await window.desktop.unlock_app({ password: secret }); setLocked(false); }
+      try { await getDesktopApi().unlock_app({ password: secret }); setLocked(false); }
       catch (failure) { setError(String(failure)); } finally { setBusy(false); }
     }}><input type="password" aria-label="Windows 账号密码" autoComplete="off" value={password} disabled={busy} onChange={event => setPassword(event.target.value)} autoFocus />
     <button disabled={busy || !password}>解锁</button></form>

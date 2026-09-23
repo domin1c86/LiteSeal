@@ -1,3 +1,4 @@
+import { getDesktopApi } from "../lib/desktopApi";
 import { useEffect, useRef, useState } from "react";
 
 export interface Organizer {
@@ -21,7 +22,7 @@ export function useOrganizer(userId?: string) {
     const run = ++generation.current;
     setReady(false); setValue(empty()); setError("");
     if (!userId) return;
-    void window.desktop.get_personal_organizer({}).then(raw => {
+    void getDesktopApi().get_personal_organizer({}).then(raw => {
       const parsed: Organizer = raw ? JSON.parse(raw) : empty();
       if (parsed.version !== 1 || !parsed.aliases || !Array.isArray(parsed.lists) || !Array.isArray(parsed.favorites) || typeof parsed.notes !== "string") throw new Error("本机整理数据格式不支持");
       if (run !== generation.current) return;
@@ -40,7 +41,7 @@ export function useOrganizer(userId?: string) {
     saving.current = true; setBusy(true);
     try {
       const next = change(current.current);
-      await window.desktop.save_personal_organizer({ content: JSON.stringify(next) });
+      await getDesktopApi().save_personal_organizer({ content: JSON.stringify(next) });
       if (run === generation.current) { current.current = next; setValue(next); setError(""); }
     } catch (failure) { if (run === generation.current) setError(String(failure)); throw failure; }
     finally { saving.current = false; if (run === generation.current) setBusy(false); }

@@ -1,3 +1,4 @@
+import { getDesktopApi } from "../lib/desktopApi";
 import { useEffect, useRef, useState } from "react";
 import type { AttachmentTask } from "../../../electron/contracts";
 
@@ -8,7 +9,7 @@ export function AttachmentComposer({ peerId, online, onSent }: { peerId: string;
   const [error, setError] = useState("");
   const cancelled = useRef(false);
   const alive = useRef(true);
-  const reload = () => window.desktop.list_attachment_tasks({}).then(rows => { if (alive.current) setTasks(rows.filter(row => row.peer_id === peerId)); });
+  const reload = () => getDesktopApi().list_attachment_tasks({}).then(rows => { if (alive.current) setTasks(rows.filter(row => row.peer_id === peerId)); });
   useEffect(() => { alive.current = true; void reload().catch(failure => setError(String(failure))); return () => { alive.current = false; cancelled.current = true; }; }, [peerId]);
   async function send(task: AttachmentTask) {
     if (busy) return;
@@ -16,13 +17,13 @@ export function AttachmentComposer({ peerId, online, onSent }: { peerId: string;
     try {
       let current = task;
       while (current.offset < current.total && !cancelled.current) {
-        current = await window.desktop.attachment_step({ id: current.id });
+        current = await getDesktopApi().attachment_step({ id: current.id });
         if (alive.current) setTasks(rows => rows.map(row => row.id === current.id ? current : row));
       }
       if (cancelled.current) return;
-      await window.desktop.publish_attachment({ id: current.id });
+      await getDesktopApi().publish_attachment({ id: current.id });
       // The signed outbox now owns retries. Retain the task until publish succeeds.
-      await window.desktop.forget_attachment_task({ id: current.id });
+      await getDesktopApi().forget_attachment_task({ id: current.id });
       if (alive.current) { await reload(); onSent(); }
     } catch (failure) { if (alive.current) { setError(String(failure)); await reload().catch(() => {}); } }
     finally { if (alive.current) setBusy(false); }
@@ -30,18 +31,18 @@ export function AttachmentComposer({ peerId, online, onSent }: { peerId: string;
   return <section aria-label="发送加密附件" style={{ padding: "6px 24px" }}>
     <button disabled={busy} onClick={async () => {
       setBusy(true); setError("");
-      try { await window.desktop.select_attachment({ peerId }); await reload(); } catch (failure) { if (alive.current) setError(String(failure)); }
+      try { await getDesktopApi().select_attachment({ peerId }); await reload(); } catch (failure) { if (alive.current) setError(String(failure)); }
       finally { if (alive.current) setBusy(false); }
     }}>选择文件或图片（20 MiB）</button>
     {tasks.map(task => <div key={task.id}>
       <span>{task.name} · {(task.size / 1024).toFixed(1)} KiB</span>
       {task.mime.startsWith("image/") && <button disabled={busy} onClick={async () => {
-        setBusy(true); try { const result = await window.desktop.preview_attachment_task({ id: task.id }); if (alive.current) setPreview(result); } catch (failure) { setError(String(failure)); } finally { if (alive.current) setBusy(false); }
+        setBusy(true); try { const result = await getDesktopApi().preview_attachment_task({ id: task.id }); if (alive.current) setPreview(result); } catch (failure) { setError(String(failure)); } finally { if (alive.current) setBusy(false); }
       }}>发送前预览</button>}
       <progress value={task.offset} max={task.total} aria-label="加密附件上传进度" />
       <button disabled={busy || !online} onClick={() => void send(task)}>确认发送 / 继续原任务</button>
       <button disabled={busy} onClick={async () => {
-        try { await window.desktop.forget_attachment_task({ id: task.id }); await reload(); } catch (failure) { setError(String(failure)); }
+        try { await getDesktopApi().forget_attachment_task({ id: task.id }); await reload(); } catch (failure) { setError(String(failure)); }
       }}>取消任务</button>
     </div>)}
     {busy && <button onClick={() => { cancelled.current = true; }}>停止传输（保留任务）</button>}
@@ -62,13 +63,13 @@ export function AttachmentCard({ messageId, name, image }: { messageId: string; 
     if (busy) return;
     setBusy(true); setError(""); cancelled.current = false;
     try {
-      let task = await window.desktop.begin_attachment_download({ messageId });
+      let task = await getDesktopApi().begin_attachment_download({ messageId });
       while (task.offset < task.total && !cancelled.current) {
-        task = await window.desktop.attachment_step({ id: task.id });
+        task = await getDesktopApi().attachment_step({ id: task.id });
         if (alive.current) setProgress(task);
       }
       if (cancelled.current) return;
-      const result = await window.desktop.export_attachment({ messageId, preview: show });
+      const result = await getDesktopApi().export_attachment({ messageId, preview: show });
       if (alive.current && show) setPreview(result);
     } catch (failure) { if (alive.current) setError(String(failure)); }
     finally { if (alive.current) setBusy(false); }

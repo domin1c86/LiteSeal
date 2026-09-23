@@ -1,4 +1,5 @@
 import type { CommandMap, CommandName } from "../../../electron/contracts";
+import { getDesktopApi } from "../lib/desktopApi";
 
 import type {
   RegisterResult,
@@ -15,8 +16,7 @@ import type {
 } from "../types";
 
 async function invoke<K extends CommandName>(name: K, args: CommandMap[K]["args"]): Promise<CommandMap[K]["result"]> {
-  if (!window.desktop) throw new Error("请通过 Electron 桌面应用使用此功能；浏览器仅支持界面预览");
-  const method = window.desktop[name] as (value: CommandMap[K]["args"]) => Promise<CommandMap[K]["result"]>;
+  const method = getDesktopApi()[name] as (value: CommandMap[K]["args"]) => Promise<CommandMap[K]["result"]>;
   return method(args);
 }
 export function useDesktop() {

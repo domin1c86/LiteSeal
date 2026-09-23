@@ -1,3 +1,4 @@
+import { getDesktopApi } from "../lib/desktopApi";
 import { useState, useEffect } from "react";
 import { useDesktop } from "../hooks/useDesktop";
 import type { StorageStats } from "../types";
@@ -25,8 +26,8 @@ export default function StorageManager({ onClose }: StorageManagerProps) {
     useDesktop();
 
   useEffect(() => {
-    void window.desktop.attachment_cache_stats({}).then(setCache).catch(error => setResult(String(error)));
-    void window.desktop.get_contacts({}).then(setPeers).catch(error => setResult(String(error)));
+    void getDesktopApi().attachment_cache_stats({}).then(setCache).catch(error => setResult(String(error)));
+    void getDesktopApi().get_contacts({}).then(setPeers).catch(error => setResult(String(error)));
     getStorageStats()
       .then(setStats)
       .catch((err) => console.error("Failed to load storage stats:", err));
@@ -78,7 +79,7 @@ export default function StorageManager({ onClose }: StorageManagerProps) {
               <select aria-label="附件清理会话" value={peerId} onChange={event => setPeerId(event.target.value)}><option value="">所有会话</option>{peers.map(peer => <option key={peer.user_id} value={peer.user_id}>{peer.username}</option>)}</select>
               <button disabled={clearing} onClick={async () => {
                 setClearing(true);
-                try { const before = cache.cache_bytes; await window.desktop.clear_attachment_cache({ peerId: peerId || undefined }); const after = await window.desktop.attachment_cache_stats({}); setCache(after); setResult(`已移除 ${formatBytes(before - after.cache_bytes)} 密文缓存，文件大小减少 ${formatBytes(Math.max(0, cache.disk_bytes - after.disk_bytes))}。SQLite 空间可复用，文件未必缩小；没有删除正文、链或待发任务。`); }
+                try { const before = cache.cache_bytes; await getDesktopApi().clear_attachment_cache({ peerId: peerId || undefined }); const after = await getDesktopApi().attachment_cache_stats({}); setCache(after); setResult(`已移除 ${formatBytes(before - after.cache_bytes)} 密文缓存，文件大小减少 ${formatBytes(Math.max(0, cache.disk_bytes - after.disk_bytes))}。SQLite 空间可复用，文件未必缩小；没有删除正文、链或待发任务。`); }
                 catch (failure) { setResult(String(failure)); } finally { setClearing(false); }
               }}>清理已下载附件缓存</button>
               <p>远端附件保留 30 天，期限内可重新下载；已过期或无权限会明确报错。待发附件不会被此操作清除。</p>

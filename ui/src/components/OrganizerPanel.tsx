@@ -1,3 +1,4 @@
+import { getDesktopApi } from "../lib/desktopApi";
 import { useEffect, useState } from "react";
 import type { useOrganizer } from "../hooks/useOrganizer";
 import type { Contact } from "../types";
@@ -25,14 +26,14 @@ export default function OrganizerPanel({ organizer, userId, contacts, onClose, o
           if (!peer) throw new Error("缺少联系人");
           const conversationId = dmConversationId(userId, favorite.peerId);
           const [rows, operations] = await Promise.all([
-            window.desktop.get_message_context({ userId, conversationId, messageId: favorite.messageId }),
-            window.desktop.get_message_operations({ conversationId }),
+            getDesktopApi().get_message_context({ userId, conversationId, messageId: favorite.messageId }),
+            getDesktopApi().get_message_operations({ conversationId }),
           ]);
           const row = rows.find(item => item.id === favorite.messageId);
           if (!row || row.local_state === "integrity_failed") throw new Error("原文不可用");
           const operation = latestOperations(operations).get(row.id);
           if (operation?.kind === "revoke") throw new Error("原文已撤回");
-          const bytes = await window.desktop.decrypt_message({ ciphertext: row.ciphertext, senderPublicKey: peer.public_key });
+          const bytes = await getDesktopApi().decrypt_message({ ciphertext: row.ciphertext, senderPublicKey: peer.public_key });
           next[favorite.messageId] = projectMessage(new TextDecoder().decode(new Uint8Array(bytes)), operation).content.text.slice(0, 200);
         } catch { next[favorite.messageId] = "原文不可用（已删除、撤回或无法解密）"; }
         if (!active) return;

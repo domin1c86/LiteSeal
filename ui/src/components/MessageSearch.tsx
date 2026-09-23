@@ -1,3 +1,4 @@
+import { getDesktopApi } from "../lib/desktopApi";
 import { useEffect, useRef, useState } from "react";
 import { latestOperations } from "../lib/messageOperations";
 import { projectMessage } from "../lib/messageProjection";
@@ -40,7 +41,7 @@ export default function MessageSearch({ userId, conversationId, peerKey, operati
       let cursor: Message | undefined;
       try {
         while (run === generation.current) {
-          const rows = await window.desktop.get_local_message_page({ userId, conversationId, limit: 100,
+          const rows = await getDesktopApi().get_local_message_page({ userId, conversationId, limit: 100,
             beforeTimestamp: cursor?.timestamp, beforeId: cursor?.id });
           if (run !== generation.current) return;
           // Bound both plaintext lifetime and outstanding IPC requests.
@@ -51,7 +52,7 @@ export default function MessageSearch({ userId, conversationId, peerKey, operati
             const operation = latest.get(row.id);
             if (operation?.kind === "revoke") continue;
             try {
-              const bytes = await window.desktop.decrypt_message({ ciphertext: row.ciphertext, senderPublicKey: peerKey });
+              const bytes = await getDesktopApi().decrypt_message({ ciphertext: row.ciphertext, senderPublicKey: peerKey });
               if (run !== generation.current) return;
               const { content } = projectMessage(new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(bytes)), operation);
               const text = [content.text, content.reply?.text, content.forwarded?.text].filter(Boolean).join("\n");

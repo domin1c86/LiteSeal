@@ -1,3 +1,4 @@
+import { getDesktopApi } from "../lib/desktopApi";
 import { latestOperations } from "../lib/messageOperations";
 import { deliveryStatusLabel } from "../lib/deliveryStatus";
 import { projectMessage } from "../lib/messageProjection";
@@ -79,7 +80,7 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
 
   useEffect(() => {
     let active = true;
-    if (storageConversationId) void window.desktop.get_reactions({ conversationId: storageConversationId }).then(value => { if (active) setReactions(value); }).catch(error => { if (active) setActionStatus(String(error)); });
+    if (storageConversationId) void getDesktopApi().get_reactions({ conversationId: storageConversationId }).then(value => { if (active) setReactions(value); }).catch(error => { if (active) setActionStatus(String(error)); });
     return () => { active = false; };
   }, [storageConversationId, relayBatch, reactionBusy]);
 
@@ -99,7 +100,7 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
 
   async function locateMessage(messageId: string) {
     if (!storageConversationId) return;
-    const rows = await window.desktop.get_message_context({ userId, conversationId: storageConversationId, messageId });
+    const rows = await getDesktopApi().get_message_context({ userId, conversationId: storageConversationId, messageId });
     const decoded = await decodeHistory(rows);
     if (!alive.current) return;
     setContextMessages(decoded); setHighlightId(messageId);
@@ -473,7 +474,7 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
                   {reactions.filter(item => item.target_id === msg.id).map(item => <span key={item.actor} title={item.actor}>{item.emoji} {item.actor === userId ? "我" : contacts.find(peer => peer.user_id === item.actor)?.username ?? item.actor} </span>)}
                   <select aria-label="回应或撤销回应" disabled={!online || reactionBusy} value={reactions.find(item => item.target_id === msg.id && item.actor === userId)?.emoji ?? ""} onChange={async event => {
                     setReactionBusy(true);
-                    try { await window.desktop.submit_reaction({ targetId: msg.id, peerId: conversationId, emoji: event.target.value }); }
+                    try { await getDesktopApi().submit_reaction({ targetId: msg.id, peerId: conversationId, emoji: event.target.value }); }
                     catch (failure) { if (alive.current) setActionStatus(String(failure)); }
                     finally { if (alive.current) setReactionBusy(false); }
                   }}><option value="">无回应 / 撤销</option>{["👍", "❤️", "😂", "😮", "😢", "🙏"].map(emoji => <option key={emoji} value={emoji}>{emoji}</option>)}</select>

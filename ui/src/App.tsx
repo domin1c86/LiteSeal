@@ -1,3 +1,4 @@
+import { getDesktopApi } from "./lib/desktopApi";
 import { useState, useEffect, useRef } from "react";
 import { useConversationPreferences } from "./hooks/useConversationPreferences";
 import { useOrganizer } from "./hooks/useOrganizer";
@@ -54,16 +55,17 @@ export default function App() {
   const [relayBatch, setRelayBatch] = useState<RelayBatch | null>(null);
 
   useEffect(() => {
+    if (!window.desktop) return;
     let active = true;
     const takeTarget = async () => {
       try {
-        const target = await window.desktop.take_notification_target({});
+        const target = await getDesktopApi().take_notification_target({});
         if (active && target && target.userId === session?.user_id) {
           setActiveConversation(target.peerId); setSidebarTab("chats");
         }
       } catch { /* Notification routing never interrupts the message pump. */ }
     };
-    void window.desktop.set_notification_context({ userId: session?.user_id ?? null,
+    void getDesktopApi().set_notification_context({ userId: session?.user_id ?? null,
       activePeerId: sidebarTab === "chats" ? activeConversation : null }).catch(() => {});
     const timer = setInterval(takeTarget, 500);
     window.addEventListener("focus", takeTarget);
@@ -117,7 +119,7 @@ export default function App() {
         // Deliver the persisted message batch even when operation sync later fails.
         if (result.messages.length || result.events.length) setRelayBatch({ seq: ++seq, ...result });
         const operationChanges = await syncMessageOperations();
-        const reactionChanges = await window.desktop.sync_reactions({});
+        const reactionChanges = await getDesktopApi().sync_reactions({});
         if (!active) return;
         setConnection("online"); setConnectionError(null); failures = 0;
         if (operationChanges || reactionChanges) setRelayBatch({ seq: ++seq, ...result });
@@ -236,7 +238,7 @@ export default function App() {
     <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
       <div role="status" style={{ padding: "6px 12px", background: "var(--surface)", color: "var(--text-muted)", fontSize: 12 }}>
         <button onClick={() => setShowAccount(true)}>账号与消息请求</button>
-        <button onClick={() => { void preferences.flush().then(() => window.desktop.lock_app({})).catch(error => setConnectionError(String(error))); }}>锁定</button>
+        <button onClick={() => { void preferences.flush().then(() => getDesktopApi().lock_app({})).catch(error => setConnectionError(String(error))); }}>锁定</button>
         {{ online: "已连接", connecting: "正在连接…", reconnecting: "正在重连…", offline: "离线", auth_required: "需要重新登录" }[connection]}
         {connectionError && <span> · {connectionError}</span>}
         {connection === "auth_required"

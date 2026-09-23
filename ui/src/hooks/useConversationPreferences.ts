@@ -1,3 +1,4 @@
+import { getDesktopApi } from "../lib/desktopApi";
 import { useEffect, useRef, useState } from "react";
 import { useDesktop } from "./useDesktop";
 import type { Draft } from "../types";
@@ -105,7 +106,7 @@ export function useConversationPreferences(session: Identity | null) {
     if (!session || !ready) return Promise.reject(new Error("会话设置尚未恢复"));
     const userId = session.user_id;
     return enqueue(`muted:${peerId}`, async () => {
-      await window.desktop.set_conversation_muted({ userId, peerId, muted: value });
+      await getDesktopApi().set_conversation_muted({ userId, peerId, muted: value });
       setMuted(previous => ({ ...previous, [peerId]: value }));
     });
   }
