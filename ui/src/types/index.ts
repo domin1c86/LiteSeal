@@ -16,6 +16,7 @@ export interface Message {
   ciphertext: number[];
   signature: number[];
   prev_hash: number[];
+  readable?: boolean;
 }
 
 export interface Conversation {

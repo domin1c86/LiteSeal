@@ -6,5 +6,6 @@ pub mod contacts;
 pub mod keystore;
 pub mod message_operations;
 pub mod reactions;
+pub mod read_receipts;
 pub mod storage;
 pub mod windows_lock;

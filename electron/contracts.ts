@@ -12,6 +12,11 @@ export interface CommandMap {
   unlock_app: { args: { password: string }; result: void };
   submit_reaction: { args: { targetId: string; peerId: string; emoji: string }; result: void };
   sync_reactions: { args: {}; result: number };
+  get_read_receipt_enabled: { args: {}; result: boolean };
+  set_read_receipt_enabled: { args: { enabled: boolean }; result: void };
+  sync_read_receipts: { args: {}; result: number };
+  get_read_receipts: { args: { conversationId: string }; result: string[] };
+  mark_visible_messages: { args: { userId: string; ids: string[] }; result: void };
   get_reactions: { args: { conversationId: string }; result: { target_id: string; actor: string; emoji: string }[] };
   list_contact_requests: { args: {}; result: { peer_id: string; username: string; status: string }[] };
   set_contact_policy: { args: { peerId: string; status: "accepted" | "blocked" | "rejected" | "pending" }; result: void };
@@ -91,6 +96,7 @@ export const commandNames = [
   "check_app_update", "open_app_release",
   "app_lock_state", "lock_app", "unlock_app",
   "submit_reaction", "sync_reactions", "get_reactions",
+  "get_read_receipt_enabled", "set_read_receipt_enabled", "sync_read_receipts", "get_read_receipts", "mark_visible_messages",
   "list_contact_requests", "set_contact_policy", "list_account_sessions", "get_public_profile", "update_public_profile", "choose_profile_avatar", "logout_all_sessions", "change_password",
   "select_attachment", "stage_attachment_file", "stage_clipboard_image", "stage_recorded_audio", "list_attachment_tasks", "attachment_step", "publish_attachment", "begin_attachment_download", "export_attachment", "forget_attachment_task", "attachment_cache_stats", "clear_attachment_cache",
   "get_personal_organizer",

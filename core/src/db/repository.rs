@@ -101,6 +101,20 @@ impl MessageRepository {
                 user_id TEXT NOT NULL,id TEXT NOT NULL,seq INTEGER NOT NULL,body TEXT NOT NULL,
                 PRIMARY KEY(user_id,id)
             );
+            CREATE TABLE IF NOT EXISTS read_receipt_settings (
+                user_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS local_read_receipts (
+                user_id TEXT NOT NULL,id TEXT NOT NULL,seq INTEGER NOT NULL,body TEXT NOT NULL,
+                PRIMARY KEY(user_id,id)
+            );
+            CREATE TABLE IF NOT EXISTS local_receipt_seen (
+                user_id TEXT NOT NULL,message_id TEXT NOT NULL,
+                PRIMARY KEY(user_id,message_id)
+            );
+            CREATE TABLE IF NOT EXISTS local_receipt_migrations (
+                version INTEGER PRIMARY KEY
+            );
             CREATE TABLE IF NOT EXISTS attachment_transfers (
                 id TEXT NOT NULL, user_id TEXT NOT NULL, peer_id TEXT NOT NULL, message_id TEXT NOT NULL,
                 metadata BLOB NOT NULL, ciphertext BLOB NOT NULL, offset INTEGER NOT NULL DEFAULT 0,
@@ -191,6 +205,23 @@ impl MessageRepository {
             "ALTER TABLE contacts ADD COLUMN key_changed INTEGER NOT NULL DEFAULT 0",
             [],
         );
+
+        // Existing local read markers predate opt-in receipts. Treat them as
+        // already seen once so enabling this feature cannot publish old reads.
+        let tx = conn.unchecked_transaction()?;
+        let initialized: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM local_receipt_migrations WHERE version=1)",
+            [],
+            |row| row.get(0),
+        )?;
+        if !initialized {
+            tx.execute("INSERT OR IGNORE INTO local_receipt_seen(user_id,message_id) SELECT user_id,message_id FROM local_message_reads", [])?;
+            tx.execute(
+                "INSERT INTO local_receipt_migrations(version) VALUES(1)",
+                [],
+            )?;
+        }
+        tx.commit()?;
 
         Ok(Self { conn })
     }
@@ -474,6 +505,90 @@ impl MessageRepository {
     }
     pub fn save_reaction(&self, user: &str, id: &str, seq: i64, body: &str) -> Result<(), DbError> {
         self.conn.execute("INSERT INTO local_reactions(user_id,id,seq,body) VALUES(?1,?2,?3,?4) ON CONFLICT(user_id,id) DO UPDATE SET seq=excluded.seq,body=excluded.body",params![user,id,seq,body])?;
+        Ok(())
+    }
+    pub fn read_receipts_enabled(&self, user: &str) -> Result<bool, DbError> {
+        use rusqlite::OptionalExtension;
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT enabled FROM read_receipt_settings WHERE user_id=?1",
+                [user],
+                |row| row.get::<_, bool>(0),
+            )
+            .optional()?
+            .unwrap_or(false))
+    }
+    pub fn set_read_receipts_enabled(&self, user: &str, enabled: bool) -> Result<(), DbError> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("INSERT INTO read_receipt_settings(user_id,enabled) VALUES(?1,?2) ON CONFLICT(user_id) DO UPDATE SET enabled=excluded.enabled", params![user, enabled])?;
+        if !enabled {
+            tx.execute(
+                "DELETE FROM local_read_receipts WHERE user_id=?1 AND seq=0",
+                [user],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+    pub fn read_receipt_rows(&self, user: &str) -> Result<Vec<(i64, String)>, DbError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT seq,body FROM local_read_receipts WHERE user_id=?1 ORDER BY seq")?;
+        let rows = stmt
+            .query_map([user], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+    pub fn save_read_receipt(
+        &self,
+        user: &str,
+        id: &str,
+        seq: i64,
+        body: &str,
+    ) -> Result<(), DbError> {
+        self.conn.execute("INSERT INTO local_read_receipts(user_id,id,seq,body) VALUES(?1,?2,?3,?4) ON CONFLICT(user_id,id) DO UPDATE SET seq=excluded.seq,body=excluded.body", params![user,id,seq,body])?;
+        Ok(())
+    }
+    pub fn new_visible_candidates(
+        &self,
+        user: &str,
+        ids: &[String],
+    ) -> Result<Vec<(String, String, String)>, DbError> {
+        use rusqlite::OptionalExtension;
+        let mut candidates = Vec::new();
+        for id in ids {
+            let row = self.conn.query_row("SELECT id,conversation_id,sender_id FROM messages WHERE id=?2 AND sender_id!=?1 AND local_state!='integrity_failed' AND NOT EXISTS(SELECT 1 FROM local_receipt_seen r WHERE r.user_id=?1 AND r.message_id=messages.id) AND NOT EXISTS(SELECT 1 FROM locally_deleted_messages d WHERE d.user_id=?1 AND d.message_id=messages.id)", params![user,id], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?))).optional()?;
+            if let Some(row) = row {
+                candidates.push(row);
+            }
+        }
+        Ok(candidates)
+    }
+    pub fn mark_visible_with_receipts(
+        &self,
+        user: &str,
+        ids: &[String],
+        events: &std::collections::HashMap<String, (String, String)>,
+    ) -> Result<(), DbError> {
+        let tx = self.conn.unchecked_transaction()?;
+        let enabled: bool = tx.query_row(
+            "SELECT COALESCE((SELECT enabled FROM read_receipt_settings WHERE user_id=?1),0)",
+            [user],
+            |row| row.get(0),
+        )?;
+        for id in ids {
+            let inserted = tx.execute("INSERT OR IGNORE INTO local_receipt_seen(user_id,message_id) SELECT ?1,id FROM messages WHERE id=?2 AND sender_id!=?1 AND local_state!='integrity_failed' AND NOT EXISTS(SELECT 1 FROM locally_deleted_messages d WHERE d.user_id=?1 AND d.message_id=messages.id)", params![user,id])?;
+            if inserted > 0 && enabled {
+                if let Some((event_id, body)) = events.get(id) {
+                    tx.execute(
+                        "INSERT INTO local_read_receipts(user_id,id,seq,body) VALUES(?1,?2,0,?3)",
+                        params![user, event_id, body],
+                    )?;
+                }
+            }
+        }
+        tx.commit()?;
         Ok(())
     }
     pub fn personal_organizer(&self, user_id: &str) -> Result<Vec<u8>, DbError> {

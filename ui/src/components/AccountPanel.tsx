@@ -18,7 +18,9 @@ export default function AccountPanel({ userId, contacts, onClose, onContactsChan
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [lockStatus, setLockStatus] = useState("");
+  const [readReceiptsEnabled, setReadReceiptsEnabled] = useState(false);
   async function refresh() {
+    setReadReceiptsEnabled(await getDesktopApi().get_read_receipt_enabled({}));
     const [policies, active, profile] = await Promise.all([getDesktopApi().list_contact_requests({}), getDesktopApi().list_account_sessions({}), getDesktopApi().get_public_profile({ userId })]);
     setRequests(policies); setSessions(active);
     setProfileName(profile.display_name); setProfileAvatar(profile.avatar_png); setAccountName(profile.username);
@@ -55,6 +57,15 @@ export default function AccountPanel({ userId, contacts, onClose, onContactsChan
     </div>)}
     <p>拒绝或拉黑后停止新消息投递。此前已进入离线队列的密文暂时隔离以保留消息链，重新接受后才恢复；解除拉黑本身不会恢复投递。请求上限为 100 个，拒绝后移出待处理计数。</p>
     <h2>账号会话</h2>
+    <h3>阅读回执</h3>
+    <p>默认关闭。启用后，当前窗口前台实际显示且首次标记已读的单聊消息会向发送者提交签名回执。关闭期间已读的消息不会在重新启用后补发；已经发出的回执无法撤回。设备接收确认仍独立于阅读回执。</p>
+    <label><input type="checkbox" checked={readReceiptsEnabled} disabled={busy} onChange={async event => {
+      const enabled = event.target.checked;
+      setBusy(true); setError("");
+      try { await getDesktopApi().set_read_receipt_enabled({ enabled }); setReadReceiptsEnabled(enabled); }
+      catch (failure) { setError(String(failure)); }
+      finally { setBusy(false); }
+    }} /> 向联系人发送阅读回执</label>
     {sessions.map(session => <p key={session.id}>{session.current ? "当前会话 · " : ""}{session.name} · 设备 {session.device_id} · {session.revoked ? "已撤销" : `访问令牌到期 ${session.expires_at}`}</p>)}
     <button disabled={busy} onClick={async () => {
       if (!window.confirm("退出此账号的全部会话？本机密钥与历史会保留。")) return;

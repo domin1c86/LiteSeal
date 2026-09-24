@@ -59,6 +59,12 @@ test('real Rust process supports crypto, contacts, storage, errors and database 
   const plaintext = Array.from(Buffer.from('Electron 中文消息'));
   await assert.rejects(bridge.call('encrypt_message', { plaintext, recipientPublicKey: identity.public_key }), /No saved keypair/);
   await bridge.call('save_session', { userId: 'alice', token: 'token', refreshToken: 'refresh', deviceId: 'device', serverUrl: 'http://127.0.0.1:9' });
+  assert.equal(await bridge.call('get_read_receipt_enabled', {}), false);
+  await bridge.call('set_read_receipt_enabled', { enabled: true });
+  assert.equal(await bridge.call('get_read_receipt_enabled', {}), true);
+  await assert.rejects(bridge.call('mark_visible_messages', { userId: 'mallory', ids: [] }), /已读账号不匹配/);
+  assert.deepEqual(await bridge.call('get_read_receipts', { conversationId: 'dm:alice:bob' }), []);
+  await bridge.call('set_read_receipt_enabled', { enabled: false });
   const ciphertext = await bridge.call('encrypt_message', { plaintext, recipientPublicKey: identity.public_key });
   assert.deepEqual(await bridge.call('decrypt_message', { ciphertext, senderPublicKey: identity.public_key }), plaintext);
   const signature = await bridge.call('sign_message', { message: plaintext });

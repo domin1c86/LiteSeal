@@ -1,4 +1,4 @@
-use liteseal_shared::{crypto, reaction::Reaction};
+use liteseal_shared::{crypto, reaction::Reaction, read_receipt::ReadReceipt};
 
 #[test]
 fn attachment_authentication_rejects_tampering_wrong_keys_and_truncation() {
@@ -16,6 +16,43 @@ fn attachment_authentication_rejects_tampering_wrong_keys_and_truncation() {
     let (empty, empty_key) = crypto::encrypt_attachment(b"").unwrap();
     assert_eq!(empty.len(), 40);
     assert_eq!(crypto::decrypt_attachment(&empty, &empty_key).unwrap(), b"");
+}
+
+#[test]
+fn read_receipt_signature_binds_reader_target_and_peer() {
+    let keys = crypto::generate_keypair().unwrap();
+    let mut event = ReadReceipt {
+        id: "event".into(),
+        target_id: "original".into(),
+        conversation_id: "dm:alice:bob".into(),
+        reader: "bob".into(),
+        device: "bob-device".into(),
+        peer: "alice".into(),
+        signature: vec![],
+    };
+    event.signature = crypto::sign(&event.signing_bytes(), &keys.ed25519_sk).unwrap();
+    assert!(crypto::verify_with_public_key(
+        &event.signing_bytes(),
+        &event.signature,
+        &keys.ed25519_pk
+    )
+    .unwrap());
+    for field in 0..5 {
+        let mut changed = event.clone();
+        match field {
+            0 => changed.reader = "mallory".into(),
+            1 => changed.target_id = "other".into(),
+            2 => changed.peer = "mallory".into(),
+            3 => changed.device = "other-device".into(),
+            _ => changed.conversation_id = "other".into(),
+        }
+        assert!(!crypto::verify_with_public_key(
+            &changed.signing_bytes(),
+            &changed.signature,
+            &keys.ed25519_pk
+        )
+        .unwrap());
+    }
 }
 
 #[test]

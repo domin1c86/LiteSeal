@@ -119,11 +119,14 @@ export default function App() {
         if (!active) return;
         // Deliver the persisted message batch even when operation sync later fails.
         if (result.messages.length || result.events.length) setRelayBatch({ seq: ++seq, ...result });
-        const operationChanges = await syncMessageOperations();
-        const reactionChanges = await getDesktopApi().sync_reactions({});
+        const auxiliary = await Promise.allSettled([
+          syncMessageOperations(), getDesktopApi().sync_reactions({}), getDesktopApi().sync_read_receipts({}),
+        ]);
         if (!active) return;
-        setConnection("online"); setConnectionError(null); failures = 0;
-        if (operationChanges || reactionChanges) setRelayBatch({ seq: ++seq, ...result });
+        const auxiliaryError = auxiliary.filter(item => item.status === "rejected")
+          .map(item => String(item.reason)).join("；");
+        setConnection("online"); setConnectionError(auxiliaryError ? `附加消息状态同步失败：${auxiliaryError}` : null); failures = 0;
+        if (auxiliary.some(item => item.status === "fulfilled" && item.value > 0)) setRelayBatch({ seq: ++seq, ...result });
         schedule(1000);
       } catch (error) {
         if (!active) return;
@@ -319,6 +322,7 @@ export default function App() {
           }}
           onDraftChange={(draft) => activeConversation ? preferences.saveDraft(activeConversation, draft) : Promise.resolve()}
           online={connection === "online"}
+          obscured={showAddContact || showStorage || showOrganizer || showAccount}
           conversationId={activeConversation}
           userId={session.user_id}
           deviceId={session.deviceId}

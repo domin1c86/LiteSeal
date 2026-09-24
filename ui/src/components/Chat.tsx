@@ -18,6 +18,7 @@ interface ChatProps {
   onForward: (peerId: string, draft: Draft) => Promise<void>;
   onDraftChange: (draft: Draft) => Promise<void>;
   online: boolean;
+  obscured: boolean;
   conversationId: string | null;
   userId: string;
   deviceId: string;
@@ -28,9 +29,10 @@ interface ChatProps {
   onContactsChanged: () => void;
 }
 
-export default function Chat({ onFavorite, draft, onDraftChange, onForward, online, conversationId, userId, deviceId, token, serverUrl, contacts, relayBatch, onContactsChanged }: ChatProps) {
+export default function Chat({ onFavorite, draft, onDraftChange, onForward, online, obscured, conversationId, userId, deviceId, token, serverUrl, contacts, relayBatch, onContactsChanged }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [reactions, setReactions] = useState<{ target_id: string; actor: string; emoji: string }[]>([]);
+  const [readReceipts, setReadReceipts] = useState<string[]>([]);
   const [reactionBusy, setReactionBusy] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchRevision, setSearchRevision] = useState(0);
@@ -52,6 +54,7 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
   const { getMessageOperations, submitMessageOperation, syncMessageOperations } = useDesktop();
   const latest = latestOperations(operations);
   const deletedIds = useRef(new Set<string>());
+  const receiptSeen = useRef(new Set<string>());
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const { deleteMessageLocally, getLocallyDeletedIds } = useDesktop();
@@ -85,6 +88,14 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
   }, [storageConversationId, relayBatch, reactionBusy]);
 
   useEffect(() => {
+    let active = true;
+    if (storageConversationId) void getDesktopApi().get_read_receipts({ conversationId: storageConversationId })
+      .then(value => { if (active) setReadReceipts(value); })
+      .catch(error => { if (active) setActionStatus(String(error)); });
+    return () => { active = false; };
+  }, [storageConversationId, relayBatch]);
+
+  useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f" && conversationId) {
         event.preventDefault(); setSearchOpen(true);
@@ -108,11 +119,11 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
 
   const { markMessagesRead } = useDesktop();
   const [readError, setReadError] = useState<string | null>(null);
+  const [receiptError, setReceiptError] = useState<string | null>(null);
   useEffect(() => {
     if (!operationsLoaded) return;
-    let active = true;
-    let busy = false;
-    const mark = async () => {
+    let active = true, busy = false;
+    const markLoaded = async () => {
       if (busy || !document.hasFocus() || document.visibilityState !== "visible") return;
       busy = true;
       try {
@@ -124,11 +135,53 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
       } catch (error) { if (active) setReadError(`未读状态保存失败：${String(error)}`); }
       finally { busy = false; }
     };
+    void markLoaded();
+    window.addEventListener("focus", markLoaded);
+    document.addEventListener("visibilitychange", markLoaded);
+    return () => { active = false; window.removeEventListener("focus", markLoaded); document.removeEventListener("visibilitychange", markLoaded); };
+  }, [messages, userId, operationsLoaded]);
+
+  useEffect(() => {
+    if (!operationsLoaded) return;
+    let active = true;
+    let busy = false;
+    let rerun = false;
+    const mark = async () => {
+      if (busy) { rerun = true; return; }
+      if (obscured || operationDialog || deleteTarget || forwardDraft || searchOpen
+        || !document.hasFocus() || document.visibilityState !== "visible") return;
+      const area = scrollArea.current;
+      if (!area) return;
+      const boundary = area.getBoundingClientRect();
+      const visible = (contextMessages ?? messages).filter(message => {
+        if (message.sender_id === userId || message.readable === false || message.conversation_id !== storageConversationId
+          || receiptSeen.current.has(message.id)
+          || deletedIds.current.has(message.id) || latest.get(message.id)?.kind === "revoke") return false;
+        const element = document.getElementById(`message-${message.id}`);
+        if (!element || !area.contains(element)) return false;
+        const box = element.getBoundingClientRect();
+        return Math.min(box.bottom, boundary.bottom) - Math.max(box.top, boundary.top) >= Math.min(32, box.height);
+      });
+      if (!visible.length) return;
+      busy = true;
+      try {
+        const ids = visible.map(message => message.id);
+        for (let offset = 0; offset < ids.length && active; offset += 1000) {
+          const batch = ids.slice(offset, offset + 1000);
+          await getDesktopApi().mark_visible_messages({ userId, ids: batch });
+          for (const id of batch) receiptSeen.current.add(id);
+        }
+        if (active) setReceiptError(null);
+      } catch (error) { if (active) setReceiptError(`阅读回执状态保存失败：${String(error)}`); }
+      finally { busy = false; if (rerun && active) { rerun = false; void mark(); } }
+    };
     void mark();
     window.addEventListener("focus", mark);
     document.addEventListener("visibilitychange", mark);
-    return () => { active = false; window.removeEventListener("focus", mark); document.removeEventListener("visibilitychange", mark); };
-  }, [messages, userId, operationsLoaded]);
+    const area = scrollArea.current;
+    area?.addEventListener("scroll", mark, { passive: true });
+    return () => { active = false; window.removeEventListener("focus", mark); document.removeEventListener("visibilitychange", mark); area?.removeEventListener("scroll", mark); };
+  }, [messages, contextMessages, userId, storageConversationId, operations, operationsLoaded, obscured, operationDialog, deleteTarget, forwardDraft, searchOpen]);
 
   useEffect(() => {
     if (!storageConversationId) return;
@@ -139,7 +192,7 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
     return () => { active = false; };
   }, [storageConversationId, relayBatch, contacts, operationRefresh, messages.length]);
 
-  function incomingToMessage(m: IncomingMessage, ciphertext: number[]): Message {
+  function incomingToMessage(m: IncomingMessage, ciphertext: number[], readable = true): Message {
     return {
       id: m.message_id,
       conversation_id: m.conversation_id,
@@ -152,17 +205,18 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
       signature: m.signature,
       prev_hash: m.prev_hash ?? [],
       local_state: m.local_state ?? "received",
+      readable,
     };
   }
 
   async function decodeHistory(items: Message[]) {
     return Promise.all(items.map(async (message) => {
       const peer = contacts.find(contact => contact.user_id === (message.sender_id === userId ? conversationId : message.sender_id));
-      if (!peer) return { ...message, ciphertext: Array.from(new TextEncoder().encode("[sender not in contacts]")) };
+      if (!peer) return { ...message, readable: false, ciphertext: Array.from(new TextEncoder().encode("[sender not in contacts]")) };
       try {
         const plaintext = await decryptMessage(message.ciphertext, peer.public_key);
-        return { ...message, ciphertext: plaintext };
-      } catch { return { ...message, ciphertext: Array.from(new TextEncoder().encode("[encrypted]")) }; }
+        return { ...message, readable: message.local_state !== "integrity_failed", ciphertext: plaintext };
+      } catch { return { ...message, readable: false, ciphertext: Array.from(new TextEncoder().encode("[encrypted]")) }; }
     }));
   }
 
@@ -228,7 +282,7 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
                 if (!sender) {
                   return incomingToMessage(
                     m,
-                    Array.from(new TextEncoder().encode("[sender not in contacts]"))
+                    Array.from(new TextEncoder().encode("[sender not in contacts]")), false
                   );
                 }
 
@@ -236,7 +290,7 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
                 if (m.local_state === "integrity_failed") {
                   return incomingToMessage(
                     m,
-                    Array.from(new TextEncoder().encode("[integrity check failed]"))
+                    Array.from(new TextEncoder().encode("[integrity check failed]")), false
                   );
                 }
 
@@ -246,7 +300,7 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
                 } catch {
                   return incomingToMessage(
                     m,
-                    Array.from(new TextEncoder().encode("[decryption failed]"))
+                    Array.from(new TextEncoder().encode("[decryption failed]")), false
                   );
                 }
               })
@@ -499,6 +553,7 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
                     minute: "2-digit",
                   })}
                   {isMine && msg.local_state ? ` · ${deliveryStatusLabel(msg.local_state)}` : ""}
+                  {isMine && !revoked && readReceipts.includes(msg.id) ? " · 对方已读" : ""}
                   {isMine && ["failed", "pending"].includes(msg.local_state ?? "") && (
                     <button disabled={!online || sending} onClick={async () => {
                       setSending(true);
@@ -573,6 +628,7 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
         <button disabled={sending || !!draft.messageId} onClick={() => { void onDraftChange({ ...draft, reply: undefined, forwarded: undefined }).catch(error => setActionStatus(String(error))); }}>移除引用/转发标记</button>
       </div>}
       {readError && <p role="alert">{readError}</p>}
+      {receiptError && <p role="alert">{receiptError}</p>}
       {sendError && <div style={styles.sendError}>{sendError}</div>}
       {draft.messageId && <div style={styles.sendError}>原消息内容已保留，重试沿用同一编号。
         <button disabled={sending} onClick={() => { void onDraftChange({ text: "" }).catch(() => {}); }}>保留已提交消息，另写一条</button>

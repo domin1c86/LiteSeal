@@ -116,6 +116,23 @@ pub enum Command {
     },
     #[serde(rename = "sync_reactions")]
     SyncReactions {},
+    #[serde(rename = "get_read_receipt_enabled")]
+    GetReadReceiptEnabled {},
+    #[serde(rename = "set_read_receipt_enabled")]
+    SetReadReceiptEnabled { enabled: bool },
+    #[serde(rename = "sync_read_receipts")]
+    SyncReadReceipts {},
+    #[serde(rename = "get_read_receipts")]
+    GetReadReceipts {
+        #[serde(rename = "conversationId")]
+        conversation_id: String,
+    },
+    #[serde(rename = "mark_visible_messages")]
+    MarkVisibleMessages {
+        #[serde(rename = "userId")]
+        user_id: String,
+        ids: Vec<String>,
+    },
     #[serde(rename = "get_reactions")]
     GetReactions {
         #[serde(rename = "conversationId")]
@@ -429,6 +446,24 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
             commands::reactions::submit(state, target_id, peer_id, emoji).await?,
         ),
         Command::SyncReactions {} => serde_json::to_value(commands::reactions::sync(state).await?),
+        Command::GetReadReceiptEnabled {} => {
+            serde_json::to_value(commands::read_receipts::enabled(state)?)
+        }
+        Command::SetReadReceiptEnabled { enabled } => {
+            serde_json::to_value(commands::read_receipts::set_enabled(state, enabled).await?)
+        }
+        Command::SyncReadReceipts {} => {
+            serde_json::to_value(commands::read_receipts::sync(state).await?)
+        }
+        Command::GetReadReceipts { conversation_id } => {
+            serde_json::to_value(commands::read_receipts::views(state, conversation_id)?)
+        }
+        Command::MarkVisibleMessages { user_id, ids } => {
+            if ids.len() > 1000 {
+                return Err("Too many message ids".into());
+            }
+            serde_json::to_value(commands::read_receipts::mark_visible(state, user_id, ids).await?)
+        }
         Command::GetReactions { conversation_id } => {
             serde_json::to_value(commands::reactions::views(state, conversation_id)?)
         }

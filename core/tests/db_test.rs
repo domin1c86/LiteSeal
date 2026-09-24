@@ -2,6 +2,98 @@ use liteseal_core::db::models::{
     AttachmentModel, ContactModel, ConversationModel, DeviceModel, MessageModel,
 };
 use liteseal_core::db::repository::MessageRepository;
+use std::collections::HashMap;
+
+#[test]
+fn visible_read_receipts_do_not_backfill_when_enabled_later() {
+    let repo = MessageRepository::new(":memory:").unwrap();
+    let message = |id: &str| MessageModel {
+        id: id.into(),
+        conversation_id: "dm:alice:bob".into(),
+        sender_id: "bob".into(),
+        sender_device_id: "bob-device".into(),
+        sender_seq: 1,
+        timestamp: 1,
+        message_type: "text".into(),
+        local_state: "received".into(),
+        expire_at: None,
+        ciphertext: vec![1],
+        signature: vec![],
+        prev_hash: vec![],
+    };
+    repo.insert_message(&message("first")).unwrap();
+    repo.insert_message(&message("second")).unwrap();
+    assert!(!repo.read_receipts_enabled("alice").unwrap());
+    let first = vec!["first".to_string()];
+    repo.mark_visible_with_receipts("alice", &first, &HashMap::new())
+        .unwrap();
+    repo.set_read_receipts_enabled("alice", true).unwrap();
+    assert!(repo
+        .new_visible_candidates("alice", &first)
+        .unwrap()
+        .is_empty());
+    let mut events = HashMap::new();
+    events.insert("first".into(), ("first-event".into(), "first-body".into()));
+    repo.mark_visible_with_receipts("alice", &first, &events)
+        .unwrap();
+    assert!(repo.read_receipt_rows("alice").unwrap().is_empty());
+    let second = vec!["second".to_string()];
+    events.insert(
+        "second".into(),
+        ("second-event".into(), "second-body".into()),
+    );
+    repo.mark_visible_with_receipts("alice", &second, &events)
+        .unwrap();
+    repo.mark_visible_with_receipts("alice", &second, &events)
+        .unwrap();
+    assert_eq!(
+        repo.read_receipt_rows("alice").unwrap(),
+        vec![(0, "second-body".into())]
+    );
+    repo.set_read_receipts_enabled("alice", false).unwrap();
+    assert!(repo.read_receipt_rows("alice").unwrap().is_empty());
+}
+
+#[test]
+fn existing_local_reads_are_seen_once_during_upgrade() {
+    let dir = std::env::temp_dir().join(format!("liteseal-read-upgrade-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&dir).unwrap();
+    let path = dir.join("data.db");
+    let path_string = path.to_str().unwrap();
+    {
+        let repo = MessageRepository::new(path_string).unwrap();
+        repo.insert_message(&MessageModel {
+            id: "old-message".into(),
+            conversation_id: "dm:alice:bob".into(),
+            sender_id: "bob".into(),
+            sender_device_id: "bob-device".into(),
+            sender_seq: 1,
+            timestamp: 1,
+            message_type: "text".into(),
+            local_state: "received".into(),
+            expire_at: None,
+            ciphertext: vec![1],
+            signature: vec![],
+            prev_hash: vec![],
+        })
+        .unwrap();
+        repo.mark_messages_read("alice", &["old-message".into()])
+            .unwrap();
+    }
+    {
+        let db = rusqlite::Connection::open(&path).unwrap();
+        db.execute("DELETE FROM local_receipt_migrations", [])
+            .unwrap();
+        db.execute("DELETE FROM local_receipt_seen", []).unwrap();
+    }
+    let upgraded = MessageRepository::new(path_string).unwrap();
+    assert!(upgraded
+        .new_visible_candidates("alice", &["old-message".into()])
+        .unwrap()
+        .is_empty());
+    drop(upgraded);
+    std::fs::remove_dir_all(dir).unwrap();
+}
 
 #[test]
 fn test_insert_and_get_message() {

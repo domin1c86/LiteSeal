@@ -29,11 +29,18 @@ async fn parameterized_routes_reach_authentication_instead_of_returning_404() {
         (reqwest::Method::POST, "/auth/change_password"),
         (reqwest::Method::GET, "/users/test-user/profile"),
         (reqwest::Method::PUT, "/users/me/profile"),
+        (
+            reqwest::Method::GET,
+            "/read-receipts?device_id=test-device&after=0",
+        ),
+        (reqwest::Method::POST, "/read-receipts"),
     ] {
         let body = if path == "/auth/change_password" {
             serde_json::json!({"current_password":"old-password-123","new_password":"new-password-123"})
         } else if path == "/users/me/profile" {
             serde_json::json!({"display_name":"Test","avatar_png":null})
+        } else if path == "/read-receipts" {
+            serde_json::json!({"id":"event","target_id":"message","conversation_id":"dm:alice:bob","reader":"bob","device":"test-device","peer":"alice","signature":vec![0;64]})
         } else {
             serde_json::json!({ "device_name": "test", "public_key": vec![1; 32], "ed25519_pk": vec![2; 32] })
         };

@@ -9,6 +9,7 @@ mod keys;
 mod message_operations;
 mod profile;
 mod reactions;
+mod read_receipts;
 mod relay;
 #[cfg(test)]
 mod relay_tests;
@@ -71,6 +72,10 @@ fn build_router(state: AppState, allowed_origin: HeaderValue) -> Router {
 
     Router::new()
         .route("/reactions", get(reactions::list).post(reactions::submit))
+        .route(
+            "/read-receipts",
+            get(read_receipts::list).post(read_receipts::submit),
+        )
         .route("/users/me/profile", axum::routing::put(profile::update))
         .route("/users/:user_id/profile", get(profile::get))
         .route(

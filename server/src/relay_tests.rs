@@ -4,7 +4,104 @@ use futures_util::{SinkExt, StreamExt};
 use liteseal_shared::{
     crypto,
     protocol::{ClientMessage, ServerMessage, SignedEnvelopeV2, PROTOCOL_V2},
+    read_receipt::{ReadReceipt, ReadReceiptDelivery},
 };
+
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn only_recipient_can_submit_idempotent_signed_read_receipt() {
+    let server = TestServer::start().await;
+    let alice = server.register().await;
+    let bob = server.register().await;
+    let mut sender = server.connect(&alice).await;
+    let mut recipient = server.connect(&bob).await;
+    let original = envelope(&alice, &bob);
+    send(
+        &mut sender,
+        ClientMessage::SendV2 {
+            envelopes: vec![original.clone()],
+        },
+    )
+    .await;
+    let _ = receive(&mut sender).await;
+    let _ = receive(&mut recipient).await;
+    send(
+        &mut recipient,
+        ClientMessage::AckV2 {
+            message_id: original.message_id.clone(),
+            outcome: Default::default(),
+        },
+    )
+    .await;
+    let _ = receive(&mut sender).await;
+    let mut receipt = ReadReceipt {
+        id: uuid::Uuid::new_v4().to_string(),
+        target_id: original.message_id.clone(),
+        conversation_id: original.conversation_id.clone(),
+        reader: bob.user_id.clone(),
+        device: bob.device_id.clone(),
+        peer: alice.user_id.clone(),
+        signature: Vec::new(),
+    };
+    receipt.signature = crypto::sign(&receipt.signing_bytes(), &bob.keys.ed25519_sk).unwrap();
+    let endpoint = format!("{}/read-receipts", server.url);
+    let client = http_client();
+    let spoof = client
+        .post(&endpoint)
+        .bearer_auth(&alice.token)
+        .json(&receipt)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(spoof.status(), reqwest::StatusCode::UNAUTHORIZED);
+    let accepted = client
+        .post(&endpoint)
+        .bearer_auth(&bob.token)
+        .json(&receipt)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(accepted.status(), reqwest::StatusCode::OK);
+    let first: ReadReceiptDelivery = accepted.json().await.unwrap();
+    let retry = client
+        .post(&endpoint)
+        .bearer_auth(&bob.token)
+        .json(&receipt)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(retry.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        retry.json::<ReadReceiptDelivery>().await.unwrap().seq,
+        first.seq
+    );
+    let listed = client
+        .get(&endpoint)
+        .bearer_auth(&alice.token)
+        .query(&[("device_id", &alice.device_id), ("after", &"0".to_string())])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(listed.status(), reqwest::StatusCode::OK);
+    assert!(listed
+        .json::<Vec<ReadReceiptDelivery>>()
+        .await
+        .unwrap()
+        .iter()
+        .any(|entry| entry.event.id == receipt.id));
+    let mut forged = receipt.clone();
+    forged.id = uuid::Uuid::new_v4().to_string();
+    forged.target_id = uuid::Uuid::new_v4().to_string();
+    forged.signature = crypto::sign(&forged.signing_bytes(), &bob.keys.ed25519_sk).unwrap();
+    let denied = client
+        .post(&endpoint)
+        .bearer_auth(&bob.token)
+        .json(&forged)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), reqwest::StatusCode::CONFLICT);
+}
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 
 type Socket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
