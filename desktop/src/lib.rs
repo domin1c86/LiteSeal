@@ -10,6 +10,7 @@ pub struct AppState {
     keystore_path: Option<PathBuf>,
     identity: Mutex<Option<KeystoreData>>,
     pending_keys: Mutex<Option<KeystoreData>>,
+    pub(crate) scheduled_tick: Mutex<Option<(String, i64)>>,
 }
 
 impl AppState {
@@ -25,6 +26,7 @@ impl AppState {
             keystore_path,
             identity: Mutex::new(None),
             pending_keys: Mutex::new(None),
+            scheduled_tick: Mutex::new(None),
         })
     }
 

@@ -3,6 +3,12 @@ import type { RegisterResult, ConnectResult, SendMessageResult, PollMessagesResu
 } from "../ui/src/types";
 
 export interface CommandMap {
+  save_scheduled_message: { args: { id?: string; peerId: string; text: string; dueAt: number }; result: ScheduledTask };
+  list_scheduled_messages: { args: {}; result: ScheduledTask[] };
+  cancel_scheduled_message: { args: { id: string; removeSubmitted?: boolean }; result: void };
+  send_scheduled_now: { args: { id: string }; result: ScheduledTask };
+  process_scheduled_messages: { args: {}; result: number };
+  suspend_scheduled_messages: { args: {}; result: void };
   configure_app_lock: { args: { enabled: boolean; password: string }; result: void };
   preview_attachment_task: { args: { id: string }; result: string };
   check_app_update: { args: {}; result: { current: string; latest: string; available: boolean } };
@@ -89,11 +95,13 @@ export interface CommandMap {
   clear_downloaded_attachments: { args: {  }; result: number };
 }
 export type CommandName = keyof CommandMap;
+export interface ScheduledTask { id: string; peer_id: string; due_at: number; text: string; state: string; error: string; sealed: boolean }
 export interface AttachmentTask { id: string; peer_id: string; message_id: string; name: string; size: number; mime: string; duration_ms?: number; offset: number; total: number; direction: string }
 export type DesktopApi = {
   [K in CommandName]: (args: CommandMap[K]["args"]) => Promise<CommandMap[K]["result"]>;
 };
 export const commandNames = [
+  "save_scheduled_message", "list_scheduled_messages", "cancel_scheduled_message", "send_scheduled_now", "process_scheduled_messages", "suspend_scheduled_messages",
   "configure_app_lock",
   "preview_attachment_task",
   "check_app_update", "open_app_release",

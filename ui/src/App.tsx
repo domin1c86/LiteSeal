@@ -55,8 +55,27 @@ export default function App() {
   const connectionWork = useRef<Promise<void>>(Promise.resolve());
   const [relayBatch, setRelayBatch] = useState<RelayBatch | null>(null);
   const [typingEnabled, setTypingEnabled] = useState(false);
+  const [scheduledRevision, setScheduledRevision] = useState(0);
+  const [scheduledError, setScheduledError] = useState<string | null>(null);
+  const [scheduledAttention, setScheduledAttention] = useState<string[]>([]);
 
   useEffect(() => {
+    if (!session) return;
+    let active = true;
+    async function refresh() {
+      try {
+        const tasks = await getDesktopApi().list_scheduled_messages({});
+        if (active) { setScheduledAttention([...new Set(tasks.filter(task=>["missed","failed","needs_retry"].includes(task.state)).map(task=>task.peer_id))]); setScheduledError(null); }
+      } catch (error) { if (active) setScheduledError(String(error)); }
+    }
+    const changed=()=>{setScheduledRevision(value=>value+1);void refresh();};
+    void refresh();const timer=setInterval(refresh,10000);
+    window.addEventListener("liteseal-scheduled-changed",changed);
+    return () => { active=false;clearInterval(timer);window.removeEventListener("liteseal-scheduled-changed",changed); };
+  }, [session?.user_id, session?.deviceId]);
+
+  useEffect(() => {
+    setScheduledAttention([]); setScheduledError(null);
     if (!session?.user_id) { setTypingEnabled(false); return; }
     let active = true;
     void getDesktopApi().get_typing_enabled({}).then(value => { if (active) setTypingEnabled(value); })
@@ -266,6 +285,8 @@ export default function App() {
         <button onClick={() => { void preferences.flush().then(() => getDesktopApi().lock_app({})).catch(error => setConnectionError(String(error))); }}>锁定</button>
         {{ online: "已连接", connecting: "正在连接…", reconnecting: "正在重连…", offline: "离线", auth_required: "需要重新登录" }[connection]}
         {connectionError && <span> · {connectionError}</span>}
+        {scheduledError && <span role="alert"> · 定时任务检查失败：{scheduledError}</span>}
+        {!!scheduledAttention.length && <span role="status"> · 定时任务待处理：{scheduledAttention.map(peer=><button key={peer} onClick={()=>{setActiveConversation(peer);setSidebarTab("chats");}}>{contacts.find(contact=>contact.user_id===peer)?.username ?? peer.slice(0,8)}</button>)}</span>}
         {connection === "auth_required"
           ? <button onClick={() => { void preferences.flush().then(() => setSession(null)).catch(() => {}); }}>重新登录</button>
           : connection !== "online" && <button onClick={() => setRetry(value => value + 1)}>立即重连</button>}
@@ -332,6 +353,7 @@ export default function App() {
           onDraftChange={(draft) => activeConversation ? preferences.saveDraft(activeConversation, draft) : Promise.resolve()}
           online={connection === "online"}
           typingEnabled={typingEnabled}
+          scheduledRevision={scheduledRevision}
           obscured={showAddContact || showStorage || showOrganizer || showAccount}
           conversationId={activeConversation}
           userId={session.user_id}

@@ -16,6 +16,29 @@ pub struct Request {
 #[derive(Deserialize)]
 #[serde(tag = "name", content = "args", deny_unknown_fields)]
 pub enum Command {
+    #[serde(rename = "save_scheduled_message")]
+    SaveScheduledMessage {
+        id: Option<String>,
+        #[serde(rename = "peerId")]
+        peer_id: String,
+        text: String,
+        #[serde(rename = "dueAt")]
+        due_at: i64,
+    },
+    #[serde(rename = "list_scheduled_messages")]
+    ListScheduledMessages {},
+    #[serde(rename = "cancel_scheduled_message")]
+    CancelScheduledMessage {
+        id: String,
+        #[serde(rename = "removeSubmitted", default)]
+        remove_submitted: bool,
+    },
+    #[serde(rename = "send_scheduled_now")]
+    SendScheduledNow { id: String },
+    #[serde(rename = "process_scheduled_messages")]
+    ProcessScheduledMessages {},
+    #[serde(rename = "suspend_scheduled_messages")]
+    SuspendScheduledMessages {},
     #[serde(rename = "submit_message_operation")]
     SubmitMessageOperation {
         #[serde(rename = "targetId")]
@@ -445,6 +468,30 @@ impl Response {
 
 pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, String> {
     let result = match command {
+        Command::SaveScheduledMessage {
+            id,
+            peer_id,
+            text,
+            due_at,
+        } => {
+            serde_json::to_value(commands::scheduled::save(state, id, peer_id, text, due_at).await?)
+        }
+        Command::ListScheduledMessages {} => {
+            serde_json::to_value(commands::scheduled::list(state).await?)
+        }
+        Command::CancelScheduledMessage {
+            id,
+            remove_submitted,
+        } => serde_json::to_value(commands::scheduled::cancel(state, id, remove_submitted).await?),
+        Command::SendScheduledNow { id } => {
+            serde_json::to_value(commands::scheduled::send_now(state, id).await?)
+        }
+        Command::ProcessScheduledMessages {} => {
+            serde_json::to_value(commands::scheduled::process(state).await?)
+        }
+        Command::SuspendScheduledMessages {} => {
+            serde_json::to_value(commands::scheduled::suspend(state).await?)
+        }
         Command::UnlockApp { password } => {
             serde_json::to_value(commands::windows_lock::verify(password)?)
         }

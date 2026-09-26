@@ -65,6 +65,14 @@ else {
     const executable = path.join(app.isPackaged ? process.resourcesPath : path.join(root, "target", "debug"),
       app.isPackaged ? "desktop" : "", `liteseal-desktop${process.platform === "win32" ? ".exe" : ""}`);
     await bridge.start(executable);
+    let scheduledBusy = false;
+    setInterval(() => {
+      if (scheduledBusy || quitting || exitRequested) return;
+      scheduledBusy = true;
+      void bridge.call("process_scheduled_messages", {}).then(changes => {
+        if (changes > 0 && !locked) mainWindow?.webContents.send("liteseal:scheduled-changed");
+      }).catch(() => {}).finally(() => { scheduledBusy = false; });
+    }, 1000).unref();
     try {
       const configuration = JSON.parse(await fs.readFile(path.join(app.getPath("userData"), "app-lock.json"), "utf8"));
       if (typeof configuration.enabled !== "boolean") throw new Error("应用锁配置损坏");
@@ -73,6 +81,7 @@ else {
     if (quitting) return;
     app.setAppUserModelId("com.liteseal.app");
     powerMonitor.on("lock-screen", () => { notifications.lock(true); lockApp(); });
+    powerMonitor.on("suspend", () => { void bridge.call("suspend_scheduled_messages", {}).catch(() => {}); });
     powerMonitor.on("unlock-screen", () => { if (!locked) notifications.lock(false); });
     setInterval(() => { if (powerMonitor.getSystemIdleTime() >= 300) lockApp(); }, 1000).unref();
     const csp = `default-src 'self'; script-src 'self'${app.isPackaged ? "" : " 'unsafe-inline'"}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' data: blob:; connect-src 'self'${app.isPackaged ? "" : " ws://127.0.0.1:1420"}; object-src 'none'; base-uri 'none'; frame-src 'none'`;

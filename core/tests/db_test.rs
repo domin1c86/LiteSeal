@@ -5,6 +5,40 @@ use liteseal_core::db::repository::MessageRepository;
 use std::collections::HashMap;
 
 #[test]
+fn scheduled_tasks_are_account_and_device_scoped() {
+    use liteseal_core::db::repository::ScheduledMessage;
+    let repo = MessageRepository::new(":memory:").unwrap();
+    let task = ScheduledMessage {
+        id: "task".into(),
+        peer_id: "bob".into(),
+        due_at: 10,
+        body: vec![1, 2, 3],
+        state: "scheduled".into(),
+        error: String::new(),
+    };
+    repo.save_scheduled_message("alice", "device-a", &task)
+        .unwrap();
+    assert_eq!(
+        repo.scheduled_messages("alice", "device-a").unwrap().len(),
+        1
+    );
+    assert!(repo
+        .scheduled_messages("other", "device-a")
+        .unwrap()
+        .is_empty());
+    assert!(repo
+        .scheduled_messages("alice", "device-b")
+        .unwrap()
+        .is_empty());
+    repo.delete_scheduled_message("other", "device-a", "task")
+        .unwrap();
+    assert_eq!(
+        repo.scheduled_messages("alice", "device-a").unwrap().len(),
+        1
+    );
+}
+
+#[test]
 fn visible_read_receipts_do_not_backfill_when_enabled_later() {
     let repo = MessageRepository::new(":memory:").unwrap();
     let message = |id: &str| MessageModel {

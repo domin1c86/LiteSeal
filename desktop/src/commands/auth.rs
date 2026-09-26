@@ -62,16 +62,12 @@ pub async fn connect_relay(
     device_id: String,
     state: &AppState,
 ) -> Result<ConnectResult, String> {
-    state
-        .client
-        .connect_relay(server_url, user_id, token, device_id)
-        .await?;
+    super::scheduled::connect(state, server_url, user_id, token, device_id).await?;
     Ok(ConnectResult { connected: true })
 }
 
 pub async fn disconnect(state: &AppState) -> Result<(), String> {
-    state.client.disconnect().await;
-    Ok(())
+    super::scheduled::disconnect(state).await
 }
 
 pub async fn validate_invite(server_url: String, invite_code: String) -> Result<bool, String> {

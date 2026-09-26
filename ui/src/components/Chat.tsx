@@ -4,6 +4,7 @@ import { deliveryStatusLabel } from "../lib/deliveryStatus";
 import { projectMessage } from "../lib/messageProjection";
 import MessageSearch from "./MessageSearch";
 import { AttachmentCard, AttachmentComposer } from "./Attachments";
+import { ScheduledMessages } from "./ScheduledMessages";
 import { decodeContent, encodeContent } from "../lib/messageContent";
 import { useState, useEffect, useRef, useLayoutEffect } from "react";
 import { useDesktop } from "../hooks/useDesktop";
@@ -19,6 +20,7 @@ interface ChatProps {
   onDraftChange: (draft: Draft) => Promise<void>;
   online: boolean;
   typingEnabled: boolean;
+  scheduledRevision: number;
   obscured: boolean;
   conversationId: string | null;
   userId: string;
@@ -30,7 +32,7 @@ interface ChatProps {
   onContactsChanged: () => void;
 }
 
-export default function Chat({ onFavorite, draft, onDraftChange, onForward, online, typingEnabled, obscured, conversationId, userId, deviceId, token, serverUrl, contacts, relayBatch, onContactsChanged }: ChatProps) {
+export default function Chat({ onFavorite, draft, onDraftChange, onForward, online, typingEnabled, scheduledRevision, obscured, conversationId, userId, deviceId, token, serverUrl, contacts, relayBatch, onContactsChanged }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [reactions, setReactions] = useState<{ target_id: string; actor: string; emoji: string }[]>([]);
   const [readReceipts, setReadReceipts] = useState<string[]>([]);
@@ -287,7 +289,7 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
     }).catch(error => { if (active) setHistoryError(String(error)); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [storageConversationId, userId, contacts, attachmentRevision]);
+  }, [storageConversationId, userId, contacts, attachmentRevision, scheduledRevision]);
 
   async function loadOlder() {
     if (!storageConversationId || !cursor.current || loadingOlder || loading) return;
@@ -736,6 +738,7 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
         </button>
       </form>
       <AttachmentComposer peerId={conversationId} online={online} onSent={() => setAttachmentRevision(value => value + 1)} />
+      <ScheduledMessages peerId={conversationId} initialText={draft.text} online={online} revision={scheduledRevision + attachmentRevision} onChanged={() => setAttachmentRevision(value=>value+1)} />
     </div>
   );
 }

@@ -75,6 +75,14 @@ test('real Rust process supports crypto, contacts, storage, errors and database 
   assert.equal(await bridge.call('verify_message', { message: plaintext, signature, senderPublicKey: identity.ed25519_pk }), true);
   assert.equal(await bridge.call('verify_message', { message: [1], signature, senderPublicKey: identity.ed25519_pk }), false);
   assert.deepEqual(await bridge.call('add_contact', { userId: 'bob', username: 'Bob', publicKey: identity.public_key, ed25519Pk: identity.ed25519_pk }), { success: true });
+  const scheduledId = require('node:crypto').randomUUID();
+  await bridge.call('save_scheduled_message', { id: scheduledId, peerId: 'bob', text: '定时中文 🕒', dueAt: Date.now() + 60000 });
+  assert.equal((await bridge.call('list_scheduled_messages', {}))[0].text, '定时中文 🕒');
+  await bridge.call('save_scheduled_message', { id: scheduledId, peerId: 'bob', text: '修改后', dueAt: Date.now() + 120000 });
+  assert.equal((await bridge.call('list_scheduled_messages', {})).length, 1);
+  await assert.rejects(bridge.call('process_scheduled_messages', {}), /未联网/);
+  await bridge.call('cancel_scheduled_message', { id: scheduledId });
+  assert.deepEqual(await bridge.call('list_scheduled_messages', {}), []);
   await assert.rejects(bridge.call('send_typing', { peerId: 'bob', active: true }), /Not connected/);
   await assert.rejects(bridge.call('stage_clipboard_image', { peerId: 'bob', encoded: 'invalid' }), /剪贴板图片编码无效/);
   const staged = await bridge.call('stage_clipboard_image', { peerId: 'bob', encoded: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).toString('base64') });

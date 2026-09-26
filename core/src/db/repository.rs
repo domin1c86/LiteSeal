@@ -20,6 +20,16 @@ pub struct ConversationSummary {
     pub unread_count: i64,
 }
 
+#[derive(Clone)]
+pub struct ScheduledMessage {
+    pub id: String,
+    pub peer_id: String,
+    pub due_at: i64,
+    pub body: Vec<u8>,
+    pub state: String,
+    pub error: String,
+}
+
 #[derive(serde::Serialize)]
 pub struct ConversationPreference {
     pub peer_id: String,
@@ -96,6 +106,12 @@ impl MessageRepository {
             );
             CREATE TABLE IF NOT EXISTS typing_preferences (
                 user_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS scheduled_messages (
+                user_id TEXT NOT NULL, device_id TEXT NOT NULL, id TEXT NOT NULL,
+                peer_id TEXT NOT NULL, due_at INTEGER NOT NULL, body BLOB NOT NULL,
+                state TEXT NOT NULL, error TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY(user_id,device_id,id)
             );
             CREATE TABLE IF NOT EXISTS personal_organizer (
                 user_id TEXT PRIMARY KEY, ciphertext BLOB NOT NULL
@@ -533,6 +549,47 @@ impl MessageRepository {
             )
             .optional()?
             .unwrap_or(false))
+    }
+    pub fn scheduled_messages(
+        &self,
+        user: &str,
+        device: &str,
+    ) -> Result<Vec<ScheduledMessage>, DbError> {
+        let mut stmt = self.conn.prepare("SELECT id,peer_id,due_at,body,state,error FROM scheduled_messages WHERE user_id=?1 AND device_id=?2 ORDER BY due_at,id")?;
+        let rows = stmt
+            .query_map(params![user, device], |row| {
+                Ok(ScheduledMessage {
+                    id: row.get(0)?,
+                    peer_id: row.get(1)?,
+                    due_at: row.get(2)?,
+                    body: row.get(3)?,
+                    state: row.get(4)?,
+                    error: row.get(5)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+    pub fn save_scheduled_message(
+        &self,
+        user: &str,
+        device: &str,
+        task: &ScheduledMessage,
+    ) -> Result<(), DbError> {
+        self.conn.execute("INSERT INTO scheduled_messages(user_id,device_id,id,peer_id,due_at,body,state,error) VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(user_id,device_id,id) DO UPDATE SET peer_id=excluded.peer_id,due_at=excluded.due_at,body=excluded.body,state=excluded.state,error=excluded.error", params![user,device,task.id,task.peer_id,task.due_at,task.body,task.state,task.error])?;
+        Ok(())
+    }
+    pub fn delete_scheduled_message(
+        &self,
+        user: &str,
+        device: &str,
+        id: &str,
+    ) -> Result<(), DbError> {
+        self.conn.execute(
+            "DELETE FROM scheduled_messages WHERE user_id=?1 AND device_id=?2 AND id=?3",
+            params![user, device, id],
+        )?;
+        Ok(())
     }
     pub fn set_typing_enabled(&self, user: &str, enabled: bool) -> Result<(), DbError> {
         self.conn.execute("INSERT INTO typing_preferences(user_id,enabled) VALUES(?1,?2) ON CONFLICT(user_id) DO UPDATE SET enabled=excluded.enabled", params![user,enabled])?;

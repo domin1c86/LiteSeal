@@ -116,6 +116,16 @@ impl LitesealClient {
     }
 
     // Messaging
+    pub async fn relay_connected_as(&self, user: &str, device: &str) -> bool {
+        let receiver = self.msg_receiver.lock().await;
+        let socket = self.ws_client.lock().await;
+        receiver
+            .as_ref()
+            .is_some_and(|receiver| !receiver.is_closed())
+            && socket
+                .as_ref()
+                .is_some_and(|socket| socket.user_id() == user && socket.device_id() == device)
+    }
 
     /// Without a signing key this can only resend an already persisted message.
     pub async fn send_message(

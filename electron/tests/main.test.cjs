@@ -9,6 +9,7 @@ const vm = require('node:vm');
 
 test('main process restricts IPC origins, navigation and packaged assets without opening a GUI', { timeout: 10000 }, async t => {
   const handlers = new Map();
+  const intervals = [], commands = [], rendererEvents = [];
   const userData = await fs.mkdtemp(path.join(os.tmpdir(), 'liteseal-main-test-'));
   const avatarPath = path.join(userData, 'avatar.png');
   await fs.writeFile(avatarPath, Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
@@ -22,7 +23,8 @@ test('main process restricts IPC origins, navigation and packaged assets without
   child.stdin.on('finish', child.kill);
   child.stdin.on('data', frame => {
     const request = JSON.parse(frame.toString());
-    child.stdout.write(JSON.stringify({ id: request.id, result: [] }) + '\n');
+    commands.push(request.command.name);
+    child.stdout.write(JSON.stringify({ id: request.id, result: request.command.name === 'process_scheduled_messages' ? 1 : [] }) + '\n');
   });
   const app = Object.assign(new EventEmitter(), {
     isPackaged: true, requestSingleInstanceLock: () => true,
@@ -37,7 +39,7 @@ test('main process restricts IPC origins, navigation and packaged assets without
         super(); window = this; preferences = options.webPreferences;
         this.webContents = Object.assign(new EventEmitter(), {
           mainFrame: { url: 'liteseal://app/index.html' },
-          send() {},
+          send(...args) { rendererEvents.push(args); },
           setWindowOpenHandler(handler) { this.openHandler = handler; },
         });
       }
@@ -57,7 +59,7 @@ test('main process restricts IPC origins, navigation and packaged assets without
   };
   vm.runInNewContext(await fs.readFile('dist-electron/main.cjs', 'utf8'), {
     Blob, Buffer, URL, Headers, Response, console, setTimeout, clearTimeout,
-    setInterval: () => ({ unref() {} }),
+    setInterval: callback => { intervals.push(callback); return { unref() {} }; },
     process: { platform: process.platform, resourcesPath: '/installed/resources' },
     require(name) {
       if (name === 'electron') return electron;
@@ -82,6 +84,8 @@ test('main process restricts IPC origins, navigation and packaged assets without
   const handler = handlers.get('liteseal:get_contacts');
   const valid = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
   assert.equal((await handler(valid, {})).ok, true);
+  intervals[0](); await new Promise(resolve => setTimeout(resolve, 0));
+  assert.ok(rendererEvents.some(args => args[0] === 'liteseal:scheduled-changed' && args.length === 1));
   const permission = (kind, details, contents = window.webContents) => new Promise(resolve => permissionRequest(contents, kind, resolve, details));
   assert.equal(await permission('media', { requestingUrl: 'liteseal://app/index.html', mediaTypes: ['audio'] }), true);
   assert.equal(await permission('media', { requestingUrl: 'liteseal://app/index.html', mediaTypes: ['video'] }), false);
@@ -102,6 +106,12 @@ test('main process restricts IPC origins, navigation and packaged assets without
   assert.equal((await configure(valid, { enabled: true, password: 'test-password' })).ok, true);
   assert.equal((await lock(valid, {})).ok, true);
   assert.equal((await lockState(valid, {})).result, true);
+  const previousCalls = commands.filter(name => name === 'process_scheduled_messages').length;
+  const previousEvents = rendererEvents.length;
+  intervals[0](); await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(commands.filter(name => name === 'process_scheduled_messages').length, previousCalls + 1);
+  assert.equal(rendererEvents.length, previousEvents);
+  assert.equal((await handlers.get('liteseal:list_scheduled_messages')(valid, {})).ok, false);
   assert.equal(await permission('media', { requestingUrl: 'liteseal://app/index.html', mediaTypes: ['audio'] }), false);
   assert.equal(permissionCheck(window.webContents, 'media', 'liteseal://app', { isMainFrame: true, mediaType: 'audio', requestingUrl: 'liteseal://app/index.html' }), false);
   assert.equal((await handler(valid, {})).ok, false);
