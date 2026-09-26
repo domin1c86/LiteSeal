@@ -12,6 +12,10 @@ pub(super) fn router() -> Router<AppState> {
         .route("/groups/:group_id/messages", get(pending).post(send))
         .route("/groups/:group_id/messages/ack", post(ack))
         .route(
+            "/groups/:group_id/messages/:message_id/cancel",
+            post(cancel),
+        )
+        .route(
             "/groups/:group_id/messages/:message_id/receipt",
             get(receipt),
         )
@@ -147,6 +151,11 @@ async fn send(
         return receipt_in(&mut tx, &id, &first.message_id).await;
     }
     let meta = metadata(&mut tx, &id, true).await?;
+    let cancelled:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM group_message_cancellations WHERE group_id=$1 AND message_id=$2 AND sender_device_id=$3)")
+        .bind(&id).bind(&first.message_id).bind(&actor.device_id).fetch_one(&mut *tx).await.map_err(unavailable)?;
+    if cancelled {
+        return Err(conflict());
+    }
     let group = replay(&mut tx, &id, &meta).await?;
     if group
         .member(&user)
@@ -165,7 +174,7 @@ async fn send(
     }
     sending_policy(&mut tx, &group, &user).await?;
     let retained: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM group_message_batches WHERE group_id=$1")
+        sqlx::query_scalar("SELECT (SELECT COUNT(*) FROM group_message_batches WHERE group_id=$1)+(SELECT COUNT(*) FROM group_message_cancellations WHERE group_id=$1)")
             .bind(&id)
             .fetch_one(&mut *tx)
             .await
@@ -332,6 +341,68 @@ async fn receipt(
     tx.commit().await.map_err(unavailable)?;
     Ok(result)
 }
+async fn cancel(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((group, message)): Path<(String, String)>,
+    Json(request): Json<GroupCancelRequest>,
+) -> Result<Json<GroupCancelResult>, Failure> {
+    let user = admit(&state, &headers, &request.device_id).await?;
+    group_id(&group)?;
+    group_id(&message)?;
+    let mut tx = state.db.pool().begin().await.map_err(unavailable)?;
+    lock_group(&mut tx, &group).await?;
+    let actor = authorize_tx(&mut tx, &headers, &request.device_id).await?;
+    if let Some(batch) = stored_batch(&mut tx, &group, &message).await? {
+        if batch.get::<String, _>("sender_user_id") != actor.user_id
+            || batch.get::<String, _>("sender_device_id") != actor.device_id
+        {
+            return Err(missing());
+        }
+        let receipt = receipt_in(&mut tx, &group, &message).await?.0;
+        tx.commit().await.map_err(unavailable)?;
+        return Ok(Json(GroupCancelResult {
+            group_id: group,
+            message_id: message,
+            cancelled: false,
+            receipt: Some(receipt),
+        }));
+    }
+    let member:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM group_memberships WHERE group_id=$1 AND user_id=$2 AND device_id=$3)")
+        .bind(&group).bind(&user).bind(&actor.device_id).fetch_one(&mut *tx).await.map_err(unavailable)?;
+    if !member {
+        return Err(missing());
+    }
+    let meta = metadata(&mut tx, &group, true).await?;
+    let exists:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM group_message_cancellations WHERE group_id=$1 AND message_id=$2 AND sender_device_id=$3)")
+        .bind(&group).bind(&message).bind(&actor.device_id).fetch_one(&mut *tx).await.map_err(unavailable)?;
+    if !exists && !meta.closed {
+        let retained:i64=sqlx::query_scalar("SELECT (SELECT COUNT(*) FROM group_message_batches WHERE group_id=$1)+(SELECT COUNT(*) FROM group_message_cancellations WHERE group_id=$1)")
+            .bind(&group).fetch_one(&mut *tx).await.map_err(unavailable)?;
+        if retained >= MAX_RETAINED_BATCHES {
+            return Err((
+                StatusCode::INSUFFICIENT_STORAGE,
+                "群保留记录已达上限".into(),
+            ));
+        }
+        sqlx::query("INSERT INTO group_message_cancellations(group_id,message_id,sender_user_id,sender_device_id) VALUES($1,$2,$3,$4)")
+            .bind(&group).bind(&message).bind(&user).bind(&actor.device_id).execute(&mut *tx).await.map_err(unavailable)?;
+    }
+    tx.commit().await.map_err(unavailable)?;
+    Ok(Json(GroupCancelResult {
+        group_id: group,
+        message_id: message,
+        cancelled: true,
+        receipt: None,
+    }))
+}
+
+pub(super) const CANCEL_MIGRATION:&str="
+CREATE TABLE group_message_cancellations(group_id TEXT NOT NULL REFERENCES private_groups(id),message_id TEXT NOT NULL,sender_user_id TEXT NOT NULL REFERENCES users(id),sender_device_id TEXT NOT NULL REFERENCES devices(id),PRIMARY KEY(group_id,message_id,sender_device_id));
+CREATE INDEX group_message_cancellations_user ON group_message_cancellations(sender_user_id);
+CREATE INDEX group_message_cancellations_device ON group_message_cancellations(sender_device_id);
+";
+
 pub(super) async fn expire_recipient(
     tx: &mut Transaction<'_, Postgres>,
     group: &str,

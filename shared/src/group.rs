@@ -653,3 +653,16 @@ pub struct GroupAckRequest {
     pub recipient_join_epoch: u64,
     pub message_ids: Vec<String>,
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GroupCancelRequest {
+    pub device_id: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GroupCancelResult {
+    pub group_id: String,
+    pub message_id: String,
+    pub cancelled: bool,
+    pub receipt: Option<GroupMessageReceipt>,
+}

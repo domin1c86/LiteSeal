@@ -10,6 +10,7 @@ use serde::Deserialize;
 use sqlx::{Postgres, Row, Transaction};
 mod messages;
 pub const MESSAGE_MIGRATION: &str = messages::MIGRATION;
+pub const CANCEL_MIGRATION: &str = messages::CANCEL_MIGRATION;
 
 type Failure = (StatusCode, String);
 const MAX_EPOCH: i64 = 1000;

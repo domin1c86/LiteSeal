@@ -34,6 +34,7 @@ async fn parameterized_routes_reach_authentication_instead_of_returning_404() {
             "/read-receipts?device_id=test-device&after=0",
         ),
         (reqwest::Method::POST, "/read-receipts"),
+        (reqwest::Method::POST,"/groups/00000000-0000-0000-0000-000000000001/messages/00000000-0000-0000-0000-000000000002/cancel"),
         (reqwest::Method::GET, "/groups?device_id=test-device"),
         (reqwest::Method::POST, "/groups"),
         (
@@ -64,6 +65,8 @@ async fn parameterized_routes_reach_authentication_instead_of_returning_404() {
             serde_json::json!({"display_name":"Test","avatar_png":null})
         } else if path == "/read-receipts" {
             serde_json::json!({"id":"event","target_id":"message","conversation_id":"dm:alice:bob","reader":"bob","device":"test-device","peer":"alice","signature":vec![0;64]})
+        } else if path.ends_with("/cancel") {
+            serde_json::json!({"device_id":"test-device"})
         } else if path.ends_with("/invites") {
             serde_json::json!({"device_id":"test-device","invite":{"id":"invite","group_id":"group","epoch":1,"previous_hash":[],"member":{"user_id":"user","device_id":"device","public_key":vec![1;32],"signing_key":vec![2;32]},"issued_at":1,"expires_at":2,"signature":vec![0;64]}})
         } else if path.ends_with("/messages") {

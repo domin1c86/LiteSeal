@@ -11,6 +11,7 @@ pub mod contacts;
 pub mod db;
 #[cfg(feature = "ffi")]
 pub mod ffi;
+pub mod groups;
 pub mod integrity;
 pub mod keystore;
 pub mod network;

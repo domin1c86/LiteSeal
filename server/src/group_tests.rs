@@ -324,6 +324,112 @@ async fn page(f: &Fixture, account: &Account, group: &str) -> GroupMessagePage {
 
 #[tokio::test]
 #[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn atomic_group_cancellation_prevents_late_admission_without_recalling_accepted_messages() {
+    let f = Fixture::start().await;
+    let alice = f.account().await;
+    let bob = f.account().await;
+    let create = event(
+        None,
+        &alice,
+        GroupAction::Create {
+            name: "cancel test".into(),
+            owner: alice.identity.clone(),
+        },
+    );
+    assert_eq!(
+        f.change(&alice, &create, true).await.status(),
+        reqwest::StatusCode::OK
+    );
+    let group = f
+        .add(
+            &pin_creation(&create, &alice.identity).unwrap(),
+            &alice,
+            &bob,
+        )
+        .await;
+    let cancelled = batch(&group, &alice, &[(&bob, None)]);
+    let cancel = |message: String| {
+        f.client
+            .post(format!(
+                "{}/groups/{}/messages/{message}/cancel",
+                f.url,
+                group.group_id()
+            ))
+            .bearer_auth(&alice.token)
+            .json(&GroupCancelRequest {
+                device_id: alice.identity.device_id.clone(),
+            })
+    };
+    let response: GroupCancelResult = cancel(cancelled[0].message_id.clone())
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(response.cancelled);
+    assert!(response.receipt.is_none());
+    assert!(
+        cancel(cancelled[0].message_id.clone())
+            .send()
+            .await
+            .unwrap()
+            .json::<GroupCancelResult>()
+            .await
+            .unwrap()
+            .cancelled
+    );
+    assert_eq!(
+        f.send_group(&alice, &cancelled).await.status(),
+        reqwest::StatusCode::CONFLICT
+    );
+    let first = batch(&group, &alice, &[(&bob, None)]);
+    assert_eq!(
+        f.send_group(&alice, &first).await.status(),
+        reqwest::StatusCode::OK
+    );
+    let accepted: GroupCancelResult = cancel(first[0].message_id.clone())
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(!accepted.cancelled);
+    assert_eq!(accepted.receipt.unwrap().message_id, first[0].message_id);
+    assert_eq!(page(&f, &bob, group.group_id()).await.envelopes.len(), 1);
+    let next = batch(&group, &alice, &[(&bob, Some(&first[0]))]);
+    let (sent, cancelled) = tokio::join!(
+        f.send_group(&alice, &next),
+        cancel(next[0].message_id.clone()).send()
+    );
+    let cancelled: GroupCancelResult = cancelled
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        sent.status(),
+        if cancelled.cancelled {
+            reqwest::StatusCode::CONFLICT
+        } else {
+            reqwest::StatusCode::OK
+        }
+    );
+    assert_eq!(
+        page(&f, &bob, group.group_id()).await.envelopes.len(),
+        if cancelled.cancelled { 1 } else { 2 }
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
 async fn group_fanout_ack_and_rejoin_keep_recipient_boundaries() {
     let f = Fixture::start().await;
     let alice = f.account().await;
