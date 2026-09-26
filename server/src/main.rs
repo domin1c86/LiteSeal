@@ -4,6 +4,9 @@ mod config;
 mod contact_policy;
 mod db;
 #[cfg(test)]
+mod group_tests;
+mod groups;
+#[cfg(test)]
 mod http_tests;
 mod keys;
 mod message_operations;
@@ -71,6 +74,7 @@ fn build_router(state: AppState, allowed_origin: HeaderValue) -> Router {
         .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]);
 
     Router::new()
+        .merge(groups::router())
         .route("/reactions", get(reactions::list).post(reactions::submit))
         .route(
             "/read-receipts",

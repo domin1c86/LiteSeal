@@ -197,6 +197,46 @@ pub struct GroupChange {
     pub action: GroupAction,
     pub signature: Vec<u8>,
 }
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GroupChangeRequest {
+    pub device_id: String,
+    pub change: GroupChange,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GroupInviteRequest {
+    pub device_id: String,
+    pub invite: GroupInvite,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GroupEventPage {
+    pub changes: Vec<GroupChange>,
+    pub through_epoch: u64,
+    pub has_more: bool,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GroupListEntry {
+    pub group_id: String,
+    pub joined_epoch: u64,
+    pub visible_epoch: u64,
+    pub active: bool,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GroupListPage {
+    pub groups: Vec<GroupListEntry>,
+    pub next_cursor: Option<String>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GroupInviteStatus {
+    pub invite: GroupInvite,
+    pub status: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GroupInvitePage {
+    pub invites: Vec<GroupInvite>,
+    pub next_cursor: Option<String>,
+}
 impl GroupChange {
     pub fn signing_bytes(&self) -> Vec<u8> {
         serde_json::to_vec(&(

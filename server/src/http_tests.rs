@@ -34,6 +34,25 @@ async fn parameterized_routes_reach_authentication_instead_of_returning_404() {
             "/read-receipts?device_id=test-device&after=0",
         ),
         (reqwest::Method::POST, "/read-receipts"),
+        (reqwest::Method::GET, "/groups?device_id=test-device"),
+        (reqwest::Method::POST, "/groups"),
+        (
+            reqwest::Method::GET,
+            "/groups/00000000-0000-0000-0000-000000000001/changes?device_id=test-device",
+        ),
+        (
+            reqwest::Method::POST,
+            "/groups/00000000-0000-0000-0000-000000000001/changes",
+        ),
+        (
+            reqwest::Method::POST,
+            "/groups/00000000-0000-0000-0000-000000000001/invites",
+        ),
+        (reqwest::Method::GET, "/group-invites?device_id=test-device"),
+        (
+            reqwest::Method::DELETE,
+            "/group-invites/00000000-0000-0000-0000-000000000001?device_id=test-device",
+        ),
     ] {
         let body = if path == "/auth/change_password" {
             serde_json::json!({"current_password":"old-password-123","new_password":"new-password-123"})
@@ -41,6 +60,10 @@ async fn parameterized_routes_reach_authentication_instead_of_returning_404() {
             serde_json::json!({"display_name":"Test","avatar_png":null})
         } else if path == "/read-receipts" {
             serde_json::json!({"id":"event","target_id":"message","conversation_id":"dm:alice:bob","reader":"bob","device":"test-device","peer":"alice","signature":vec![0;64]})
+        } else if path.ends_with("/invites") {
+            serde_json::json!({"device_id":"test-device","invite":{"id":"invite","group_id":"group","epoch":1,"previous_hash":[],"member":{"user_id":"user","device_id":"device","public_key":vec![1;32],"signing_key":vec![2;32]},"issued_at":1,"expires_at":2,"signature":vec![0;64]}})
+        } else if path == "/groups" || path.ends_with("/changes") {
+            serde_json::json!({"device_id":"test-device","change":{"group_id":"group","epoch":2,"previous_hash":[],"actor":"user","created_at":1,"action":{"kind":"rename","name":"test"},"signature":vec![0;64]}})
         } else {
             serde_json::json!({ "device_name": "test", "public_key": vec![1; 32], "ed25519_pk": vec![2; 32] })
         };
