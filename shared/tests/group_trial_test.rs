@@ -3,6 +3,30 @@ mod support;
 use liteseal_shared::{crypto, group::*};
 use support::{change, envelope, join, Participant};
 
+#[test]
+fn acknowledged_ciphertext_can_be_deleted_without_resetting_the_chain() {
+    let (alice, bob, _, state, _) = three();
+    let first = envelope(&state, &alice, &bob, "first", "text", None);
+    validate_envelope(&state, &first).unwrap();
+    let persisted = serde_json::to_string(&GroupChainHead::from_verified(&first)).unwrap();
+    assert!(!persisted.contains("ciphertext"));
+    let head: GroupChainHead = serde_json::from_str(&persisted).unwrap();
+    let next = envelope(&state, &alice, &bob, "next", "text", Some(&first));
+    validate_envelope(&state, &next).unwrap();
+    validate_chain_head(&next, Some(&head)).unwrap();
+    for field in 0..5 {
+        let mut wrong = head.clone();
+        match field {
+            0 => wrong.recipient_join_epoch += 1,
+            1 => wrong.sender_device_id = "other".into(),
+            2 => wrong.sender_seq += 1,
+            3 => wrong.chain_hash[0] ^= 1,
+            _ => wrong.epoch = next.epoch + 1,
+        }
+        assert!(validate_chain_head(&next, Some(&wrong)).is_err());
+    }
+}
+
 fn three() -> (
     Participant,
     Participant,

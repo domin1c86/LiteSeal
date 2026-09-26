@@ -556,6 +556,50 @@ pub fn validate_chain(
     envelope: &GroupEnvelope,
     previous: Option<&GroupEnvelope>,
 ) -> Result<(), GroupError> {
+    let previous = previous.map(GroupChainHead::from_verified);
+    validate_chain_head(envelope, previous.as_ref())
+}
+
+/// Durable chain evidence after ciphertext is acknowledged and deleted.
+/// Construct only from a signature-verified, accepted envelope.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct GroupChainHead {
+    pub group_id: String,
+    pub message_id: String,
+    pub epoch: u64,
+    pub sender_user_id: String,
+    pub sender_device_id: String,
+    pub sender_join_epoch: u64,
+    pub recipient_user_id: String,
+    pub recipient_device_id: String,
+    pub recipient_join_epoch: u64,
+    pub sender_seq: i64,
+    pub chain_hash: Vec<u8>,
+}
+impl GroupChainHead {
+    pub fn from_verified(envelope: &GroupEnvelope) -> Self {
+        Self {
+            group_id: envelope.group_id.clone(),
+            message_id: envelope.message_id.clone(),
+            epoch: envelope.epoch,
+            sender_user_id: envelope.sender_user_id.clone(),
+            sender_device_id: envelope.sender_device_id.clone(),
+            sender_join_epoch: envelope.sender_join_epoch,
+            recipient_user_id: envelope.recipient_user_id.clone(),
+            recipient_device_id: envelope.recipient_device_id.clone(),
+            recipient_join_epoch: envelope.recipient_join_epoch,
+            sender_seq: envelope.sender_seq,
+            chain_hash: envelope.chain_hash(),
+        }
+    }
+}
+/// Validate the new envelope first; previous is trusted local/server evidence,
+/// never an unverified chain head supplied by a remote caller.
+pub fn validate_chain_head(
+    envelope: &GroupEnvelope,
+    previous: Option<&GroupChainHead>,
+) -> Result<(), GroupError> {
     match previous {
         None if envelope.sender_seq == 1 && envelope.prev_hash.is_empty() => Ok(()),
         Some(previous)
@@ -569,10 +613,43 @@ pub fn validate_chain(
                 && previous.recipient_join_epoch == envelope.recipient_join_epoch
                 && previous.message_id != envelope.message_id
                 && previous.sender_seq.checked_add(1) == Some(envelope.sender_seq)
-                && previous.chain_hash() == envelope.prev_hash =>
+                && previous.chain_hash.len() == 32
+                && previous.chain_hash == envelope.prev_hash =>
         {
             Ok(())
         }
         _ => Err(GroupError::InvalidChain),
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GroupSendRequest {
+    pub device_id: String,
+    pub envelopes: Vec<GroupEnvelope>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GroupDeliveryStatus {
+    pub recipient_user_id: String,
+    pub recipient_device_id: String,
+    pub recipient_join_epoch: u64,
+    pub status: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GroupMessageReceipt {
+    pub group_id: String,
+    pub message_id: String,
+    pub recipients: Vec<GroupDeliveryStatus>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GroupMessagePage {
+    pub envelopes: Vec<GroupEnvelope>,
+    pub has_more: bool,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GroupAckRequest {
+    pub device_id: String,
+    pub recipient_join_epoch: u64,
+    pub message_ids: Vec<String>,
 }

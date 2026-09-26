@@ -8,6 +8,8 @@ use axum::{
 use liteseal_shared::group::*;
 use serde::Deserialize;
 use sqlx::{Postgres, Row, Transaction};
+mod messages;
+pub const MESSAGE_MIGRATION: &str = messages::MIGRATION;
 
 type Failure = (StatusCode, String);
 const MAX_EPOCH: i64 = 1000;
@@ -61,6 +63,7 @@ pub fn router() -> Router<AppState> {
         .route("/group-invites", get(invites))
         .route("/group-invites/:id", delete(cancel_invite))
         .layer(DefaultBodyLimit::max(32 * 1024))
+        .merge(messages::router())
 }
 async fn admit(state: &AppState, headers: &HeaderMap, device: &str) -> Result<String, Failure> {
     let user = crate::message_operations::authorize(state, headers, device).await?;
@@ -248,6 +251,13 @@ async fn projection(
     if let Some(previous) = previous {
         for member in previous.members() {
             if next.closed() || next.member(&member.identity.user_id).is_none() {
+                messages::expire_recipient(
+                    tx,
+                    next.group_id(),
+                    &member.identity.device_id,
+                    member.joined_epoch,
+                )
+                .await?;
                 sqlx::query("UPDATE group_memberships SET removed_epoch=$4 WHERE group_id=$1 AND user_id=$2 AND joined_epoch=$3 AND removed_epoch IS NULL")
                     .bind(next.group_id()).bind(&member.identity.user_id).bind(epoch(member.joined_epoch)?).bind(next_epoch).execute(&mut **tx).await.map_err(unavailable)?;
             }

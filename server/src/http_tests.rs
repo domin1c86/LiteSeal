@@ -49,6 +49,10 @@ async fn parameterized_routes_reach_authentication_instead_of_returning_404() {
             "/groups/00000000-0000-0000-0000-000000000001/invites",
         ),
         (reqwest::Method::GET, "/group-invites?device_id=test-device"),
+        (reqwest::Method::GET, "/groups/00000000-0000-0000-0000-000000000001/messages?device_id=test-device"),
+        (reqwest::Method::GET, "/groups/00000000-0000-0000-0000-000000000001/messages/00000000-0000-0000-0000-000000000002/receipt?device_id=test-device"),
+        (reqwest::Method::POST, "/groups/00000000-0000-0000-0000-000000000001/messages"),
+        (reqwest::Method::POST, "/groups/00000000-0000-0000-0000-000000000001/messages/ack"),
         (
             reqwest::Method::DELETE,
             "/group-invites/00000000-0000-0000-0000-000000000001?device_id=test-device",
@@ -62,6 +66,10 @@ async fn parameterized_routes_reach_authentication_instead_of_returning_404() {
             serde_json::json!({"id":"event","target_id":"message","conversation_id":"dm:alice:bob","reader":"bob","device":"test-device","peer":"alice","signature":vec![0;64]})
         } else if path.ends_with("/invites") {
             serde_json::json!({"device_id":"test-device","invite":{"id":"invite","group_id":"group","epoch":1,"previous_hash":[],"member":{"user_id":"user","device_id":"device","public_key":vec![1;32],"signing_key":vec![2;32]},"issued_at":1,"expires_at":2,"signature":vec![0;64]}})
+        } else if path.ends_with("/messages") {
+            serde_json::json!({"device_id":"test-device","envelopes":[]})
+        } else if path.ends_with("/messages/ack") {
+            serde_json::json!({"device_id":"test-device","recipient_join_epoch":1,"message_ids":[]})
         } else if path == "/groups" || path.ends_with("/changes") {
             serde_json::json!({"device_id":"test-device","change":{"group_id":"group","epoch":2,"previous_hash":[],"actor":"user","created_at":1,"action":{"kind":"rename","name":"test"},"signature":vec![0;64]}})
         } else {
@@ -77,6 +85,42 @@ async fn parameterized_routes_reach_authentication_instead_of_returning_404() {
             response.status(),
             reqwest::StatusCode::UNAUTHORIZED,
             "{method} {path}"
+        );
+    }
+    task.abort();
+}
+
+#[tokio::test]
+async fn group_upload_has_its_own_bounded_limit_above_single_chat_frames() {
+    let app = build_router(
+        AppState::new(Db::connect_lazy("postgres://unused:unused@127.0.0.1:1/unused").unwrap()),
+        HeaderValue::from_static("http://localhost:1420"),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!(
+        "http://{}/groups/00000000-0000-0000-0000-000000000001/messages",
+        listener.local_addr().unwrap()
+    );
+    let task = tokio::spawn(async move {
+        axum::serve(listener, app.into_make_service())
+            .await
+            .unwrap();
+    });
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .unwrap();
+    for (size, status) in [
+        (4136, reqwest::StatusCode::UNAUTHORIZED),
+        (20_000, reqwest::StatusCode::PAYLOAD_TOO_LARGE),
+    ] {
+        let envelopes:Vec<_>=(0..9).map(|number|serde_json::json!({"version":1,"message_id":"message","group_id":"group","epoch":1,"membership_hash":vec![1;32],"sender_user_id":"sender","sender_device_id":"sender-device","sender_join_epoch":1,"recipient_user_id":format!("recipient-{number}"),"recipient_device_id":format!("device-{number}"),"recipient_join_epoch":1,"sender_seq":1,"prev_hash":[],"sent_at":1,"ciphertext":vec![255;size],"signature":vec![1;64]})).collect();
+        let body = serde_json::json!({"device_id":"sender-device","envelopes":envelopes});
+        assert!(serde_json::to_vec(&body).unwrap().len() > 64 * 1024);
+        assert_eq!(
+            client.post(&url).json(&body).send().await.unwrap().status(),
+            status
         );
     }
     task.abort();
