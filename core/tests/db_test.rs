@@ -55,6 +55,17 @@ fn visible_read_receipts_do_not_backfill_when_enabled_later() {
 }
 
 #[test]
+fn typing_preference_defaults_off_and_is_account_scoped() {
+    let repo = MessageRepository::new(":memory:").unwrap();
+    assert!(!repo.typing_enabled("alice").unwrap());
+    repo.set_typing_enabled("alice", true).unwrap();
+    assert!(repo.typing_enabled("alice").unwrap());
+    assert!(!repo.typing_enabled("bob").unwrap());
+    repo.set_typing_enabled("alice", false).unwrap();
+    assert!(!repo.typing_enabled("alice").unwrap());
+}
+
+#[test]
 fn existing_local_reads_are_seen_once_during_upgrade() {
     let dir = std::env::temp_dir().join(format!("liteseal-read-upgrade-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir(&dir).unwrap();

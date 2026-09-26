@@ -133,6 +133,16 @@ pub enum Command {
         user_id: String,
         ids: Vec<String>,
     },
+    #[serde(rename = "get_typing_enabled")]
+    GetTypingEnabled {},
+    #[serde(rename = "set_typing_enabled")]
+    SetTypingEnabled { enabled: bool },
+    #[serde(rename = "send_typing")]
+    SendTyping {
+        #[serde(rename = "peerId")]
+        peer_id: String,
+        active: bool,
+    },
     #[serde(rename = "get_reactions")]
     GetReactions {
         #[serde(rename = "conversationId")]
@@ -463,6 +473,13 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
                 return Err("Too many message ids".into());
             }
             serde_json::to_value(commands::read_receipts::mark_visible(state, user_id, ids).await?)
+        }
+        Command::GetTypingEnabled {} => serde_json::to_value(commands::typing::enabled(state)?),
+        Command::SetTypingEnabled { enabled } => {
+            serde_json::to_value(commands::typing::set_enabled(state, enabled).await?)
+        }
+        Command::SendTyping { peer_id, active } => {
+            serde_json::to_value(commands::typing::send(state, peer_id, active).await?)
         }
         Command::GetReactions { conversation_id } => {
             serde_json::to_value(commands::reactions::views(state, conversation_id)?)

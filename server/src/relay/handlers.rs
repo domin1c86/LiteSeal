@@ -10,6 +10,7 @@ use liteseal_shared::{
     crypto,
     protocol::{ClientMessage, DeliveryStatus, ServerMessage, SignedEnvelopeV2, PROTOCOL_V2},
 };
+use sqlx::Row;
 use std::{collections::HashMap, time::Duration};
 use tokio::sync::mpsc;
 use tokio::time::{timeout, Instant};
@@ -24,6 +25,46 @@ const CONNECTION_CHANNEL_CAPACITY: usize = 128;
 const MAX_CIPHERTEXT_BYTES: usize = 16 * 1024;
 const MAX_IDENTIFIER_BYTES: usize = 128;
 const MAX_MESSAGE_TYPE_BYTES: usize = 32;
+
+struct TypingLimiter {
+    last: Instant,
+    window: Instant,
+    events: u32,
+    peer: Option<String>,
+    active: bool,
+}
+impl TypingLimiter {
+    fn new(now: Instant) -> Self {
+        Self {
+            last: now - Duration::from_secs(2),
+            window: now,
+            events: 0,
+            peer: None,
+            active: false,
+        }
+    }
+    fn allow(&mut self, peer: &str, active: bool, now: Instant) -> bool {
+        if peer.is_empty() || peer.len() > MAX_IDENTIFIER_BYTES {
+            return false;
+        }
+        if now.duration_since(self.window) >= Duration::from_secs(60) {
+            self.window = now;
+            self.events = 0;
+        }
+        if self.events >= 60 || (!active && (!self.active || self.peer.as_deref() != Some(peer))) {
+            return false;
+        }
+        let transition = self.active != active || self.peer.as_deref() != Some(peer);
+        if !transition && now.duration_since(self.last) < Duration::from_secs(2) {
+            return false;
+        }
+        self.events += 1;
+        self.last = now;
+        self.active = active;
+        self.peer = active.then(|| peer.to_string());
+        true
+    }
+}
 
 #[derive(Clone)]
 struct AuthenticatedSession {
@@ -65,6 +106,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, remote_ip: std::net::
         user_id,
         token,
         device_id,
+        supports_typing,
     }) = serde_json::from_str(&text)
     else {
         return;
@@ -81,7 +123,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, remote_ip: std::net::
         return;
     }
     let (tx, mut rx) = mpsc::channel::<String>(CONNECTION_CHANNEL_CAPACITY);
-    let generation = state.register(device_id.clone(), tx.clone());
+    let generation = state.register_with_typing(device_id.clone(), tx.clone(), supports_typing);
     let session = AuthenticatedSession {
         user_id,
         device_id,
@@ -90,6 +132,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, remote_ip: std::net::
     };
     send_message(&tx, &ServerMessage::AuthOk);
     let mut pending: HashMap<String, Instant> = HashMap::new();
+    let mut typing_limiter = TypingLimiter::new(Instant::now());
     let mut tick = tokio::time::interval(Duration::from_millis(500));
     // One writer and one durable queue: live traffic never bypasses replay.
     loop {
@@ -98,6 +141,9 @@ async fn handle_socket(socket: WebSocket, state: AppState, remote_ip: std::net::
             outgoing = rx.recv() => {
                 let Some(outgoing) = outgoing else { break };
                 if !session.is_active(&state).await { break; }
+                if let Ok(ServerMessage::Typing { from, expires_at, .. }) = serde_json::from_str(&outgoing) {
+                    if expires_at <= unix_millis() || !typing_allowed(&state, &from, &session.user_id).await { continue; }
+                }
                 if !matches!(timeout(Duration::from_secs(5), writer.send(Message::Text(outgoing))).await, Ok(Ok(()))) { break; }
             }
             incoming = reader.next() => {
@@ -141,6 +187,12 @@ async fn handle_socket(socket: WebSocket, state: AppState, remote_ip: std::net::
                         apply_ack(&state, &session, &tx, &message_id, outcome).await;
                         pending.remove(&message_id);
                     }
+                    ClientMessage::Typing { recipient_user_id, active } => {
+                        if !supports_typing { continue; }
+                        if !typing_limiter.allow(&recipient_user_id, active, Instant::now()) { continue; }
+                        // Never acknowledge presence requests: blocked users must not probe activity.
+                        forward_typing(&state, &session.user_id, &recipient_user_id, active).await;
+                    }
                 }
             }
             _ = tick.tick() => {
@@ -161,6 +213,34 @@ async fn handle_socket(socket: WebSocket, state: AppState, remote_ip: std::net::
         }
     }
     state.unregister(&session.device_id, session.generation);
+}
+
+async fn forward_typing(state: &AppState, sender: &str, recipient: &str, active: bool) {
+    if recipient.len() > MAX_IDENTIFIER_BYTES || recipient.is_empty() || recipient == sender {
+        return;
+    }
+    let Ok(devices) = sqlx::query("SELECT d.id FROM devices d WHERE d.user_id=$1 AND d.revoked=false
+        AND EXISTS(SELECT 1 FROM contact_policy p WHERE p.user_id=$1 AND p.peer_id=$2 AND p.status='accepted')
+        AND NOT EXISTS(SELECT 1 FROM contact_policy p WHERE p.user_id=$2 AND p.peer_id=$1 AND p.status IN ('blocked','rejected'))")
+        .bind(recipient).bind(sender).fetch_all(state.db.pool()).await else { return; };
+    let Ok(frame) = serde_json::to_string(&ServerMessage::Typing {
+        from: sender.to_string(),
+        active,
+        expires_at: unix_millis() + 5000,
+    }) else {
+        return;
+    };
+    for device in devices {
+        let id = device.get::<String, _>("id");
+        if state.typing_supported(&id) {
+            let _ = state.send_to(&id, frame.clone());
+        }
+    }
+}
+
+async fn typing_allowed(state: &AppState, sender: &str, recipient: &str) -> bool {
+    sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM contact_policy p WHERE p.user_id=$1 AND p.peer_id=$2 AND p.status='accepted') AND NOT EXISTS(SELECT 1 FROM contact_policy p WHERE p.user_id=$2 AND p.peer_id=$1 AND p.status IN ('blocked','rejected'))")
+        .bind(recipient).bind(sender).fetch_one(state.db.pool()).await.unwrap_or(false)
 }
 
 async fn apply_ack(
@@ -421,6 +501,21 @@ fn unix_millis() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typing_limiter_bounds_refreshes_and_transition_bursts() {
+        let now = Instant::now();
+        let mut limiter = TypingLimiter::new(now);
+        assert!(limiter.allow("bob", true, now));
+        assert!(!limiter.allow("bob", true, now + Duration::from_millis(100)));
+        assert!(limiter.allow("bob", false, now + Duration::from_millis(100)));
+        assert!(!limiter.allow("bob", false, now + Duration::from_millis(200)));
+        for index in 0..58 {
+            assert!(limiter.allow("bob", index % 2 == 0, now + Duration::from_secs(1)));
+        }
+        assert!(!limiter.allow("bob", true, now + Duration::from_secs(2)));
+        assert!(limiter.allow("bob", true, now + Duration::from_secs(61)));
+    }
 
     #[test]
     fn outdated_client_frames_request_an_upgrade() {

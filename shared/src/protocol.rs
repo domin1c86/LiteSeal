@@ -3,6 +3,9 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 pub const PROTOCOL_V2: u8 = 2;
+fn is_false(value: &bool) -> bool {
+    !value
+}
 const SIGNED_ENVELOPE_V2_DOMAIN: &[u8] = b"LiteSeal SignedEnvelopeV2\0";
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -150,6 +153,8 @@ pub enum ClientMessage {
         user_id: String,
         token: String,
         device_id: String,
+        #[serde(default, skip_serializing_if = "is_false")]
+        supports_typing: bool,
     },
     #[serde(rename = "send")]
     Send {
@@ -177,6 +182,11 @@ pub enum ClientMessage {
     },
     #[serde(rename = "delivery_query")]
     DeliveryQuery { message_ids: Vec<String> },
+    #[serde(rename = "typing")]
+    Typing {
+        recipient_user_id: String,
+        active: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -218,5 +228,11 @@ pub enum ServerMessage {
     MessageV2 {
         envelope: SignedEnvelopeV2,
         server_timestamp: i64,
+    },
+    #[serde(rename = "typing")]
+    Typing {
+        from: String,
+        active: bool,
+        expires_at: i64,
     },
 }

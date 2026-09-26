@@ -27,6 +27,7 @@ fn websocket_protocol_uses_tagged_json_contract() {
         user_id: "user-1".to_string(),
         token: "token-1".to_string(),
         device_id: "device-1".to_string(),
+        supports_typing: false,
     };
     let auth_json = serde_json::to_string(&auth).unwrap();
     assert_eq!(
@@ -76,6 +77,27 @@ fn websocket_protocol_uses_tagged_json_contract() {
     assert_eq!(
         serde_json::to_string(&offline).unwrap(),
         r#"{"type":"offline","message_id":"msg-1","to":"user-2"}"#
+    );
+}
+
+#[test]
+fn typing_frames_are_ephemeral_tagged_events() {
+    let outgoing = ClientMessage::Typing {
+        recipient_user_id: "bob".into(),
+        active: true,
+    };
+    assert_eq!(
+        serde_json::to_string(&outgoing).unwrap(),
+        r#"{"type":"typing","recipient_user_id":"bob","active":true}"#
+    );
+    let incoming = ServerMessage::Typing {
+        from: "alice".into(),
+        active: false,
+        expires_at: 5000,
+    };
+    assert_eq!(
+        serde_json::from_str::<ServerMessage>(&serde_json::to_string(&incoming).unwrap()).unwrap(),
+        incoming
     );
 }
 

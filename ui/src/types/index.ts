@@ -88,7 +88,8 @@ export type RelayEvent =
   | { type: "delivered"; message_id: string }
   | { type: "offline"; message_id: string; to: string }
   | { type: "delivery_update"; message_id: string; recipient_device_id: string; status: string }
-  | { type: "error"; code: string; message: string };
+  | { type: "error"; code: string; message: string }
+  | { type: "typing"; from: string; active: boolean; expires_at: number };
 
 export interface PollMessagesResult {
   messages: IncomingMessage[];

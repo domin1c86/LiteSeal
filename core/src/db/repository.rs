@@ -94,6 +94,9 @@ impl MessageRepository {
                 user_id TEXT NOT NULL, peer_id TEXT NOT NULL,
                 muted INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(user_id, peer_id)
             );
+            CREATE TABLE IF NOT EXISTS typing_preferences (
+                user_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 0
+            );
             CREATE TABLE IF NOT EXISTS personal_organizer (
                 user_id TEXT PRIMARY KEY, ciphertext BLOB NOT NULL
             );
@@ -518,6 +521,22 @@ impl MessageRepository {
             )
             .optional()?
             .unwrap_or(false))
+    }
+    pub fn typing_enabled(&self, user: &str) -> Result<bool, DbError> {
+        use rusqlite::OptionalExtension;
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT enabled FROM typing_preferences WHERE user_id=?1",
+                [user],
+                |row| row.get::<_, bool>(0),
+            )
+            .optional()?
+            .unwrap_or(false))
+    }
+    pub fn set_typing_enabled(&self, user: &str, enabled: bool) -> Result<(), DbError> {
+        self.conn.execute("INSERT INTO typing_preferences(user_id,enabled) VALUES(?1,?2) ON CONFLICT(user_id) DO UPDATE SET enabled=excluded.enabled", params![user,enabled])?;
+        Ok(())
     }
     pub fn set_read_receipts_enabled(&self, user: &str, enabled: bool) -> Result<(), DbError> {
         let tx = self.conn.unchecked_transaction()?;

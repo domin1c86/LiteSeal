@@ -3,8 +3,8 @@ import { useEffect, useState } from "react";
 import type { Contact } from "../types";
 import type { CommandMap } from "../../../electron/contracts";
 
-export default function AccountPanel({ userId, contacts, onClose, onContactsChanged, onLogout }: {
-  userId: string; contacts: Contact[]; onClose: () => void; onContactsChanged: () => void; onLogout: () => void;
+export default function AccountPanel({ userId, contacts, typingEnabled, onTypingEnabledChange, onClose, onContactsChanged, onLogout }: {
+  userId: string; contacts: Contact[]; typingEnabled: boolean; onTypingEnabledChange: (enabled: boolean) => void; onClose: () => void; onContactsChanged: () => void; onLogout: () => void;
 }) {
   const [requests, setRequests] = useState<CommandMap["list_contact_requests"]["result"]>([]);
   const [sessions, setSessions] = useState<CommandMap["list_account_sessions"]["result"]>([]);
@@ -21,6 +21,7 @@ export default function AccountPanel({ userId, contacts, onClose, onContactsChan
   const [readReceiptsEnabled, setReadReceiptsEnabled] = useState(false);
   async function refresh() {
     setReadReceiptsEnabled(await getDesktopApi().get_read_receipt_enabled({}));
+    onTypingEnabledChange(await getDesktopApi().get_typing_enabled({}));
     const [policies, active, profile] = await Promise.all([getDesktopApi().list_contact_requests({}), getDesktopApi().list_account_sessions({}), getDesktopApi().get_public_profile({ userId })]);
     setRequests(policies); setSessions(active);
     setProfileName(profile.display_name); setProfileAvatar(profile.avatar_png); setAccountName(profile.username);
@@ -66,6 +67,15 @@ export default function AccountPanel({ userId, contacts, onClose, onContactsChan
       catch (failure) { setError(String(failure)); }
       finally { setBusy(false); }
     }} /> 向联系人发送阅读回执</label>
+    <h3>正在输入提示</h3>
+    <p>默认关闭。启用后，仅在当前单聊实际输入时发送短暂状态；停止、失焦或断线后对方提示会消失，不写入聊天历史。</p>
+    <label><input type="checkbox" checked={typingEnabled} disabled={busy} onChange={async event => {
+      const enabled = event.target.checked;
+      setBusy(true); setError("");
+      try { await getDesktopApi().set_typing_enabled({ enabled }); onTypingEnabledChange(enabled); }
+      catch (failure) { setError(String(failure)); }
+      finally { setBusy(false); }
+    }} /> 向联系人显示我正在输入</label>
     {sessions.map(session => <p key={session.id}>{session.current ? "当前会话 · " : ""}{session.name} · 设备 {session.device_id} · {session.revoked ? "已撤销" : `访问令牌到期 ${session.expires_at}`}</p>)}
     <button disabled={busy} onClick={async () => {
       if (!window.confirm("退出此账号的全部会话？本机密钥与历史会保留。")) return;

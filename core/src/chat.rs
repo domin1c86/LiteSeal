@@ -41,6 +41,12 @@ pub enum RelayEvent {
     },
     #[serde(rename = "error")]
     Error { code: String, message: String },
+    #[serde(rename = "typing")]
+    Typing {
+        from: String,
+        active: bool,
+        expires_at: i64,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

@@ -59,6 +59,10 @@ test('real Rust process supports crypto, contacts, storage, errors and database 
   const plaintext = Array.from(Buffer.from('Electron 中文消息'));
   await assert.rejects(bridge.call('encrypt_message', { plaintext, recipientPublicKey: identity.public_key }), /No saved keypair/);
   await bridge.call('save_session', { userId: 'alice', token: 'token', refreshToken: 'refresh', deviceId: 'device', serverUrl: 'http://127.0.0.1:9' });
+  assert.equal(await bridge.call('get_typing_enabled', {}), false);
+  await assert.rejects(bridge.call('send_typing', { peerId: 'bob', active: true }), /正在输入提示已关闭/);
+  await bridge.call('set_typing_enabled', { enabled: true });
+  assert.equal(await bridge.call('get_typing_enabled', {}), true);
   assert.equal(await bridge.call('get_read_receipt_enabled', {}), false);
   await bridge.call('set_read_receipt_enabled', { enabled: true });
   assert.equal(await bridge.call('get_read_receipt_enabled', {}), true);
@@ -71,6 +75,7 @@ test('real Rust process supports crypto, contacts, storage, errors and database 
   assert.equal(await bridge.call('verify_message', { message: plaintext, signature, senderPublicKey: identity.ed25519_pk }), true);
   assert.equal(await bridge.call('verify_message', { message: [1], signature, senderPublicKey: identity.ed25519_pk }), false);
   assert.deepEqual(await bridge.call('add_contact', { userId: 'bob', username: 'Bob', publicKey: identity.public_key, ed25519Pk: identity.ed25519_pk }), { success: true });
+  await assert.rejects(bridge.call('send_typing', { peerId: 'bob', active: true }), /Not connected/);
   await assert.rejects(bridge.call('stage_clipboard_image', { peerId: 'bob', encoded: 'invalid' }), /剪贴板图片编码无效/);
   const staged = await bridge.call('stage_clipboard_image', { peerId: 'bob', encoded: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).toString('base64') });
   assert.equal(staged.name, 'clipboard-image.png');

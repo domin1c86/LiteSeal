@@ -54,6 +54,15 @@ export default function App() {
   const [retry, setRetry] = useState(0);
   const connectionWork = useRef<Promise<void>>(Promise.resolve());
   const [relayBatch, setRelayBatch] = useState<RelayBatch | null>(null);
+  const [typingEnabled, setTypingEnabled] = useState(false);
+
+  useEffect(() => {
+    if (!session?.user_id) { setTypingEnabled(false); return; }
+    let active = true;
+    void getDesktopApi().get_typing_enabled({}).then(value => { if (active) setTypingEnabled(value); })
+      .catch(() => { if (active) setTypingEnabled(false); });
+    return () => { active = false; };
+  }, [session?.user_id]);
 
   useEffect(() => {
     if (!window.desktop) return;
@@ -322,6 +331,7 @@ export default function App() {
           }}
           onDraftChange={(draft) => activeConversation ? preferences.saveDraft(activeConversation, draft) : Promise.resolve()}
           online={connection === "online"}
+          typingEnabled={typingEnabled}
           obscured={showAddContact || showStorage || showOrganizer || showAccount}
           conversationId={activeConversation}
           userId={session.user_id}
@@ -349,7 +359,7 @@ export default function App() {
       {organizer.error && <p role="alert">本机整理数据不可用：{organizer.error}</p>}
       {showOrganizer && organizer.ready && <OrganizerPanel organizer={organizer} userId={session.user_id} contacts={contacts}
         onClose={() => setShowOrganizer(false)} onOpen={peerId => { setActiveConversation(peerId); setSidebarTab("chats"); }} />}
-      {showAccount && <AccountPanel userId={session.user_id} contacts={contacts} onClose={() => setShowAccount(false)} onContactsChanged={refreshContacts} onLogout={() => { setShowAccount(false); void handleLogout(); }} />}
+      {showAccount && <AccountPanel userId={session.user_id} contacts={contacts} typingEnabled={typingEnabled} onTypingEnabledChange={setTypingEnabled} onClose={() => setShowAccount(false)} onContactsChanged={refreshContacts} onLogout={() => { setShowAccount(false); void handleLogout(); }} />}
     </div>
     </div>
   );

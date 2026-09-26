@@ -18,6 +18,42 @@ async fn call(state: &AppState, name: &str, args: Value) -> Value {
 }
 
 #[tokio::test]
+async fn typing_is_ephemeral_and_expired_frames_are_discarded() {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let relay = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = accept_async(stream).await.unwrap();
+            let _auth = socket.next().await.unwrap().unwrap();
+            socket.send(Message::Text(json!({"type":"auth_ok"}).to_string())).await.unwrap();
+            let frame: Value = serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+            assert_eq!(frame, json!({"type":"typing","recipient_user_id":"bob","active":true}));
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+            for expires_at in [0, now + 5000] {
+                socket.send(Message::Text(json!({"type":"typing","from":"bob","active":true,"expires_at":expires_at}).to_string())).await.unwrap();
+            }
+            while let Some(message) = socket.next().await { if message.unwrap().is_close() { break; } }
+        });
+        let state = AppState::new(":memory:").unwrap();
+        state.client.connect_relay(url, "alice".into(), "token".into(), "device-a".into()).await.unwrap();
+        state.client.send_typing("alice", "bob".into(), true).await.unwrap();
+        loop {
+            let batch = state.client.poll_messages().await.unwrap();
+            if !batch.events.is_empty() {
+                assert_eq!(batch.events.len(), 1);
+                assert!(matches!(&batch.events[0], liteseal_core::chat::RelayEvent::Typing { from, active: true, .. } if from == "bob"));
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(state.client.get_local_messages("dm:alice:bob", 50, 0).unwrap().is_empty());
+        state.client.disconnect().await;
+        relay.await.unwrap();
+    }).await.unwrap();
+}
+
+#[tokio::test]
 async fn desktop_sends_signed_envelopes_and_persists_relay_receipts() {
     tokio::time::timeout(Duration::from_secs(10), async {
         // Test-only keys: the real keystore is never touched.

@@ -141,6 +141,11 @@ pub enum FfiRelayEvent {
         code: String,
         message: String,
     },
+    Typing {
+        from_user_id: String,
+        active: bool,
+        expires_at: i64,
+    },
 }
 
 #[derive(uniffi::Record)]
@@ -461,6 +466,15 @@ impl LitesealCore {
                     chat::RelayEvent::Error { code, message } => {
                         FfiRelayEvent::Error { code, message }
                     }
+                    chat::RelayEvent::Typing {
+                        from,
+                        active,
+                        expires_at,
+                    } => FfiRelayEvent::Typing {
+                        from_user_id: from,
+                        active,
+                        expires_at,
+                    },
                 })
                 .collect(),
         })

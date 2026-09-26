@@ -13,6 +13,7 @@ pub type MessageSender = mpsc::Sender<String>;
 pub struct Connection {
     generation: u64,
     sender: MessageSender,
+    supports_typing: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,11 +45,31 @@ impl AppState {
         !code.is_empty() && self.invite_codes.iter().any(|allowed| allowed == code)
     }
 
+    #[cfg(test)]
     pub fn register(&self, device_id: String, sender: MessageSender) -> u64 {
+        self.register_with_typing(device_id, sender, false)
+    }
+    pub fn register_with_typing(
+        &self,
+        device_id: String,
+        sender: MessageSender,
+        supports_typing: bool,
+    ) -> u64 {
         let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
-        self.connections
-            .insert(device_id, Connection { generation, sender });
+        self.connections.insert(
+            device_id,
+            Connection {
+                generation,
+                sender,
+                supports_typing,
+            },
+        );
         generation
+    }
+    pub fn typing_supported(&self, device: &str) -> bool {
+        self.connections
+            .get(device)
+            .is_some_and(|connection| connection.supports_typing)
     }
 
     pub fn unregister(&self, device_id: &str, generation: u64) {
@@ -94,6 +115,20 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn typing_capability_is_explicit_and_connection_scoped() {
+        let db = Db::connect_lazy("postgres://unused:unused@127.0.0.1:1/unused").unwrap();
+        let state = AppState::new(db);
+        let (tx, _rx) = mpsc::channel(1);
+        let generation = state.register_with_typing("new".into(), tx, true);
+        assert!(state.typing_supported("new"));
+        state.unregister("new", generation);
+        assert!(!state.typing_supported("new"));
+        let (tx, _rx) = mpsc::channel(1);
+        state.register("old".into(), tx);
+        assert!(!state.typing_supported("old"));
+    }
 
     #[tokio::test]
     async fn send_to_removes_dead_connections() {

@@ -365,11 +365,36 @@ impl LitesealClient {
                 ServerMessage::Error { code, message } => {
                     events.push(RelayEvent::Error { code, message });
                 }
+                ServerMessage::Typing {
+                    from,
+                    active,
+                    expires_at,
+                } if expires_at > chrono::Utc::now().timestamp_millis() => {
+                    events.push(RelayEvent::Typing {
+                        from,
+                        active,
+                        expires_at,
+                    });
+                }
                 _ => {}
             }
         }
 
         Ok(PollMessagesResult { messages, events })
+    }
+
+    pub async fn send_typing(
+        &self,
+        sender_id: &str,
+        recipient_user_id: String,
+        active: bool,
+    ) -> Result<(), String> {
+        let ws = self.ws_client.lock().await;
+        let client = ws.as_ref().ok_or("Not connected to relay server")?;
+        if client.user_id() != sender_id {
+            return Err("Typing account does not match relay session".into());
+        }
+        client.send_typing(recipient_user_id, active).await
     }
 
     /// Verifies and stores one relay envelope. `Err` leaves it unacknowledged,

@@ -320,6 +320,7 @@ impl Engine {
         send(
             &mut socket,
             ClientMessage::Auth {
+                supports_typing: false,
                 user_id: a.user_id.clone(),
                 device_id: a.device_id.clone(),
                 token: a.access_token.clone(),

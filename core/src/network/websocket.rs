@@ -39,6 +39,7 @@ impl WebSocketClient {
             user_id: user_id.clone(),
             token,
             device_id: device_id.clone(),
+            supports_typing: true,
         };
         let auth_json = serde_json::to_string(&auth_msg).map_err(|e| e.to_string())?;
 
@@ -148,6 +149,20 @@ impl WebSocketClient {
             .send(Message::Text(json))
             .await
             .map_err(|e| format!("Failed to send ack: {}", e))
+    }
+
+    pub async fn send_typing(&self, recipient_user_id: String, active: bool) -> Result<(), String> {
+        let frame = serde_json::to_string(&ClientMessage::Typing {
+            recipient_user_id,
+            active,
+        })
+        .map_err(|e| e.to_string())?;
+        timeout(Duration::from_secs(2), async {
+            self.write.lock().await.send(Message::Text(frame)).await
+        })
+        .await
+        .map_err(|_| "Typing state send timed out".to_string())?
+        .map_err(|e| format!("Failed to send typing state: {e}"))
     }
 
     pub async fn disconnect(&mut self) {

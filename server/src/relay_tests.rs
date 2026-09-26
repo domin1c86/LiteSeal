@@ -9,6 +9,83 @@ use liteseal_shared::{
 
 #[tokio::test]
 #[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn typing_requires_acceptance_and_is_not_stored_or_replayed() {
+    let server = TestServer::start().await;
+    let alice = server.register().await;
+    let bob = server.register().await;
+    let mut sender = server.connect(&alice).await;
+    let mut recipient = server.connect(&bob).await;
+    let policy = |status: &str| serde_json::json!({"device_id":bob.device_id,"peer_id":alice.user_id,"status":status});
+    let client = http_client();
+    let allowed = client
+        .post(format!("{}/contact-policy", server.url))
+        .bearer_auth(&bob.token)
+        .json(&policy("accepted"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(allowed.status(), reqwest::StatusCode::NO_CONTENT);
+    send(
+        &mut sender,
+        ClientMessage::Typing {
+            recipient_user_id: bob.user_id.clone(),
+            active: true,
+        },
+    )
+    .await;
+    assert!(
+        matches!(receive(&mut recipient).await, ServerMessage::Typing { from, active: true, .. } if from == alice.user_id)
+    );
+    send(
+        &mut sender,
+        ClientMessage::Typing {
+            recipient_user_id: bob.user_id.clone(),
+            active: false,
+        },
+    )
+    .await;
+    assert!(matches!(
+        receive(&mut recipient).await,
+        ServerMessage::Typing { active: false, .. }
+    ));
+    let blocked = client
+        .post(format!("{}/contact-policy", server.url))
+        .bearer_auth(&bob.token)
+        .json(&policy("blocked"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(blocked.status(), reqwest::StatusCode::NO_CONTENT);
+    send(
+        &mut sender,
+        ClientMessage::Typing {
+            recipient_user_id: bob.user_id.clone(),
+            active: true,
+        },
+    )
+    .await;
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(300), recipient.next())
+            .await
+            .is_err()
+    );
+    assert!(server
+        .db
+        .pending_window(&bob.device_id)
+        .await
+        .unwrap()
+        .is_empty());
+    recipient.close(None).await.unwrap();
+    let mut reconnected = server.connect(&bob).await;
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(300), reconnected.next())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
 async fn only_recipient_can_submit_idempotent_signed_read_receipt() {
     let server = TestServer::start().await;
     let alice = server.register().await;
@@ -432,6 +509,7 @@ impl TestServer {
         send(
             &mut socket,
             ClientMessage::Auth {
+                supports_typing: true,
                 user_id: user.user_id.clone(),
                 token: user.token.clone(),
                 device_id: user.device_id.clone(),

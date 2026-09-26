@@ -18,6 +18,7 @@ interface ChatProps {
   onForward: (peerId: string, draft: Draft) => Promise<void>;
   onDraftChange: (draft: Draft) => Promise<void>;
   online: boolean;
+  typingEnabled: boolean;
   obscured: boolean;
   conversationId: string | null;
   userId: string;
@@ -29,10 +30,15 @@ interface ChatProps {
   onContactsChanged: () => void;
 }
 
-export default function Chat({ onFavorite, draft, onDraftChange, onForward, online, obscured, conversationId, userId, deviceId, token, serverUrl, contacts, relayBatch, onContactsChanged }: ChatProps) {
+export default function Chat({ onFavorite, draft, onDraftChange, onForward, online, typingEnabled, obscured, conversationId, userId, deviceId, token, serverUrl, contacts, relayBatch, onContactsChanged }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [reactions, setReactions] = useState<{ target_id: string; actor: string; emoji: string }[]>([]);
   const [readReceipts, setReadReceipts] = useState<string[]>([]);
+  const [peerTyping, setPeerTyping] = useState(false);
+  const peerTypingTimer = useRef<number | null>(null);
+  const typingIdleTimer = useRef<number | null>(null);
+  const typingActive = useRef(false);
+  const lastTypingSent = useRef(0);
   const [reactionBusy, setReactionBusy] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchRevision, setSearchRevision] = useState(0);
@@ -80,6 +86,46 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
   const activeContact = contacts.find((c) => c.user_id === conversationId);
   // conversationId prop is the peer's user id; storage/relay use the canonical DM id.
   const storageConversationId = conversationId ? dmConversationId(userId, conversationId) : null;
+
+  function stopOutgoingTyping() {
+    if (typingIdleTimer.current !== null) window.clearTimeout(typingIdleTimer.current);
+    typingIdleTimer.current = null;
+    if (!typingActive.current || !conversationId) return;
+    typingActive.current = false;
+    void getDesktopApi().send_typing({ peerId: conversationId, active: false }).catch(() => {});
+  }
+  function noteTyping(value: string) {
+    if (!typingEnabled || !online || obscured || !conversationId || !value.trim()) { stopOutgoingTyping(); return; }
+    const now = Date.now();
+    if (!typingActive.current || now - lastTypingSent.current >= 3000) {
+      typingActive.current = true;
+      lastTypingSent.current = now;
+      void getDesktopApi().send_typing({ peerId: conversationId, active: true }).catch(() => {});
+    }
+    if (typingIdleTimer.current !== null) window.clearTimeout(typingIdleTimer.current);
+    typingIdleTimer.current = window.setTimeout(stopOutgoingTyping, 4000);
+  }
+  useEffect(() => {
+    if (!typingEnabled || !online || obscured) stopOutgoingTyping();
+    const hidden = () => { if (document.hidden) stopOutgoingTyping(); };
+    window.addEventListener("blur", stopOutgoingTyping);
+    window.addEventListener("liteseal-app-locked", stopOutgoingTyping);
+    document.addEventListener("visibilitychange", hidden);
+    return () => {
+      stopOutgoingTyping();
+      window.removeEventListener("blur", stopOutgoingTyping);
+      window.removeEventListener("liteseal-app-locked", stopOutgoingTyping);
+      document.removeEventListener("visibilitychange", hidden);
+    };
+  }, [typingEnabled, online, obscured, conversationId]);
+  useEffect(() => {
+    if (!online) {
+      if (peerTypingTimer.current !== null) window.clearTimeout(peerTypingTimer.current);
+      peerTypingTimer.current = null;
+      setPeerTyping(false);
+    }
+    return () => { if (peerTypingTimer.current !== null) window.clearTimeout(peerTypingTimer.current); };
+  }, [online, conversationId]);
 
   useEffect(() => {
     let active = true;
@@ -330,6 +376,12 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
         stateByMessage.set(event.message_id, event.status);
       } else if (event.type === "error") {
         setSendError(event.message);
+      } else if (event.type === "typing" && event.from === conversationId && activeContact) {
+        if (peerTypingTimer.current !== null) window.clearTimeout(peerTypingTimer.current);
+        peerTypingTimer.current = null;
+        const remaining = Math.min(5000, event.expires_at - Date.now());
+        setPeerTyping(event.active && online && remaining > 0);
+        if (event.active && online && remaining > 0) peerTypingTimer.current = window.setTimeout(() => { setPeerTyping(false); peerTypingTimer.current = null; }, remaining);
       }
     }
 
@@ -355,6 +407,7 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
   async function handleSend(e: React.FormEvent) {
     e.preventDefault();
     if (!online || sending || composing.current || Date.now() - compositionEnded.current < 100 || !input.trim() || !conversationId) return;
+    stopOutgoingTyping();
 
     const text = input.trim();
     const messageId = draft.messageId ?? crypto.randomUUID();
@@ -456,6 +509,7 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
                 ? `${trustLabel(activeContact).text}${activeContact.fingerprint ? ` · ${activeContact.fingerprint.match(/.{1,4}/g)?.join(" ")}` : ""}`
                 : "end-to-end encrypted"}
             </span>
+            {peerTyping && online && <span role="status" style={styles.headerMeta}>正在输入…</span>}
           </div>
           {activeContact && (
             <button
@@ -660,7 +714,8 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
           placeholder="type a message…"
           value={input}
           disabled={sending || !!draft.messageId}
-          onChange={(e) => { void onDraftChange({ ...draft, text: e.target.value }).catch(() => {}); }}
+          onChange={(e) => { noteTyping(e.target.value); void onDraftChange({ ...draft, text: e.target.value }).catch(() => {}); }}
+          onBlur={stopOutgoingTyping}
           onCompositionStart={() => { composing.current = true; }}
           onCompositionEnd={() => { composing.current = false; compositionEnded.current = Date.now(); }}
           onKeyDown={event => {
