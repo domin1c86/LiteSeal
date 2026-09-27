@@ -345,6 +345,62 @@ struct MockState {
 }
 
 #[test]
+fn group_drafts_are_scope_bound_and_seen_markers_do_not_ack_or_create_read_receipts() {
+    let path = TempDb::new();
+    let (alice, bob, _, state, events) = fixture();
+    let mut receiver = seed(
+        &path.0,
+        "http://localhost",
+        bob.identity(),
+        &alice.identity(),
+        &events,
+    );
+    receiver
+        .save_draft(state.group_id(), "encrypted group draft", &bob.keys)
+        .unwrap();
+    let db = Connection::open(&path.0).unwrap();
+    let body: Vec<u8> = db
+        .query_row("SELECT body FROM local_group_drafts", [], |r| r.get(0))
+        .unwrap();
+    assert!(!body.windows(21).any(|w| w == b"encrypted group draft"));
+    drop(receiver);
+    let mut receiver = GroupStore::open(&path.0, "http://localhost", bob.identity()).unwrap();
+    assert_eq!(
+        receiver.draft(state.group_id(), &bob.keys).unwrap(),
+        "encrypted group draft"
+    );
+    receiver
+        .seal_text(state.group_id(), "submitted text", &bob.keys)
+        .unwrap();
+    assert_eq!(receiver.draft(state.group_id(), &bob.keys).unwrap(), "");
+    let message = envelope(
+        &state,
+        &alice,
+        &bob,
+        &uuid::Uuid::new_v4().to_string(),
+        "inbound",
+        None,
+    );
+    receiver.receive(&message, &bob.keys).unwrap();
+    assert_eq!(receiver.unread(state.group_id()).unwrap(), 1);
+    receiver
+        .mark_seen("different-group", std::slice::from_ref(&message.message_id))
+        .unwrap();
+    assert_eq!(receiver.unread(state.group_id()).unwrap(), 1);
+    receiver
+        .mark_seen(state.group_id(), std::slice::from_ref(&message.message_id))
+        .unwrap();
+    assert_eq!(receiver.unread(state.group_id()).unwrap(), 0);
+    assert_eq!(
+        receiver
+            .acknowledgements(state.group_id(), 2)
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
 fn history_pagination_keeps_older_rows_and_local_ciphertext_is_bound_to_its_group() {
     let path = TempDb::new();
     let (alice, bob, _, state, events) = fixture();

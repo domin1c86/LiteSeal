@@ -24,7 +24,7 @@ test('main process restricts IPC origins, navigation and packaged assets without
   child.stdin.on('data', frame => {
     const request = JSON.parse(frame.toString());
     commands.push(request.command.name);
-    child.stdout.write(JSON.stringify({ id: request.id, result: request.command.name === 'process_scheduled_messages' ? 1 : [] }) + '\n');
+    child.stdout.write(JSON.stringify({ id: request.id, result: request.command.name === 'process_scheduled_messages' ? 1 : request.command.name === 'process_groups' ? { changed: 1, errors: [] } : [] }) + '\n');
   });
   const app = Object.assign(new EventEmitter(), {
     isPackaged: true, requestSingleInstanceLock: () => true,
@@ -86,6 +86,8 @@ test('main process restricts IPC origins, navigation and packaged assets without
   assert.equal((await handler(valid, {})).ok, true);
   intervals[0](); await new Promise(resolve => setTimeout(resolve, 0));
   assert.ok(rendererEvents.some(args => args[0] === 'liteseal:scheduled-changed' && args.length === 1));
+  intervals[1](); await new Promise(resolve => setTimeout(resolve, 0));
+  assert.ok(rendererEvents.some(args => args[0] === 'liteseal:groups-changed' && args.length === 1));
   const permission = (kind, details, contents = window.webContents) => new Promise(resolve => permissionRequest(contents, kind, resolve, details));
   assert.equal(await permission('media', { requestingUrl: 'liteseal://app/index.html', mediaTypes: ['audio'] }), true);
   assert.equal(await permission('media', { requestingUrl: 'liteseal://app/index.html', mediaTypes: ['video'] }), false);
@@ -112,6 +114,13 @@ test('main process restricts IPC origins, navigation and packaged assets without
   assert.equal(commands.filter(name => name === 'process_scheduled_messages').length, previousCalls + 1);
   assert.equal(rendererEvents.length, previousEvents);
   assert.equal((await handlers.get('liteseal:list_scheduled_messages')(valid, {})).ok, false);
+  const previousGroupCalls=commands.filter(name=>name==='process_groups').length;
+  intervals[1](); await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(commands.filter(name=>name==='process_groups').length,previousGroupCalls+1);
+  assert.equal(rendererEvents.length,previousEvents);
+  for(const name of ['get_groups','get_group_history','group_draft','send_group_text','accept_group_invite','change_group_membership','process_groups']) {
+    assert.equal((await handlers.get(`liteseal:${name}`)(valid,{})).ok,false,name);
+  }
   assert.equal(await permission('media', { requestingUrl: 'liteseal://app/index.html', mediaTypes: ['audio'] }), false);
   assert.equal(permissionCheck(window.webContents, 'media', 'liteseal://app', { isMainFrame: true, mediaType: 'audio', requestingUrl: 'liteseal://app/index.html' }), false);
   assert.equal((await handler(valid, {})).ok, false);

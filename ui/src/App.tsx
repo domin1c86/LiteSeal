@@ -4,6 +4,7 @@ import { useConversationPreferences } from "./hooks/useConversationPreferences";
 import { useOrganizer } from "./hooks/useOrganizer";
 import OrganizerPanel from "./components/OrganizerPanel";
 import AccountPanel from "./components/AccountPanel";
+import GroupPanel from "./components/GroupPanel";
 import Login from "./components/Login";
 import Chat from "./components/Chat";
 import ContactList from "./components/ContactList";
@@ -36,6 +37,9 @@ export default function App() {
   const organizer = useOrganizer(session?.user_id);
   const [showOrganizer, setShowOrganizer] = useState(false);
   const [showAccount, setShowAccount] = useState(false);
+  const [showGroups, setShowGroups] = useState(false);
+  const [groupBusy, setGroupBusy] = useState(false);
+  const [groupAttention, setGroupAttention] = useState(0);
   const { drafts } = preferences;
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [profiles, setProfiles] = useState<Record<string, PublicProfile>>({});
@@ -58,6 +62,13 @@ export default function App() {
   const [scheduledRevision, setScheduledRevision] = useState(0);
   const [scheduledError, setScheduledError] = useState<string | null>(null);
   const [scheduledAttention, setScheduledAttention] = useState<string[]>([]);
+  useEffect(() => {
+    if (!session) { setGroupAttention(0); return; }
+    let active = true;
+    const refresh = () => { void getDesktopApi().get_groups({}).then(snapshot => { if (active) setGroupAttention(snapshot.invitations.length + snapshot.groups.reduce((sum, group) => sum + group.unread, 0)); }).catch(() => {}); };
+    refresh(); window.addEventListener("liteseal-groups-changed",refresh); const timer=setInterval(refresh,10000);
+    return () => {active=false;clearInterval(timer);window.removeEventListener("liteseal-groups-changed",refresh);};
+  }, [session?.user_id,session?.deviceId,session?.serverUrl]);
 
   useEffect(() => {
     if (!session) return;
@@ -211,11 +222,12 @@ export default function App() {
   }, []);
 
   async function handleLogout() {
-    if (organizer.busy) return;
+    if (organizer.busy || groupBusy) return;
     setLoading(true);
     try { await preferences.flush(); }
     catch { setLoading(false); return; }
     setSession(null);
+    setShowGroups(false);
     await connectionWork.current.catch(() => {});
     try {
       await disconnect();
@@ -282,7 +294,8 @@ export default function App() {
     <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
       <div role="status" style={{ padding: "6px 12px", background: "var(--surface)", color: "var(--text-muted)", fontSize: 12 }}>
         <button onClick={() => setShowAccount(true)}>账号与消息请求</button>
-        <button onClick={() => { void preferences.flush().then(() => getDesktopApi().lock_app({})).catch(error => setConnectionError(String(error))); }}>锁定</button>
+        <button disabled={groupBusy} onClick={() => { void preferences.flush().then(() => setShowGroups(true)).catch(error => setConnectionError(String(error))); }}>群聊{groupAttention > 0 ? ` (${groupAttention})` : ""}</button>
+        <button disabled={groupBusy} onClick={() => { void preferences.flush().then(() => getDesktopApi().lock_app({})).catch(error => setConnectionError(String(error))); }}>锁定</button>
         {{ online: "已连接", connecting: "正在连接…", reconnecting: "正在重连…", offline: "离线", auth_required: "需要重新登录" }[connection]}
         {connectionError && <span> · {connectionError}</span>}
         {scheduledError && <span role="alert"> · 定时任务检查失败：{scheduledError}</span>}
@@ -294,6 +307,7 @@ export default function App() {
       {preferences.ready && <div role="status" style={{ padding: "2px 12px", fontSize: 12 }}>{preferences.saving ? "会话更改保存中，请稍候再关闭窗口" : "会话更改已保存到本机"}</div>}
       {preferences.error && <div role="alert">{preferences.error} <button onClick={() => { void preferences.retry().catch(() => {}); }}>重试</button></div>}
     <div className="app-shell" style={{ ...styles.layout, flex: 1, minHeight: 0 }}>
+      {showGroups ? <GroupPanel key={`${session.user_id}:${session.deviceId}:${session.serverUrl}`} userId={session.user_id} contacts={contacts} obscured={showAccount || showStorage || showOrganizer || showAddContact} onBusyChange={setGroupBusy} onClose={() => setShowGroups(false)} /> : <>
       <ContactList
         key={session.user_id}
         userId={session.user_id}
@@ -365,6 +379,7 @@ export default function App() {
           onContactsChanged={refreshContacts}
         />
       )}
+      </>}
       {showAddContact && (
         <AddContact
           serverUrl={session.serverUrl}

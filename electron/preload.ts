@@ -17,3 +17,4 @@ contextBridge.exposeInMainWorld("desktop", Object.freeze(api));
 // A fixed event only; no raw ipcRenderer or arbitrary channel subscription.
 ipcRenderer.on("liteseal:locked", () => window.dispatchEvent(new Event("liteseal-app-locked")));
 ipcRenderer.on("liteseal:scheduled-changed", () => window.dispatchEvent(new Event("liteseal-scheduled-changed")));
+ipcRenderer.on("liteseal:groups-changed", () => window.dispatchEvent(new Event("liteseal-groups-changed")));

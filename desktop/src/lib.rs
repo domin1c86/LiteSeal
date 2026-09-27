@@ -11,6 +11,8 @@ pub struct AppState {
     identity: Mutex<Option<KeystoreData>>,
     pending_keys: Mutex<Option<KeystoreData>>,
     pub(crate) scheduled_tick: Mutex<Option<(String, i64)>>,
+    pub(crate) groups_runtime: Mutex<commands::groups::Runtime>,
+    pub(crate) groups_gate: tokio::sync::Mutex<()>,
 }
 
 impl AppState {
@@ -27,6 +29,8 @@ impl AppState {
             identity: Mutex::new(None),
             pending_keys: Mutex::new(None),
             scheduled_tick: Mutex::new(None),
+            groups_runtime: Mutex::new(commands::groups::Runtime::default()),
+            groups_gate: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -46,21 +50,43 @@ impl AppState {
 
     pub fn save_identity(&self, data: KeystoreData) -> Result<(), String> {
         let mut cached = self.identity.lock().map_err(|e| e.to_string())?;
+        let previous = cached.clone();
+        let changed = previous.as_ref().is_some_and(|old| {
+            old.user_id != data.user_id
+                || old.device_id != data.device_id
+                || old.server_url != data.server_url
+                || old.token != data.token
+                || old.public_key != data.public_key
+                || old.ed25519_pk != data.ed25519_pk
+                || old.secret_key != data.secret_key
+                || old.ed25519_sk != data.ed25519_sk
+        });
         match &self.keystore_path {
             Some(path) => keystore::save_keypair_to(path, data.clone())?,
             None => keystore::save_keypair(data.clone())?,
         }
         *cached = Some(data);
+        drop(cached);
+        if changed {
+            if let Some(previous) = previous {
+                commands::groups::invalidate(self, &previous)?;
+            }
+        }
         Ok(())
     }
 
     pub fn clear_identity(&self) -> Result<(), String> {
         let mut cached = self.identity.lock().map_err(|e| e.to_string())?;
+        let previous = cached.clone();
         match &self.keystore_path {
             Some(path) => keystore::clear_keypair_at(path)?,
             None => keystore::clear_keypair()?,
         }
         *cached = None;
+        drop(cached);
+        if let Some(previous) = previous {
+            commands::groups::invalidate(self, &previous)?;
+        }
         Ok(())
     }
 

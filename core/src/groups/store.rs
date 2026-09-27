@@ -338,6 +338,11 @@ impl GroupStore {
         };
         tx.execute("INSERT INTO local_group_outbox(scope,group_id,message_id,batch,status) VALUES(?1,?2,?3,?4,'queued')",params![self.scope,id,message,json(&batch)?]).map_err(db)?;
         tx.execute("INSERT INTO local_group_messages(scope,group_id,message_id,body,status,sent_at,envelope) VALUES(?1,?2,?3,?4,'queued',?5,NULL)",params![self.scope,id,message,seal_local(&self.scope,id,&local,keys)?,sent_at]).map_err(db)?;
+        tx.execute(
+            "DELETE FROM local_group_drafts WHERE scope=?1 AND group_id=?2",
+            params![self.scope, id],
+        )
+        .map_err(db)?;
         tx.commit().map_err(db)?;
         Ok(message)
     }
@@ -492,6 +497,58 @@ impl GroupStore {
     ) -> Result<Vec<GroupLocalMessage>, String> {
         Ok(self.history(id, None, keys)?.messages)
     }
+    pub fn unread(&self, id: &str) -> Result<i64, String> {
+        self.conn.query_row("SELECT COUNT(*) FROM local_group_messages WHERE scope=?1 AND group_id=?2 AND status='received'",params![self.scope,id],|row|row.get(0)).map_err(db)
+    }
+    pub fn mark_seen(&mut self, id: &str, ids: &[String]) -> Result<(), String> {
+        if ids.len() > 100 {
+            return Err(invalid());
+        }
+        let tx = self.conn.transaction().map_err(db)?;
+        for message in ids {
+            tx.execute("UPDATE local_group_messages SET status='seen' WHERE scope=?1 AND group_id=?2 AND message_id=?3 AND status='received'",params![self.scope,id,message]).map_err(db)?;
+        }
+        tx.commit().map_err(db)
+    }
+    pub fn save_draft(
+        &mut self,
+        id: &str,
+        text: &str,
+        keys: &crypto::KeyPair,
+    ) -> Result<(), String> {
+        check_keys(&self.identity, keys)?;
+        self.state(id)?;
+        if text.len() > MAX_GROUP_TEXT_BYTES {
+            return Err("群草稿过长，请缩短文字".into());
+        }
+        let body = sealed(
+            keys,
+            json(&("LiteSeal/group-draft/v1", &self.scope, id, text))?.as_bytes(),
+        )?;
+        self.conn.execute("INSERT INTO local_group_drafts(scope,group_id,body) VALUES(?1,?2,?3) ON CONFLICT(scope,group_id) DO UPDATE SET body=excluded.body",params![self.scope,id,body]).map_err(db)?;
+        Ok(())
+    }
+    pub fn draft(&self, id: &str, keys: &crypto::KeyPair) -> Result<String, String> {
+        check_keys(&self.identity, keys)?;
+        let body: Option<Vec<u8>> = self
+            .conn
+            .query_row(
+                "SELECT body FROM local_group_drafts WHERE scope=?1 AND group_id=?2",
+                params![self.scope, id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(db)?;
+        let Some(body) = body else {
+            return Ok(String::new());
+        };
+        let (domain, scope, group, text): (String, String, String, String) =
+            serde_json::from_slice(&opened(keys, &body)?).map_err(|_| invalid())?;
+        if domain != "LiteSeal/group-draft/v1" || scope != self.scope || group != id {
+            return Err(invalid());
+        }
+        Ok(text)
+    }
     pub fn history(
         &self,
         id: &str,
@@ -551,4 +608,5 @@ CREATE INDEX IF NOT EXISTS local_group_history ON local_group_messages(scope,gro
 CREATE TABLE IF NOT EXISTS local_group_outbox(scope TEXT NOT NULL,group_id TEXT NOT NULL,message_id TEXT NOT NULL,batch TEXT NOT NULL,status TEXT NOT NULL,PRIMARY KEY(scope,group_id,message_id));
 CREATE UNIQUE INDEX IF NOT EXISTS local_group_pending ON local_group_outbox(scope,group_id) WHERE status='queued';
 CREATE TABLE IF NOT EXISTS local_group_ack(scope TEXT NOT NULL,group_id TEXT NOT NULL,joined INTEGER NOT NULL,message_id TEXT NOT NULL,PRIMARY KEY(scope,group_id,joined,message_id));
+CREATE TABLE IF NOT EXISTS local_group_drafts(scope TEXT NOT NULL,group_id TEXT NOT NULL,body BLOB NOT NULL,PRIMARY KEY(scope,group_id));
 ";

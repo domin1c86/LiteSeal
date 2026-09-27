@@ -73,6 +73,14 @@ else {
         if (changes > 0 && !locked) mainWindow?.webContents.send("liteseal:scheduled-changed");
       }).catch(() => {}).finally(() => { scheduledBusy = false; });
     }, 1000).unref();
+    let groupsBusy = false;
+    setInterval(() => {
+      if (groupsBusy || quitting || exitRequested) return;
+      groupsBusy = true;
+      void bridge.call("process_groups", {}).then(report => {
+        if (report.changed > 0 && !locked) mainWindow?.webContents.send("liteseal:groups-changed");
+      }).catch(() => {}).finally(() => { groupsBusy = false; });
+    }, 10000).unref();
     try {
       const configuration = JSON.parse(await fs.readFile(path.join(app.getPath("userData"), "app-lock.json"), "utf8"));
       if (typeof configuration.enabled !== "boolean") throw new Error("应用锁配置损坏");

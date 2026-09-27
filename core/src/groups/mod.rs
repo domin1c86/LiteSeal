@@ -63,6 +63,64 @@ impl GroupClient {
     fn store(&self) -> Result<MutexGuard<'_, GroupStore>, String> {
         self.store.lock().map_err(|_| "群本机存储锁不可用".into())
     }
+    pub async fn update_token(&self, token: String) -> Result<(), String> {
+        if self.api.token_matches(&token) {
+            return Ok(());
+        }
+        let _gate = self.gate.lock().await;
+        self.api.update_token(token)
+    }
+    pub fn invalidate_token_if(&self, expected: &str) {
+        self.api.invalidate_token_if(expected);
+    }
+    pub fn pending(&self, id: &str) -> Result<bool, String> {
+        Ok(self.store()?.queued(id)?.is_some())
+    }
+    pub fn unread(&self, id: &str) -> Result<i64, String> {
+        self.store()?.unread(id)
+    }
+    pub fn mark_seen(&self, id: &str, ids: &[String]) -> Result<(), String> {
+        self.store()?.mark_seen(id, ids)
+    }
+    pub fn draft(&self, id: &str, keys: &crypto::KeyPair) -> Result<String, String> {
+        self.store()?.draft(id, keys)
+    }
+    pub fn save_draft(&self, id: &str, text: &str, keys: &crypto::KeyPair) -> Result<(), String> {
+        self.store()?.save_draft(id, text, keys)
+    }
+    pub async fn creator_hint(&self, id: &str) -> Result<(String, GroupIdentity), String> {
+        let page = self.api.changes(id, 0).await.map_err(|e| e.to_string())?;
+        let first = page
+            .changes
+            .first()
+            .filter(|event| event.group_id == id && event.epoch == 1)
+            .ok_or("没有可核实的群创建记录")?;
+        match &first.action {
+            GroupAction::Create { name, owner } => {
+                pin_creation(first, owner).map_err(|_| "群创建签名记录无效")?;
+                Ok((name.clone(), owner.clone()))
+            }
+            _ => Err("群创建记录格式无效".into()),
+        }
+    }
+    /// The hint above remains untrusted until this separately verified owner
+    /// is supplied by the business layer and its signed prefix is pinned.
+    pub async fn recover_trusted(
+        &self,
+        id: &str,
+        owner: &GroupIdentity,
+    ) -> Result<GroupState, String> {
+        let _gate = self.gate.lock().await;
+        let page = self.api.changes(id, 0).await.map_err(|e| e.to_string())?;
+        let first = page
+            .changes
+            .first()
+            .filter(|e| e.group_id == id)
+            .ok_or("没有群创建记录")?;
+        self.store()?.pin(first, owner)?;
+        self.store()?.apply(id, &page.changes)?;
+        self.sync_inner(id).await
+    }
     pub fn group_ids(&self) -> Result<Vec<String>, String> {
         self.store()?.group_ids()
     }

@@ -3,6 +3,22 @@ import type { RegisterResult, ConnectResult, SendMessageResult, PollMessagesResu
 } from "../ui/src/types";
 
 export interface CommandMap {
+  sync_group: { args: { groupId: string }; result: number };
+  get_groups: { args: { refresh?: boolean; afterId?: string }; result: GroupSnapshot };
+  create_group: { args: { name: string }; result: string };
+  inspect_group: { args: { groupId: string; inviteId?: string }; result: GroupInspection };
+  inspect_group_peer: { args: { peerId: string }; result: GroupMember };
+  recover_group: { args: { groupId: string; confirmedFingerprint: string }; result: void };
+  invite_group_member: { args: { groupId: string; peerId: string; confirmedFingerprint: string }; result: void };
+  accept_group_invite: { args: { inviteId: string; confirmedFingerprint: string }; result: string };
+  decline_group_invite: { args: { inviteId: string }; result: void };
+  change_group_membership: { args: { groupId: string; action: "rename" | "remove" | "leave" | "close"; value?: string }; result: void };
+  get_group_history: { args: { groupId: string; before?: number }; result: { messages: GroupMessage[]; next_before: number | null } };
+  group_draft: { args: { groupId: string; text?: string }; result: string };
+  mark_group_seen: { args: { groupId: string; ids: string[] }; result: void };
+  send_group_text: { args: { groupId: string; text?: string }; result: { message_id: string; state: string; error: string | null } };
+  cancel_group_send: { args: { groupId: string }; result: void };
+  process_groups: { args: {}; result: { changed: number; errors: string[] } };
   save_scheduled_message: { args: { id?: string; peerId: string; text: string; dueAt: number }; result: ScheduledTask };
   list_scheduled_messages: { args: {}; result: ScheduledTask[] };
   cancel_scheduled_message: { args: { id: string; removeSubmitted?: boolean }; result: void };
@@ -95,12 +111,19 @@ export interface CommandMap {
   clear_downloaded_attachments: { args: {  }; result: number };
 }
 export type CommandName = keyof CommandMap;
+export interface GroupMember { user_id: string; device_id: string; name: string; fingerprint: string; joined_epoch: number }
+export interface GroupView { id: string; name: string; owner: string; epoch: number; closed: boolean; active: boolean; trusted: boolean; members: GroupMember[]; unread: number; pending: boolean }
+export interface GroupMessage { id: string; sender_user_id: string; sender_device_id: string; sent_at: number; text: string; status: string }
+export interface GroupInspection { group_id: string; name: string; owner_id: string; owner_name: string; owner_device: string; fingerprint: string; eligible: boolean; reason: string }
+export interface GroupSnapshot { groups: GroupView[]; invitations: { id: string; group_id: string; expires_at: number }[]; errors: string[]; next_cursor: string | null }
 export interface ScheduledTask { id: string; peer_id: string; due_at: number; text: string; state: string; error: string; sealed: boolean }
 export interface AttachmentTask { id: string; peer_id: string; message_id: string; name: string; size: number; mime: string; duration_ms?: number; offset: number; total: number; direction: string }
 export type DesktopApi = {
   [K in CommandName]: (args: CommandMap[K]["args"]) => Promise<CommandMap[K]["result"]>;
 };
 export const commandNames = [
+  "sync_group",
+  "get_groups", "create_group", "inspect_group", "inspect_group_peer", "recover_group", "invite_group_member", "accept_group_invite", "decline_group_invite", "change_group_membership", "get_group_history", "group_draft", "mark_group_seen", "send_group_text", "cancel_group_send", "process_groups",
   "save_scheduled_message", "list_scheduled_messages", "cancel_scheduled_message", "send_scheduled_now", "process_scheduled_messages", "suspend_scheduled_messages",
   "configure_app_lock",
   "preview_attachment_task",

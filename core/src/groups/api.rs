@@ -26,7 +26,7 @@ fn valid_id(value: &str) -> Result<(), ApiError> {
             message: "无效群或消息编号".into(),
         })
 }
-pub(super) fn canonical_origin(server: &str) -> Result<String, String> {
+pub fn canonical_origin(server: &str) -> Result<String, String> {
     let mut origin = url::Url::parse(&crate::api::normalize_server_url(server)?)
         .map_err(|_| "无效服务器地址")?;
     if !origin.username().is_empty()
@@ -44,7 +44,7 @@ pub(super) fn canonical_origin(server: &str) -> Result<String, String> {
 /// Credentials remain in Rust memory; never serialize or log this object.
 pub struct GroupApi {
     pub(super) origin: String,
-    token: String,
+    token: std::sync::RwLock<String>,
     device: String,
     client: reqwest::Client,
 }
@@ -61,7 +61,7 @@ impl GroupApi {
             .map_err(|_| "无法创建群请求客户端")?;
         Ok(Self {
             origin,
-            token,
+            token: std::sync::RwLock::new(token),
             device,
             client,
         })
@@ -69,7 +69,29 @@ impl GroupApi {
     fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
         self.client
             .request(method, format!("{}{path}", self.origin))
-            .bearer_auth(&self.token)
+            .bearer_auth(
+                self.token
+                    .read()
+                    .map(|token| token.clone())
+                    .unwrap_or_default(),
+            )
+    }
+    pub(super) fn update_token(&self, token: String) -> Result<(), String> {
+        if token.is_empty() {
+            return Err("群会话已退出".into());
+        }
+        *self.token.write().map_err(|_| "群会话锁不可用")? = token;
+        Ok(())
+    }
+    pub(super) fn token_matches(&self, token: &str) -> bool {
+        self.token.read().is_ok_and(|current| *current == token)
+    }
+    pub(super) fn invalidate_token_if(&self, expected: &str) {
+        if let Ok(mut token) = self.token.write() {
+            if *token == expected {
+                token.clear();
+            }
+        }
     }
     async fn decode<T: DeserializeOwned>(mut response: reqwest::Response) -> Result<T, ApiError> {
         let status = response.status();
@@ -290,5 +312,35 @@ fn empty(response: reqwest::Response) -> Result<(), ApiError> {
             status: Some(response.status().as_u16()),
             message: "群确认请求失败，保留原确认任务".into(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn renewing_and_invalidating_tokens_changes_only_future_request_capability() {
+        let api = GroupApi::new("http://localhost:3000", "old".into(), "device".into()).unwrap();
+        api.update_token("fresh".into()).unwrap();
+        api.invalidate_token_if("old");
+        assert_eq!(
+            api.request(reqwest::Method::GET, "/groups")
+                .build()
+                .unwrap()
+                .headers()[reqwest::header::AUTHORIZATION],
+            "Bearer fresh"
+        );
+        api.invalidate_token_if("fresh");
+        assert!(!api.token_matches("fresh"));
+        assert!(api.update_token(String::new()).is_err());
+        api.update_token("next".into()).unwrap();
+        assert_eq!(
+            api.request(reqwest::Method::GET, "/groups")
+                .build()
+                .unwrap()
+                .headers()[reqwest::header::AUTHORIZATION],
+            "Bearer next"
+        );
+        assert_eq!(api.origin, "http://localhost:3000");
     }
 }

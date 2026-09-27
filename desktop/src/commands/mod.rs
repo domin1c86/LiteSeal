@@ -3,6 +3,7 @@ pub mod attachments;
 pub mod auth;
 pub mod chat;
 pub mod contacts;
+pub mod groups;
 pub mod keystore;
 pub mod message_operations;
 pub mod reactions;

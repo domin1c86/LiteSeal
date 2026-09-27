@@ -16,6 +16,102 @@ pub struct Request {
 #[derive(Deserialize)]
 #[serde(tag = "name", content = "args", deny_unknown_fields)]
 pub enum Command {
+    #[serde(rename = "sync_group")]
+    SyncGroup {
+        #[serde(rename = "groupId")]
+        group_id: String,
+    },
+    #[serde(rename = "get_groups")]
+    GetGroups {
+        #[serde(default)]
+        refresh: bool,
+        #[serde(rename = "afterId", default)]
+        after_id: Option<String>,
+    },
+    #[serde(rename = "create_group")]
+    CreateGroup { name: String },
+    #[serde(rename = "inspect_group")]
+    InspectGroup {
+        #[serde(rename = "groupId")]
+        group_id: String,
+        #[serde(rename = "inviteId", default)]
+        invite_id: Option<String>,
+    },
+    #[serde(rename = "inspect_group_peer")]
+    InspectGroupPeer {
+        #[serde(rename = "peerId")]
+        peer_id: String,
+    },
+    #[serde(rename = "recover_group")]
+    RecoverGroup {
+        #[serde(rename = "groupId")]
+        group_id: String,
+        #[serde(rename = "confirmedFingerprint")]
+        confirmed_fingerprint: String,
+    },
+    #[serde(rename = "invite_group_member")]
+    InviteGroupMember {
+        #[serde(rename = "groupId")]
+        group_id: String,
+        #[serde(rename = "peerId")]
+        peer_id: String,
+        #[serde(rename = "confirmedFingerprint")]
+        confirmed_fingerprint: String,
+    },
+    #[serde(rename = "accept_group_invite")]
+    AcceptGroupInvite {
+        #[serde(rename = "inviteId")]
+        invite_id: String,
+        #[serde(rename = "confirmedFingerprint")]
+        confirmed_fingerprint: String,
+    },
+    #[serde(rename = "decline_group_invite")]
+    DeclineGroupInvite {
+        #[serde(rename = "inviteId")]
+        invite_id: String,
+    },
+    #[serde(rename = "change_group_membership")]
+    ChangeGroupMembership {
+        #[serde(rename = "groupId")]
+        group_id: String,
+        action: String,
+        #[serde(default)]
+        value: Option<String>,
+    },
+    #[serde(rename = "get_group_history")]
+    GetGroupHistory {
+        #[serde(rename = "groupId")]
+        group_id: String,
+        #[serde(default)]
+        before: Option<i64>,
+    },
+    #[serde(rename = "group_draft")]
+    GroupDraft {
+        #[serde(rename = "groupId")]
+        group_id: String,
+        #[serde(default)]
+        text: Option<String>,
+    },
+    #[serde(rename = "mark_group_seen")]
+    MarkGroupSeen {
+        #[serde(rename = "groupId")]
+        group_id: String,
+        ids: Vec<String>,
+    },
+    #[serde(rename = "send_group_text")]
+    SendGroupText {
+        #[serde(rename = "groupId")]
+        group_id: String,
+        #[serde(default)]
+        text: Option<String>,
+    },
+    #[serde(rename = "cancel_group_send")]
+    CancelGroupSend {
+        #[serde(rename = "groupId")]
+        group_id: String,
+    },
+    #[serde(rename = "process_groups")]
+    ProcessGroups {},
     #[serde(rename = "save_scheduled_message")]
     SaveScheduledMessage {
         id: Option<String>,
@@ -468,6 +564,67 @@ impl Response {
 
 pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, String> {
     let result = match command {
+        Command::SyncGroup { group_id } => {
+            serde_json::to_value(commands::groups::sync(state, group_id).await?)
+        }
+        Command::GetGroups { refresh, after_id } => {
+            serde_json::to_value(commands::groups::list(state, refresh, after_id).await?)
+        }
+        Command::CreateGroup { name } => {
+            serde_json::to_value(commands::groups::create(state, name).await?)
+        }
+        Command::InspectGroup {
+            group_id,
+            invite_id,
+        } => serde_json::to_value(commands::groups::inspect(state, group_id, invite_id).await?),
+        Command::InspectGroupPeer { peer_id } => {
+            serde_json::to_value(commands::groups::peer(state, peer_id).await?)
+        }
+        Command::RecoverGroup {
+            group_id,
+            confirmed_fingerprint,
+        } => serde_json::to_value(
+            commands::groups::recover(state, group_id, confirmed_fingerprint).await?,
+        ),
+        Command::InviteGroupMember {
+            group_id,
+            peer_id,
+            confirmed_fingerprint,
+        } => serde_json::to_value(
+            commands::groups::invite(state, group_id, peer_id, confirmed_fingerprint).await?,
+        ),
+        Command::AcceptGroupInvite {
+            invite_id,
+            confirmed_fingerprint,
+        } => serde_json::to_value(
+            commands::groups::accept(state, invite_id, confirmed_fingerprint).await?,
+        ),
+        Command::DeclineGroupInvite { invite_id } => {
+            serde_json::to_value(commands::groups::decline(state, invite_id).await?)
+        }
+        Command::ChangeGroupMembership {
+            group_id,
+            action,
+            value,
+        } => serde_json::to_value(
+            commands::groups::membership(state, group_id, action, value).await?,
+        ),
+        Command::GetGroupHistory { group_id, before } => {
+            serde_json::to_value(commands::groups::history(state, group_id, before).await?)
+        }
+        Command::GroupDraft { group_id, text } => {
+            serde_json::to_value(commands::groups::draft(state, group_id, text).await?)
+        }
+        Command::MarkGroupSeen { group_id, ids } => {
+            serde_json::to_value(commands::groups::seen(state, group_id, ids).await?)
+        }
+        Command::SendGroupText { group_id, text } => {
+            serde_json::to_value(commands::groups::send(state, group_id, text).await?)
+        }
+        Command::CancelGroupSend { group_id } => {
+            serde_json::to_value(commands::groups::cancel(state, group_id).await?)
+        }
+        Command::ProcessGroups {} => serde_json::to_value(commands::groups::process(state).await?),
         Command::SaveScheduledMessage {
             id,
             peer_id,
