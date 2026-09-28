@@ -78,8 +78,9 @@ else {
       if (groupsBusy || quitting || exitRequested) return;
       groupsBusy = true;
       const notificationGeneration = notifications.generation();
+      const groupRevision = notifications.groupRevision();
       void bridge.call("process_groups", {}).then(report => {
-        try { notifications.receiveGroups(report, notificationGeneration); } catch { /* OS notifications never fail delivery. */ }
+        try { notifications.receiveGroups(report, notificationGeneration, groupRevision); } catch { /* OS notifications never fail delivery. */ }
         if (report.changed > 0 && !locked) mainWindow?.webContents.send("liteseal:groups-changed");
       }).catch(() => {}).finally(() => { groupsBusy = false; });
     }, 10000).unref();
@@ -300,7 +301,7 @@ else {
             clipboard.writeText(text);
             return { ok: true, result: null };
           }
-          if (name === "sign_out" || name === "clear_keypair" || name === "logout_all_sessions" || name === "change_password") notifications.context(null, null);
+          if (name === "save_session" || name === "sign_out" || name === "clear_keypair" || name === "logout_all_sessions" || name === "change_password") notifications.context(null, null);
           const result = await bridge.call(name, args as never);
           if (locked || generation !== lockGeneration) throw new Error("应用已锁定");
           if (name === "poll_messages") {

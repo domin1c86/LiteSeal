@@ -64,6 +64,7 @@ export default function App() {
   const [scheduledRevision, setScheduledRevision] = useState(0);
   const [scheduledError, setScheduledError] = useState<string | null>(null);
   const [scheduledAttention, setScheduledAttention] = useState<string[]>([]);
+  useEffect(() => { setGroupTarget(null); setActiveGroup(null); }, [session?.user_id, session?.deviceId, session?.serverUrl]);
   useEffect(() => {
     if (!session) { setGroupAttention(0); return; }
     let active = true;
@@ -311,7 +312,7 @@ export default function App() {
       {preferences.ready && <div role="status" style={{ padding: "2px 12px", fontSize: 12 }}>{preferences.saving ? "会话更改保存中，请稍候再关闭窗口" : "会话更改已保存到本机"}</div>}
       {preferences.error && <div role="alert">{preferences.error} <button onClick={() => { void preferences.retry().catch(() => {}); }}>重试</button></div>}
     <div className="app-shell" style={{ ...styles.layout, flex: 1, minHeight: 0 }}>
-      {showGroups ? <GroupPanel key={`${session.user_id}:${session.deviceId}:${session.serverUrl}`} userId={session.user_id} target={groupTarget} onActiveChange={setActiveGroup} contacts={contacts} obscured={showAccount || showStorage || showOrganizer || showAddContact} onBusyChange={setGroupBusy} onClose={() => setShowGroups(false)} /> : <>
+      {showGroups ? <GroupPanel key={`${session.user_id}:${session.deviceId}:${session.serverUrl}`} userId={session.user_id} target={groupTarget} onActiveChange={setActiveGroup} contacts={contacts} obscured={showAccount || showStorage || showOrganizer || showAddContact} onBusyChange={setGroupBusy} onClose={() => { setShowGroups(false); setGroupTarget(null); }} /> : <>
       <ContactList
         key={session.user_id}
         userId={session.user_id}

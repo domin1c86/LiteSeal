@@ -44,11 +44,14 @@ test('group notifications hide content, deduplicate, throttle and invalidate rou
   notices.receiveGroups(report('g3', 'm4'), notices.generation());
   notices.receiveGroups(report('g4', 'm5'), generation);
   assert.equal(shown.length, 1);
-  const beforeMute = notices.generation(); notices.suppressGroup('g5');
-  notices.receiveGroups(report('g5', 'm6'), beforeMute);
-  assert.equal(shown.length, 1);
+  notices.receiveGroups(report('other', 'm-other'), notices.generation());
+  const other = shown.at(-1);
+  const beforeMute = notices.generation(), beforeRevision = notices.groupRevision(); notices.suppressGroup('g5');
+  other.emit('click'); assert.equal(notices.takeTarget()?.groupId, 'other');
+  notices.receiveGroups(report('g5', 'm6'), beforeMute, beforeRevision);
+  assert.equal(shown.length, 2);
   notices.context('alice', null, null, { ...identity, server_url: 'http://localhost:3001' });
   notices.receiveGroups(report('g6', 'm7'), notices.generation());
   shown[0].emit('click'); assert.equal(notices.takeTarget(), null);
-  assert.equal(shown.length, 1);
+  assert.equal(shown.length, 2);
 });

@@ -12,6 +12,8 @@ export class ChatNotifications {
   private scope: string | null = null;
   private locked = false;
   private epoch = 0;
+  private suppressionRevision = 0;
+  private suppressedGroups = new Map<string, number>();
   private seen = new Set<string>();
   private lastShown = new Map<string, number>();
   private visible = new Map<string, Notification>();
@@ -22,7 +24,7 @@ export class ChatNotifications {
   context(userId: string | null, activePeerId: string | null, activeGroupId: string | null = null, identity: NotificationIdentity | null = null) {
     const scope = identity ? this.identityScope(identity) : null;
     if (this.userId !== userId || this.scope !== scope) {
-      this.clear(); this.seen.clear(); this.lastShown.clear(); this.epoch++;
+      this.clear(); this.seen.clear(); this.lastShown.clear(); this.suppressedGroups.clear(); this.epoch++;
     }
     this.userId = userId;
     this.identity = identity; this.scope = scope; this.activeGroupId = activeGroupId;
@@ -38,17 +40,19 @@ export class ChatNotifications {
   private identityScope(identity: NotificationIdentity) {
     return JSON.stringify([new URL(identity.server_url.trim()).toString().replace(/\/+$/, ""), identity.user_id, identity.device_id]);
   }
-  suppressGroup(groupId: string) { this.epoch++; this.dismissGroup(groupId); }
+  groupRevision() { return this.suppressionRevision; }
+  suppressGroup(groupId: string) { this.suppressedGroups.set(groupId, ++this.suppressionRevision); this.dismissGroup(groupId); }
   dismissGroup(groupId: string) {
     const key = `group:${groupId}`;
     this.visible.get(key)?.close(); this.visible.delete(key);
     if (this.target?.kind === "group" && this.target.groupId === groupId) this.target = null;
   }
-  receiveGroups(report: GroupReport, generation: number) {
+  receiveGroups(report: GroupReport, generation: number, revision = this.suppressionRevision) {
     if (generation !== this.epoch || !report.notification_identity || !this.scope || this.scope !== this.identityScope(report.notification_identity)) return;
     const identity = this.identity!;
     const groups = new Set<string>();
     for (const item of report.notifications) {
+      if ((this.suppressedGroups.get(item.group_id) ?? 0) > revision) continue;
       const key = `group:${item.group_id}:${item.message_id}`;
       if (this.seen.has(key)) continue;
       this.seen.add(key);
@@ -63,8 +67,9 @@ export class ChatNotifications {
       this.lastShown.set(key, Date.now()); this.dismissGroup(groupId);
       const note = new Notification({ title: "LiteSeal", body: "有新群消息，打开应用查看", silent: false });
       this.visible.set(key, note);
+      const groupRevision = this.suppressedGroups.get(groupId) ?? 0;
       note.on("click", () => {
-        if (this.locked || this.epoch !== generation) return;
+        if (this.locked || this.epoch !== generation || groupRevision !== (this.suppressedGroups.get(groupId) ?? 0)) return;
         this.target = { kind: "group", groupId, userId: identity.user_id, serverUrl: identity.server_url, deviceId: identity.device_id };
         const window = this.window(); if (window?.isMinimized()) window.restore(); window?.show(); window?.focus();
       });
