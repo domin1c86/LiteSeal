@@ -38,6 +38,8 @@ export default function App() {
   const [showOrganizer, setShowOrganizer] = useState(false);
   const [showAccount, setShowAccount] = useState(false);
   const [showGroups, setShowGroups] = useState(false);
+  const [groupTarget, setGroupTarget] = useState<{ id: string; nonce: number } | null>(null);
+  const [activeGroup, setActiveGroup] = useState<string | null>(null);
   const [groupBusy, setGroupBusy] = useState(false);
   const [groupAttention, setGroupAttention] = useState(0);
   const { drafts } = preferences;
@@ -101,16 +103,18 @@ export default function App() {
       try {
         const target = await getDesktopApi().take_notification_target({});
         if (active && target && target.userId === session?.user_id) {
-          setActiveConversation(target.peerId); setSidebarTab("chats");
+          if (target.deviceId !== session?.deviceId || new URL(target.serverUrl).toString().replace(/\/+$/, "") !== new URL(session.serverUrl).toString().replace(/\/+$/, "")) return;
+          if (target.kind === "group") { setGroupTarget({ id: target.groupId, nonce: Date.now() }); setShowGroups(true); }
+          else if (!groupBusy) { setShowGroups(false); setActiveConversation(target.peerId); setSidebarTab("chats"); }
         }
       } catch { /* Notification routing never interrupts the message pump. */ }
     };
     void getDesktopApi().set_notification_context({ userId: session?.user_id ?? null,
-      activePeerId: sidebarTab === "chats" ? activeConversation : null }).catch(() => {});
+      activePeerId: !showGroups && sidebarTab === "chats" ? activeConversation : null, activeGroupId: showGroups ? activeGroup : null }).catch(() => {});
     const timer = setInterval(takeTarget, 500);
     window.addEventListener("focus", takeTarget);
     return () => { active = false; clearInterval(timer); window.removeEventListener("focus", takeTarget); };
-  }, [session?.user_id, activeConversation, sidebarTab]);
+  }, [session?.user_id, session?.serverUrl, session?.deviceId, activeConversation, sidebarTab, showGroups, activeGroup, groupBusy]);
 
   // One serialized pump owns reconnect and polling; renders never overlap requests.
   useEffect(() => {
@@ -307,7 +311,7 @@ export default function App() {
       {preferences.ready && <div role="status" style={{ padding: "2px 12px", fontSize: 12 }}>{preferences.saving ? "会话更改保存中，请稍候再关闭窗口" : "会话更改已保存到本机"}</div>}
       {preferences.error && <div role="alert">{preferences.error} <button onClick={() => { void preferences.retry().catch(() => {}); }}>重试</button></div>}
     <div className="app-shell" style={{ ...styles.layout, flex: 1, minHeight: 0 }}>
-      {showGroups ? <GroupPanel key={`${session.user_id}:${session.deviceId}:${session.serverUrl}`} userId={session.user_id} contacts={contacts} obscured={showAccount || showStorage || showOrganizer || showAddContact} onBusyChange={setGroupBusy} onClose={() => setShowGroups(false)} /> : <>
+      {showGroups ? <GroupPanel key={`${session.user_id}:${session.deviceId}:${session.serverUrl}`} userId={session.user_id} target={groupTarget} onActiveChange={setActiveGroup} contacts={contacts} obscured={showAccount || showStorage || showOrganizer || showAddContact} onBusyChange={setGroupBusy} onClose={() => setShowGroups(false)} /> : <>
       <ContactList
         key={session.user_id}
         userId={session.user_id}

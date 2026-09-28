@@ -787,3 +787,58 @@ async fn api_rejects_path_injection_and_credentials_in_server_urls_before_reques
     assert!(api.cancel_message("../auth", "logout").await.is_err());
     assert!(mock.state.lock().unwrap().calls.is_empty());
 }
+
+#[test]
+fn group_notifications_are_fresh_private_scoped_and_muting_survives_restart() {
+    let path = TempDb::new();
+    let (alice, bob, _, state, events) = fixture();
+    let id = state.group_id();
+    let mut receiver = seed(
+        &path.0,
+        "http://localhost:3000",
+        bob.identity(),
+        &alice.identity(),
+        &events,
+    );
+    let sender_path = TempDb::new();
+    let mut sender = seed(
+        &sender_path.0,
+        "http://localhost:3000",
+        alice.identity(),
+        &alice.identity(),
+        &events,
+    );
+    sender
+        .seal_text(id, "secret notification body", &alice.keys)
+        .unwrap();
+    let batch = sender.queued(id).unwrap().unwrap();
+    let message = batch
+        .iter()
+        .find(|e| e.recipient_user_id == bob.identity().user_id)
+        .unwrap();
+    assert!(receiver.receive(message, &bob.keys).unwrap());
+    assert!(!receiver.receive(message, &bob.keys).unwrap());
+    let notices = receiver.take_notifications().unwrap();
+    assert_eq!(notices.len(), 1);
+    let serialized = serde_json::to_string(&notices).unwrap();
+    assert!(!serialized.contains("secret notification body"));
+    assert_eq!(notices[0].message_id, message.message_id);
+    assert!(receiver.take_notifications().unwrap().is_empty());
+    receiver.set_muted(id, true).unwrap();
+    assert_eq!(receiver.unread(id).unwrap(), 1);
+    assert!(!receiver
+        .acknowledgements(id, message.recipient_join_epoch)
+        .unwrap()
+        .is_empty());
+    drop(receiver);
+    let receiver = GroupStore::open(&path.0, "http://localhost:3000", bob.identity()).unwrap();
+    assert!(receiver.muted(id).unwrap());
+    let other = seed(
+        &path.0,
+        "http://localhost:3001",
+        bob.identity(),
+        &alice.identity(),
+        &events,
+    );
+    assert!(!other.muted(id).unwrap());
+}

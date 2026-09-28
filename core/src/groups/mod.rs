@@ -5,7 +5,7 @@ use liteseal_shared::{crypto, group::*};
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use std::sync::{Mutex, MutexGuard};
-pub use store::{GroupHistoryPage, GroupLocalMessage, GroupStore};
+pub use store::{GroupHistoryPage, GroupLocalMessage, GroupNotification, GroupStore};
 use tokio::sync::Mutex as AsyncMutex;
 
 fn check_keys(identity: &GroupIdentity, keys: &crypto::KeyPair) -> Result<(), String> {
@@ -75,6 +75,15 @@ impl GroupClient {
     }
     pub fn pending(&self, id: &str) -> Result<bool, String> {
         Ok(self.store()?.queued(id)?.is_some())
+    }
+    pub fn muted(&self, id: &str) -> Result<bool, String> {
+        self.store()?.muted(id)
+    }
+    pub fn set_muted(&self, id: &str, muted: bool) -> Result<(), String> {
+        self.store()?.set_muted(id, muted)
+    }
+    pub fn take_notifications(&self) -> Result<Vec<GroupNotification>, String> {
+        self.store()?.take_notifications()
     }
     pub fn unread(&self, id: &str) -> Result<i64, String> {
         self.store()?.unread(id)

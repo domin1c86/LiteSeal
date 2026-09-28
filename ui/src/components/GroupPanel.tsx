@@ -9,9 +9,9 @@ const bytes = (text: string) => new TextEncoder().encode(text).length;
 const validName = (name: string) => !!name.trim() && bytes(name) <= 160 && !/[\u0000-\u001f\u007f-\u009f]/.test(name);
 type Dialog = { kind: "create" } | { kind: "inspect"; detail: GroupInspection; inviteId?: string }
   | { kind: "invite"; peer?: GroupMember } | { kind: "rename" } | { kind: "danger"; action: "leave" | "close" | "remove"; memberId?: string; label: string };
-interface Props { userId: string; contacts: Contact[]; obscured: boolean; onClose: () => void; onBusyChange: (busy: boolean) => void }
+interface Props { target?: { id: string; nonce: number } | null; onActiveChange: (id: string | null) => void; userId: string; contacts: Contact[]; obscured: boolean; onClose: () => void; onBusyChange: (busy: boolean) => void }
 
-export default function GroupPanel({ userId, contacts, obscured, onClose, onBusyChange }: Props) {
+export default function GroupPanel({ target, onActiveChange, userId, contacts, obscured, onClose, onBusyChange }: Props) {
   const [snapshot, setSnapshot] = useState(empty);
   const [ready, setReady] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
@@ -30,6 +30,7 @@ export default function GroupPanel({ userId, contacts, obscured, onClose, onBusy
   const mounted = useRef(true);
   const activeId = useRef<string | null>(null);
   const snapshotVersion = useRef(0);
+  const consumedTarget = useRef<number | null>(null);
   const historyVersion = useRef(0);
   const dirty = useRef<{ id: string; text: string; version: number } | null>(null);
   const savedVersion = useRef(0);
@@ -82,6 +83,14 @@ export default function GroupPanel({ userId, contacts, obscured, onClose, onBusy
     window.addEventListener("beforeunload", guard);
     return () => { mounted.current = false; clearInterval(timer); window.removeEventListener("liteseal-groups-changed", changed); window.removeEventListener("beforeunload", guard); };
   }, [refresh, history]);
+  useEffect(() => {
+    onActiveChange(!obscured && !dialog ? selected : null);
+    return () => onActiveChange(null);
+  }, [selected, obscured, dialog, onActiveChange]);
+  useEffect(() => {
+    if (!target || !ready || busy || saving || draftError || consumedTarget.current === target.nonce) return;
+    void run(async () => { await flush(); activeId.current = target.id; setSelected(target.id); consumedTarget.current = target.nonce; });
+  }, [target?.nonce, ready, busy, saving, draftError]);
   useEffect(() => { onBusyChange(busy || saving || !!draftError); return () => onBusyChange(false); }, [busy, saving, draftError, onBusyChange]);
   useEffect(() => {
     const node=dialogRef.current;if(!dialog || !node)return;
@@ -176,7 +185,7 @@ export default function GroupPanel({ userId, contacts, obscured, onClose, onBusy
       {(error || snapshot.errors.length > 0) && <div className="group-error" role="alert">{error ?? snapshot.errors.join("；")} <button disabled={busy} onClick={() => { void run(async () => { await refresh(true); }); }}>重试检查</button></div>}
       {busy && <p role="status" className="group-muted">处理中，请稍候…</p>}
       {!group ? <div className="group-empty"><h2>小型私密群</h2><p>选择一个群，或核实待接受的邀请。</p><p>首轮支持最多 10 位成员的加密文字聊天。</p></div> : <>
-        <header className="group-heading"><div><h2>{group.name}</h2><small>{group.id}</small><p>{group.closed ? "群已关闭，本机历史仍可查看" : group.active ? "加密文字聊天" : "当前不可发送，可查看已有本机历史"}</p></div><div className="group-actions">{group.trusted && <button disabled={busy} onClick={() => { void run(async () => { await getDesktopApi().sync_group({ groupId: group.id }); }); }}>补收消息</button>}{!group.trusted && <button disabled={busy} onClick={() => { void inspect(group.id); }}>核实并恢复</button>}{group.active && owner && <><button disabled={busy || group.members.length >= 10} onClick={() => { setPeerId(""); setConfirmed(false); setDialog({ kind: "invite" }); }}>邀请成员</button><button disabled={busy} onClick={() => { setName(group.name); setDialog({ kind: "rename" }); }}>修改群名</button><button disabled={busy} onClick={() => { setConfirmed(false); setDialog({ kind: "danger", action: "close", label: "关闭群" }); }}>关闭群</button></>}{group.active && !owner && <button disabled={busy} onClick={() => { setConfirmed(false); setDialog({ kind: "danger", action: "leave", label: "退出群" }); }}>退出群</button>}</div></header>
+        <header className="group-heading"><div><h2>{group.name}</h2><small>{group.id}</small><p>{group.closed ? "群已关闭，本机历史仍可查看" : group.active ? "加密文字聊天" : "当前不可发送，可查看已有本机历史"}</p></div><div className="group-actions">{group.trusted && <button disabled={busy} onClick={() => { void run(async () => { await getDesktopApi().set_group_muted({ groupId: group.id, muted: !group.muted }); }); }}>{group.muted ? "取消静音" : "群静音"}</button>}{group.trusted && <button disabled={busy} onClick={() => { void run(async () => { await getDesktopApi().sync_group({ groupId: group.id }); }); }}>补收消息</button>}{!group.trusted && <button disabled={busy} onClick={() => { void inspect(group.id); }}>核实并恢复</button>}{group.active && owner && <><button disabled={busy || group.members.length >= 10} onClick={() => { setPeerId(""); setConfirmed(false); setDialog({ kind: "invite" }); }}>邀请成员</button><button disabled={busy} onClick={() => { setName(group.name); setDialog({ kind: "rename" }); }}>修改群名</button><button disabled={busy} onClick={() => { setConfirmed(false); setDialog({ kind: "danger", action: "close", label: "关闭群" }); }}>关闭群</button></>}{group.active && !owner && <button disabled={busy} onClick={() => { setConfirmed(false); setDialog({ kind: "danger", action: "leave", label: "退出群" }); }}>退出群</button>}</div></header>
         {group.trusted && <details className="group-members"><summary>成员（{group.members.length}）</summary><div>{group.members.map(member => <article key={member.user_id}><strong>{member.name}{member.user_id === group.owner ? " · 群主" : ""}</strong><small>账号：{member.user_id}<br />设备：{member.device_id}<br />指纹：{member.fingerprint}</small>{owner && group.active && member.user_id !== userId && <button disabled={busy} onClick={() => { setConfirmed(false); setDialog({ kind: "danger", action: "remove", memberId: member.user_id, label: `移除 ${member.name}` }); }}>移除成员</button>}</article>)}</div></details>}
         <div ref={listRef} className="group-message-list" role="log" aria-label="群消息">
           {before !== null && <button disabled={busy} onClick={() => { void earlier(); }}>更早消息</button>}

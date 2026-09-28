@@ -1,6 +1,6 @@
 use crate::AppState;
 use liteseal_core::{
-    groups::{GroupClient, GroupHistoryPage},
+    groups::{GroupClient, GroupHistoryPage, GroupNotification},
     keystore::KeystoreData,
 };
 use liteseal_shared::{crypto, group::*};
@@ -48,6 +48,7 @@ pub struct View {
     members: Vec<MemberView>,
     unread: i64,
     pending: bool,
+    muted: bool,
 }
 #[derive(Serialize)]
 pub struct InvitationView {
@@ -83,6 +84,19 @@ pub struct SendView {
 pub struct Report {
     pub changed: usize,
     pub errors: Vec<String>,
+    pub notifications: Vec<GroupNotification>,
+    pub notification_identity: Option<NotificationIdentity>,
+}
+#[derive(Serialize)]
+pub struct NotificationIdentity {
+    user_id: String,
+    device_id: String,
+    server_url: String,
+}
+pub async fn set_muted(state: &AppState, id: String, muted: bool) -> Result<(), String> {
+    let ctx = local_context(state).await?;
+    ctx.client.set_muted(&id, muted)?;
+    current(state, &ctx.saved)
 }
 fn fingerprint(identity: &GroupIdentity) -> String {
     format!(
@@ -294,6 +308,7 @@ fn view(state: &AppState, ctx: &Context, id: &str) -> Result<View, String> {
         members,
         unread: ctx.client.unread(id)?,
         pending: ctx.client.pending(id)?,
+        muted: ctx.client.muted(id)?,
     })
 }
 pub async fn list(
@@ -342,6 +357,7 @@ pub async fn list(
                 members: vec![],
                 unread: 0,
                 pending: false,
+                muted: false,
             });
     }
     errors.extend(runtime.errors.clone());
@@ -678,9 +694,16 @@ pub async fn process(state: &AppState) -> Result<Report, String> {
         Err(_) => Report {
             changed: 1,
             errors: vec!["群后台检查超时，未完成任务已保留".into()],
+            ..Report::default()
         },
     };
     current(state, &ctx.saved)?;
+    report.notifications = ctx.client.take_notifications()?;
+    report.notification_identity = Some(NotificationIdentity {
+        user_id: ctx.saved.user_id.clone(),
+        device_id: ctx.saved.device_id.clone(),
+        server_url: ctx.saved.server_url.clone(),
+    });
     let mut runtime = state
         .groups_runtime
         .lock()
@@ -703,6 +726,8 @@ async fn process_inner(state: &AppState, ctx: &Context) -> Result<Report, String
         refresh(state, ctx, None).await?;
     }
     let mut report = Report {
+        notifications: Vec::new(),
+        notification_identity: None,
         changed: 0,
         errors: state
             .groups_runtime

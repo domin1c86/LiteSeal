@@ -5,6 +5,12 @@ pub struct GroupStore {
     conn: Connection,
     scope: String,
     identity: GroupIdentity,
+    notifications: Vec<GroupNotification>,
+}
+#[derive(Clone, Debug, Serialize)]
+pub struct GroupNotification {
+    pub group_id: String,
+    pub message_id: String,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GroupLocalMessage {
@@ -147,6 +153,7 @@ impl GroupStore {
             conn,
             scope,
             identity,
+            notifications: Vec::new(),
         })
     }
     pub fn pin(&mut self, event: &GroupChange, owner: &GroupIdentity) -> Result<(), String> {
@@ -472,6 +479,18 @@ impl GroupStore {
         }
         tx.execute("INSERT OR IGNORE INTO local_group_ack(scope,group_id,joined,message_id) VALUES(?1,?2,?3,?4)",params![self.scope,envelope.group_id,envelope.recipient_join_epoch,envelope.message_id]).map_err(db)?;
         tx.commit().map_err(db)?;
+        if fresh
+            && envelope.sender_user_id != self.identity.user_id
+            && !self.muted(&envelope.group_id)?
+        {
+            if self.notifications.len() >= 20000 {
+                self.notifications.remove(0);
+            }
+            self.notifications.push(GroupNotification {
+                group_id: envelope.group_id.clone(),
+                message_id: envelope.message_id.clone(),
+            });
+        }
         Ok(fresh)
     }
     pub fn acknowledgements(&self, id: &str, joined: u64) -> Result<Vec<String>, String> {
@@ -496,6 +515,43 @@ impl GroupStore {
         keys: &crypto::KeyPair,
     ) -> Result<Vec<GroupLocalMessage>, String> {
         Ok(self.history(id, None, keys)?.messages)
+    }
+    pub fn muted(&self, id: &str) -> Result<bool, String> {
+        self.state(id)?;
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT muted FROM local_group_preferences WHERE scope=?1 AND group_id=?2",
+                params![self.scope, id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(db)?
+            .unwrap_or(false))
+    }
+    pub fn set_muted(&mut self, id: &str, muted: bool) -> Result<(), String> {
+        self.state(id)?;
+        self.conn.execute("INSERT INTO local_group_preferences(scope,group_id,muted) VALUES(?1,?2,?3) ON CONFLICT(scope,group_id) DO UPDATE SET muted=excluded.muted", params![self.scope,id,muted]).map_err(db)?;
+        if muted {
+            self.notifications.retain(|item| item.group_id != id);
+        }
+        Ok(())
+    }
+    pub fn take_notifications(&mut self) -> Result<Vec<GroupNotification>, String> {
+        let pending = std::mem::take(&mut self.notifications);
+        let mut result = Vec::new();
+        for item in pending {
+            let state = self.state(&item.group_id)?;
+            if !self.muted(&item.group_id)?
+                && !state.closed()
+                && state
+                    .member(&self.identity.user_id)
+                    .is_some_and(|m| m.identity == self.identity)
+            {
+                result.push(item);
+            }
+        }
+        Ok(result)
     }
     pub fn unread(&self, id: &str) -> Result<i64, String> {
         self.conn.query_row("SELECT COUNT(*) FROM local_group_messages WHERE scope=?1 AND group_id=?2 AND status='received'",params![self.scope,id],|row|row.get(0)).map_err(db)
@@ -600,6 +656,7 @@ impl GroupStore {
     }
 }
 const SCHEMA:&str="
+CREATE TABLE IF NOT EXISTS local_group_preferences(scope TEXT NOT NULL,group_id TEXT NOT NULL,muted INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(scope,group_id));
 CREATE TABLE IF NOT EXISTS local_group_roots(scope TEXT NOT NULL,group_id TEXT NOT NULL,owner TEXT NOT NULL,PRIMARY KEY(scope,group_id));
 CREATE TABLE IF NOT EXISTS local_group_events(scope TEXT NOT NULL,group_id TEXT NOT NULL,epoch INTEGER NOT NULL,body TEXT NOT NULL,PRIMARY KEY(scope,group_id,epoch));
 CREATE TABLE IF NOT EXISTS local_group_heads(scope TEXT NOT NULL,group_id TEXT NOT NULL,direction TEXT NOT NULL,sender_device TEXT NOT NULL,sender_join INTEGER NOT NULL,recipient_device TEXT NOT NULL,recipient_join INTEGER NOT NULL,body TEXT NOT NULL,PRIMARY KEY(scope,group_id,direction,sender_device,sender_join,recipient_device,recipient_join));

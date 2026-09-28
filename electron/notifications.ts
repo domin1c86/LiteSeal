@@ -1,32 +1,77 @@
 import { BrowserWindow, Notification } from "electron";
 import type { DesktopBridge } from "./bridge";
+import type { GroupReport, NotificationConversation, NotificationIdentity } from "./contracts";
 import type { PollMessagesResult } from "../ui/src/types";
 
 /** Only identifiers enter this class. Message bodies never enter the OS notification center. */
 export class ChatNotifications {
   private userId: string | null = null;
   private activePeerId: string | null = null;
+  private activeGroupId: string | null = null;
+  private identity: NotificationIdentity | null = null;
+  private scope: string | null = null;
   private locked = false;
   private epoch = 0;
   private seen = new Set<string>();
   private lastShown = new Map<string, number>();
   private visible = new Map<string, Notification>();
-  private target: { userId: string; peerId: string } | null = null;
+  private target: ({ userId: string; serverUrl: string; deviceId: string } & NotificationConversation) | null = null;
 
   constructor(private window: () => BrowserWindow | undefined, private bridge: DesktopBridge) {}
 
-  context(userId: string | null, activePeerId: string | null) {
-    if (this.userId !== userId) {
+  context(userId: string | null, activePeerId: string | null, activeGroupId: string | null = null, identity: NotificationIdentity | null = null) {
+    const scope = identity ? this.identityScope(identity) : null;
+    if (this.userId !== userId || this.scope !== scope) {
       this.clear(); this.seen.clear(); this.lastShown.clear(); this.epoch++;
     }
     this.userId = userId;
+    this.identity = identity; this.scope = scope; this.activeGroupId = activeGroupId;
     this.activePeerId = activePeerId;
     if (activePeerId && this.window()?.isFocused()) this.dismiss(activePeerId);
+    if (activeGroupId && this.window()?.isFocused()) this.dismissGroup(activeGroupId);
   }
 
   lock(value: boolean) { this.locked = value; this.clear(); this.epoch++; }
   clear() { for (const note of this.visible.values()) note.close(); this.visible.clear(); this.target = null; }
-  dismiss(peerId: string) { this.visible.get(peerId)?.close(); this.visible.delete(peerId); if (this.target?.peerId === peerId) this.target = null; }
+  dismiss(peerId: string) { this.visible.get(peerId)?.close(); this.visible.delete(peerId); if (this.target?.kind === "direct" && this.target.peerId === peerId) this.target = null; }
+  generation() { return this.epoch; }
+  private identityScope(identity: NotificationIdentity) {
+    return JSON.stringify([new URL(identity.server_url.trim()).toString().replace(/\/+$/, ""), identity.user_id, identity.device_id]);
+  }
+  suppressGroup(groupId: string) { this.epoch++; this.dismissGroup(groupId); }
+  dismissGroup(groupId: string) {
+    const key = `group:${groupId}`;
+    this.visible.get(key)?.close(); this.visible.delete(key);
+    if (this.target?.kind === "group" && this.target.groupId === groupId) this.target = null;
+  }
+  receiveGroups(report: GroupReport, generation: number) {
+    if (generation !== this.epoch || !report.notification_identity || !this.scope || this.scope !== this.identityScope(report.notification_identity)) return;
+    const identity = this.identity!;
+    const groups = new Set<string>();
+    for (const item of report.notifications) {
+      const key = `group:${item.group_id}:${item.message_id}`;
+      if (this.seen.has(key)) continue;
+      this.seen.add(key);
+      if (this.seen.size > 20000) this.seen.delete(this.seen.values().next().value!);
+      groups.add(item.group_id);
+    }
+    if (this.locked || !Notification.isSupported()) return;
+    for (const groupId of groups) {
+      if (this.activeGroupId === groupId && this.window()?.isFocused()) continue;
+      const key = `group:${groupId}`;
+      if (Date.now() - (this.lastShown.get(key) ?? 0) < 30000) continue;
+      this.lastShown.set(key, Date.now()); this.dismissGroup(groupId);
+      const note = new Notification({ title: "LiteSeal", body: "有新群消息，打开应用查看", silent: false });
+      this.visible.set(key, note);
+      note.on("click", () => {
+        if (this.locked || this.epoch !== generation) return;
+        this.target = { kind: "group", groupId, userId: identity.user_id, serverUrl: identity.server_url, deviceId: identity.device_id };
+        const window = this.window(); if (window?.isMinimized()) window.restore(); window?.show(); window?.focus();
+      });
+      note.on("close", () => { if (this.visible.get(key) === note) this.visible.delete(key); });
+      note.show();
+    }
+  }
   takeTarget() { const target = this.locked ? null : this.target; this.target = null; return target; }
 
   async receive(batch: PollMessagesResult) {
@@ -59,7 +104,7 @@ export class ChatNotifications {
       this.visible.set(peerId, note);
       note.on("click", () => {
         if (this.locked || this.userId !== userId || this.epoch !== epoch) return;
-        this.target = { userId, peerId };
+        this.target = { kind: "direct", userId, peerId, serverUrl: this.identity?.server_url ?? "", deviceId: this.identity?.device_id ?? "" };
         const window = this.window();
         if (window?.isMinimized()) window.restore();
         window?.show(); window?.focus();

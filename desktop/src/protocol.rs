@@ -16,6 +16,12 @@ pub struct Request {
 #[derive(Deserialize)]
 #[serde(tag = "name", content = "args", deny_unknown_fields)]
 pub enum Command {
+    #[serde(rename = "set_group_muted")]
+    SetGroupMuted {
+        #[serde(rename = "groupId")]
+        group_id: String,
+        muted: bool,
+    },
     #[serde(rename = "sync_group")]
     SyncGroup {
         #[serde(rename = "groupId")]
@@ -564,6 +570,9 @@ impl Response {
 
 pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, String> {
     let result = match command {
+        Command::SetGroupMuted { group_id, muted } => {
+            serde_json::to_value(commands::groups::set_muted(state, group_id, muted).await?)
+        }
         Command::SyncGroup { group_id } => {
             serde_json::to_value(commands::groups::sync(state, group_id).await?)
         }

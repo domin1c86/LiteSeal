@@ -118,7 +118,7 @@ test('main process restricts IPC origins, navigation and packaged assets without
   intervals[1](); await new Promise(resolve=>setTimeout(resolve,0));
   assert.equal(commands.filter(name=>name==='process_groups').length,previousGroupCalls+1);
   assert.equal(rendererEvents.length,previousEvents);
-  for(const name of ['get_groups','get_group_history','group_draft','send_group_text','accept_group_invite','change_group_membership','process_groups']) {
+  for(const name of ['set_group_muted','get_groups','get_group_history','group_draft','send_group_text','accept_group_invite','change_group_membership','process_groups']) {
     assert.equal((await handlers.get(`liteseal:${name}`)(valid,{})).ok,false,name);
   }
   assert.equal(await permission('media', { requestingUrl: 'liteseal://app/index.html', mediaTypes: ['audio'] }), false);

@@ -77,7 +77,9 @@ else {
     setInterval(() => {
       if (groupsBusy || quitting || exitRequested) return;
       groupsBusy = true;
+      const notificationGeneration = notifications.generation();
       void bridge.call("process_groups", {}).then(report => {
+        try { notifications.receiveGroups(report, notificationGeneration); } catch { /* OS notifications never fail delivery. */ }
         if (report.changed > 0 && !locked) mainWindow?.webContents.send("liteseal:groups-changed");
       }).catch(() => {}).finally(() => { groupsBusy = false; });
     }, 10000).unref();
@@ -277,13 +279,18 @@ else {
             } finally { await fs.rm(directory, { recursive: true, force: true }); }
           }
           if (name === "set_notification_context") {
-            const input = args as { userId: string | null; activePeerId: string | null };
+            const input = args as { userId: string | null; activePeerId: string | null; activeGroupId?: string | null };
+            const notificationGeneration = notifications.generation();
+            let identity: import("./contracts").NotificationIdentity | null = null;
             if (input.userId !== null) {
-              const identity = await bridge.call("load_identity", {});
-              if (!identity.token || identity.user_id !== input.userId) throw new Error("通知账号不匹配");
+              const saved = await bridge.call("load_identity", {});
+              if (!saved.token || saved.user_id !== input.userId) throw new Error("通知账号不匹配");
+              identity = saved;
             }
             if (input.activePeerId !== null && typeof input.activePeerId !== "string") throw new Error("无效会话");
-            notifications.context(input.userId, input.activePeerId);
+            if (locked || generation !== lockGeneration || notificationGeneration !== notifications.generation()) throw new Error("通知上下文已失效");
+            if (input.activeGroupId != null && typeof input.activeGroupId !== "string") throw new Error("无效群会话");
+            notifications.context(input.userId, input.activePeerId, input.activeGroupId ?? null, identity);
             return { ok: true, result: null };
           }
           if (name === "take_notification_target") return { ok: true, result: notifications.takeTarget() };
@@ -300,6 +307,7 @@ else {
             // A failed notification must never consume or fail a persisted relay batch.
             await notifications.receive(result as import("../ui/src/types").PollMessagesResult).catch(() => {});
           }
+          if (name === "set_group_muted") notifications.suppressGroup((args as { groupId: string }).groupId);
           if (name === "set_conversation_muted") notifications.dismiss((args as { peerId: string }).peerId);
           if (name === "set_contact_policy") notifications.dismiss((args as { peerId: string }).peerId);
           if (name === "submit_message_operation" || (name === "sync_message_operations" && result)) notifications.clear();
