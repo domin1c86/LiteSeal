@@ -48,6 +48,7 @@ test('two isolated Rust desktops verify group consent, encrypted delivery, draft
       if (change.action.kind === 'leave') group.members.delete(user.id);
       group.events.push(change); answer(200, change); return;
     }
+    if (parts[2] === 'invites' && req.method === 'GET') { const owner=group.events[0].action.owner; if(owner.user_id!==user.id){answer(404,{});return;} answer(200,{invites:[...invitations.values()].filter(invite=>invite.group_id===group.id).sort((a,b)=>a.id.localeCompare(b.id)).map(invite=>({invite,status:invite.epoch===group.events.at(-1).epoch?'pending':'invalidated'})),next_cursor:null});return; }
     if (parts[2] === 'invites') { assert.equal(body.device_id, user.device); invitations.set(body.invite.id, body.invite); answer(200, { invite: body.invite, status: 'pending' }); return; }
     if (parts[2] === 'messages') {
       if (parts[4] === 'cancel') {
@@ -107,6 +108,12 @@ test('two isolated Rust desktops verify group consent, encrypted delivery, draft
   assert.doesNotMatch(JSON.stringify(snapshot), /"(?:token|refresh_token|secret_key|ed25519_sk)"/);
   await assert.rejects(alice.bridge.call('invite_group_member', { groupId: group, peerId: bob.id, confirmedFingerprint: 'wrong' }), /指纹/);
   await alice.bridge.call('invite_group_member', { groupId: group, peerId: bob.id, confirmedFingerprint: peer.fingerprint });
+  const issued = await alice.bridge.call('get_sent_group_invites', { groupId: group });
+  assert.equal(issued.invites.length, 1); assert.equal(issued.invites[0].user_id, bob.id); assert.equal(issued.invites[0].status, 'pending');
+  assert.doesNotMatch(JSON.stringify(issued), /signature|signing_key|public_key/);
+  await alice.bridge.call('revoke_group_invite', { inviteId: issued.invites[0].id });
+  assert.equal((await alice.bridge.call('get_sent_group_invites', { groupId: group })).invites.length, 0);
+  await alice.bridge.call('invite_group_member', { groupId: group, peerId: bob.id, confirmedFingerprint: peer.fingerprint });
   const inbox = await bob.bridge.call('get_groups', { refresh: true }); assert.equal(inbox.invitations.length, 1);
   const invitation = inbox.invitations[0];
   const inspected = await bob.bridge.call('inspect_group', { groupId: group, inviteId: invitation.id }); assert.equal(inspected.eligible, true);
@@ -120,6 +127,9 @@ test('two isolated Rust desktops verify group consent, encrypted delivery, draft
   assert.equal((await alice.bridge.call('group_draft', { groupId: group })), '');
   await alice.bridge.call('send_group_text', { groupId: group }); assert.equal(batches.size, 1);
   assert.equal(await bob.bridge.call('sync_group', { groupId: group }), 1);
+  const sentInvites = await alice.bridge.call('get_sent_group_invites', { groupId: group });
+  assert.deepEqual(sentInvites.invites, []);
+  await assert.rejects(bob.bridge.call('get_sent_group_invites', { groupId: group }), /群主/);
   const history = await bob.bridge.call('get_group_history', { groupId: group }); assert.equal(history.messages[0].text, 'group text: 密文往返'); assert.equal(payloads.size, 0);
   assert.equal((await bob.bridge.call('get_groups', {})).groups[0].unread, 1);
   await bob.bridge.call('mark_group_seen', { groupId: group, ids: [history.messages[0].id] });

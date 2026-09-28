@@ -157,6 +157,60 @@ impl GroupClient {
     pub async fn invitations(&self, after: Option<&str>) -> Result<GroupInvitePage, String> {
         self.api.invites(after).await.map_err(|e| e.to_string())
     }
+    pub async fn sent_invitations(
+        &self,
+        id: &str,
+        after: Option<&str>,
+    ) -> Result<GroupSentInvitePage, String> {
+        let _gate = self.gate.lock().await;
+        let state = self.state(id)?;
+        if state.owner() != self.identity.user_id {
+            return Err("只有群主可以查看已发邀请".into());
+        }
+        let page = self
+            .api
+            .sent_invites(id, after)
+            .await
+            .map_err(|e| e.to_string())?;
+        if page.invites.len() > 100
+            || page.next_cursor.as_deref().is_some_and(|cursor| {
+                page.invites.len() != 100
+                    || page
+                        .invites
+                        .last()
+                        .is_none_or(|item| item.invite.id != cursor)
+            })
+        {
+            return Err("已发邀请分页无效".into());
+        }
+        let mut previous = after.unwrap_or("");
+        for entry in &page.invites {
+            let invite = &entry.invite;
+            if invite.group_id != id
+                || invite.id.as_str() <= previous
+                || uuid::Uuid::parse_str(&invite.id).is_err()
+                || !matches!(
+                    entry.status.as_str(),
+                    "pending" | "accepted" | "rejected" | "revoked" | "expired" | "invalidated"
+                )
+                || !crypto::verify_with_public_key(
+                    &invite.signing_bytes(),
+                    &invite.signature,
+                    &self
+                        .identity
+                        .signing_key
+                        .as_slice()
+                        .try_into()
+                        .map_err(|_| "本机身份无效")?,
+                )
+                .map_err(|_| "邀请签名无效")?
+            {
+                return Err("已发邀请身份、签名或状态无效".into());
+            }
+            previous = &invite.id;
+        }
+        Ok(page)
+    }
     pub async fn decline(&self, id: &str) -> Result<(), String> {
         self.api.cancel_invite(id).await.map_err(|e| e.to_string())
     }

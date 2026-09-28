@@ -969,3 +969,131 @@ async fn concurrent_group_revision_and_cancelled_invitation_cannot_diverge() {
     .unwrap();
     assert_eq!(active, 0);
 }
+
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn sent_invites_are_owner_scoped_paged_and_serialized_with_acceptance() {
+    let f = Fixture::start().await;
+    let alice = f.account().await;
+    let bob = f.account().await;
+    let other = f.account().await;
+    let create = event(
+        None,
+        &alice,
+        GroupAction::Create {
+            name: "sent invites".into(),
+            owner: alice.identity.clone(),
+        },
+    );
+    assert!(f.change(&alice, &create, true).await.status().is_success());
+    let state = pin_creation(&create, &alice.identity).unwrap();
+    let list = |actor: &Account, after: String| {
+        f.client
+            .get(format!("{}/groups/{}/invites", f.url, state.group_id()))
+            .bearer_auth(&actor.token)
+            .query(&[
+                ("device_id", actor.identity.device_id.clone()),
+                ("after_id", after),
+            ])
+    };
+    // Populate retained signed history directly to exercise pagination without hitting action rate limits.
+    for n in 0..101 {
+        let mut invite = invitation(&state, &alice, &bob);
+        if n == 0 {
+            invite.expires_at = now() - 1;
+        }
+        invite.signature = crypto::sign(&invite.signing_bytes(), &alice.keys.ed25519_sk).unwrap();
+        sqlx::query("INSERT INTO group_invites(id,group_id,target_user_id,target_device_id,base_epoch,expires_at,body,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8)")
+            .bind(&invite.id).bind(state.group_id()).bind(&bob.identity.user_id).bind(&bob.identity.device_id).bind(1_i64).bind(invite.expires_at).bind(serde_json::to_string(&invite).unwrap()).bind(if n==1 {"revoked"}else{"pending"}).execute(f.db.pool()).await.unwrap();
+    }
+    let first: GroupSentInvitePage = list(&alice, uuid::Uuid::nil().to_string())
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(first.invites.len(), 100);
+    let second: GroupSentInvitePage = list(&alice, first.next_cursor.clone().unwrap())
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(second.invites.len(), 1);
+    assert!(second.next_cursor.is_none());
+    let all: Vec<_> = first.invites.iter().chain(&second.invites).collect();
+    assert!(all.iter().any(|i| i.status == "expired"));
+    assert!(all.iter().any(|i| i.status == "revoked"));
+    assert_eq!(
+        list(&other, uuid::Uuid::nil().to_string())
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::NOT_FOUND
+    );
+    // Clear only this test group's synthetic history; exercise a real invitation race.
+    sqlx::query("DELETE FROM group_invites WHERE group_id=$1")
+        .bind(state.group_id())
+        .execute(f.db.pool())
+        .await
+        .unwrap();
+    let invite = invitation(&state, &alice, &bob);
+    assert!(f.invite(&alice, &invite).await.status().is_success());
+    let joined = joining(&state, &bob, invite.clone());
+    let cancel = f
+        .client
+        .delete(format!("{}/group-invites/{}", f.url, invite.id))
+        .bearer_auth(&alice.token)
+        .query(&[("device_id", &alice.identity.device_id)]);
+    let (accepted, revoked) = tokio::join!(f.change(&bob, &joined, false), cancel.send());
+    let revoked = revoked.unwrap();
+    assert_ne!(
+        accepted.status().is_success(),
+        revoked.status().is_success()
+    );
+    let final_page: GroupSentInvitePage = list(&alice, uuid::Uuid::nil().to_string())
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        final_page.invites[0].status,
+        if accepted.status().is_success() {
+            "accepted"
+        } else {
+            "revoked"
+        }
+    );
+    assert_eq!(
+        list(&bob, uuid::Uuid::nil().to_string())
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::NOT_FOUND
+    );
+    sqlx::query("UPDATE sessions SET revoked=true WHERE access_token_hash=$1")
+        .bind(auth::service::hash_token(&alice.token))
+        .execute(f.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(
+        list(&alice, uuid::Uuid::nil().to_string())
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::UNAUTHORIZED
+    );
+}

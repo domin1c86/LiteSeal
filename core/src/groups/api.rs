@@ -167,6 +167,28 @@ impl GroupApi {
         )
         .await
     }
+    pub async fn sent_invites(
+        &self,
+        group: &str,
+        after: Option<&str>,
+    ) -> Result<GroupSentInvitePage, ApiError> {
+        valid_id(group)?;
+        if let Some(id) = after {
+            valid_id(id)?;
+        }
+        let mut query = vec![("device_id", self.device.as_str())];
+        if let Some(id) = after {
+            query.push(("after_id", id));
+        }
+        Self::decode(
+            self.request(reqwest::Method::GET, &format!("/groups/{group}/invites"))
+                .query(&query)
+                .send()
+                .await
+                .map_err(|_| network())?,
+        )
+        .await
+    }
     pub async fn changes(&self, group: &str, after: u64) -> Result<GroupEventPage, ApiError> {
         valid_id(group)?;
         Self::decode(

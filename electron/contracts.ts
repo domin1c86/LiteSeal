@@ -5,7 +5,11 @@ import type { RegisterResult, ConnectResult, SendMessageResult, PollMessagesResu
 export type NotificationConversation = { kind: "direct"; peerId: string } | { kind: "group"; groupId: string };
 export interface NotificationIdentity { user_id: string; device_id: string; server_url: string }
 export interface GroupReport { changed: number; errors: string[]; notifications: { group_id: string; message_id: string }[]; notification_identity: NotificationIdentity | null }
+export interface SentGroupInvite { id: string; group_id: string; user_id: string; device_id: string; expires_at: number; status: "pending" | "accepted" | "rejected" | "revoked" | "expired" | "invalidated" }
+export interface SentGroupInvites { invites: SentGroupInvite[]; next_cursor: string | null }
 export interface CommandMap {
+  get_sent_group_invites: { args: { groupId: string; afterId?: string }; result: SentGroupInvites };
+  revoke_group_invite: { args: { inviteId: string }; result: void };
   set_group_muted: { args: { groupId: string; muted: boolean }; result: void };
   sync_group: { args: { groupId: string }; result: number };
   get_groups: { args: { refresh?: boolean; afterId?: string }; result: GroupSnapshot };
@@ -127,7 +131,7 @@ export type DesktopApi = {
 };
 export const commandNames = [
   "sync_group",
-  "set_group_muted", "get_groups", "create_group", "inspect_group", "inspect_group_peer", "recover_group", "invite_group_member", "accept_group_invite", "decline_group_invite", "change_group_membership", "get_group_history", "group_draft", "mark_group_seen", "send_group_text", "cancel_group_send", "process_groups",
+  "get_sent_group_invites", "revoke_group_invite", "set_group_muted", "get_groups", "create_group", "inspect_group", "inspect_group_peer", "recover_group", "invite_group_member", "accept_group_invite", "decline_group_invite", "change_group_membership", "get_group_history", "group_draft", "mark_group_seen", "send_group_text", "cancel_group_send", "process_groups",
   "save_scheduled_message", "list_scheduled_messages", "cancel_scheduled_message", "send_scheduled_now", "process_scheduled_messages", "suspend_scheduled_messages",
   "configure_app_lock",
   "preview_attachment_task",

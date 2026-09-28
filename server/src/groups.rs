@@ -60,7 +60,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/groups", get(list).post(create))
         .route("/groups/:group_id/changes", get(changes).post(submit))
-        .route("/groups/:group_id/invites", post(invite))
+        .route("/groups/:group_id/invites", get(sent_invites).post(invite))
         .route("/group-invites", get(invites))
         .route("/group-invites/:id", delete(cancel_invite))
         .layer(DefaultBodyLimit::max(32 * 1024))
@@ -621,6 +621,92 @@ pub async fn invites(
         invites,
         next_cursor,
     }))
+}
+fn displayed_invite_status(
+    stored: &str,
+    expires: i64,
+    base: i64,
+    head: i64,
+    closed: bool,
+    time: i64,
+) -> &str {
+    if stored != "pending" {
+        stored
+    } else if closed || base != head {
+        "invalidated"
+    } else if expires <= time {
+        "expired"
+    } else {
+        "pending"
+    }
+}
+pub async fn sent_invites(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(cursor): Query<Cursor>,
+) -> Result<Json<GroupSentInvitePage>, Failure> {
+    admit(&state, &headers, &cursor.device_id).await?;
+    group_id(&id)?;
+    if let Some(after) = &cursor.after_id {
+        group_id(after)?;
+    }
+    let mut tx = state.db.pool().begin().await.map_err(unavailable)?;
+    lock_group(&mut tx, &id).await?;
+    let actor = authorize_tx(&mut tx, &headers, &cursor.device_id).await?;
+    let group = sqlx::query(
+        "SELECT owner_user_id,owner_device_id,head_epoch,closed FROM private_groups WHERE id=$1",
+    )
+    .bind(&id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(unavailable)?
+    .ok_or_else(missing)?;
+    if group.get::<String, _>("owner_user_id") != actor.user_id
+        || group.get::<String, _>("owner_device_id") != actor.device_id
+    {
+        return Err(missing());
+    }
+    let records = sqlx::query("SELECT id,body,status,expires_at,base_epoch FROM group_invites WHERE group_id=$1 AND id>$2 ORDER BY id LIMIT 101")
+        .bind(&id).bind(cursor.after_id.unwrap_or_default()).fetch_all(&mut *tx).await.map_err(unavailable)?;
+    let more = records.len() > PAGE_SIZE;
+    let time = timestamp();
+    let mut invites = Vec::new();
+    for row in records.into_iter().take(PAGE_SIZE) {
+        let invite: GroupInvite =
+            serde_json::from_str(&row.get::<String, _>("body")).map_err(|_| corrupt())?;
+        let stored: String = row.get("status");
+        let status = displayed_invite_status(
+            &stored,
+            row.get("expires_at"),
+            row.get("base_epoch"),
+            group.get("head_epoch"),
+            group.get("closed"),
+            time,
+        )
+        .to_string();
+        invites.push(GroupInviteStatus { invite, status });
+    }
+    let next_cursor = more.then(|| invites.last().unwrap().invite.id.clone());
+    tx.commit().await.map_err(unavailable)?;
+    Ok(Json(GroupSentInvitePage {
+        invites,
+        next_cursor,
+    }))
+}
+#[cfg(test)]
+mod invite_status_tests {
+    use super::displayed_invite_status as status;
+    #[test]
+    fn terminal_states_survive_expiry_and_membership_changes() {
+        for terminal in ["accepted", "rejected", "revoked"] {
+            assert_eq!(status(terminal, 1, 1, 2, true, 10), terminal);
+        }
+        assert_eq!(status("pending", 11, 2, 2, false, 10), "pending");
+        assert_eq!(status("pending", 10, 2, 2, false, 10), "expired");
+        assert_eq!(status("pending", 11, 1, 2, false, 10), "invalidated");
+        assert_eq!(status("pending", 11, 2, 2, true, 10), "invalidated");
+    }
 }
 pub async fn cancel_invite(
     State(state): State<AppState>,

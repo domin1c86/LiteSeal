@@ -237,6 +237,11 @@ pub struct GroupInvitePage {
     pub invites: Vec<GroupInvite>,
     pub next_cursor: Option<String>,
 }
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GroupSentInvitePage {
+    pub invites: Vec<GroupInviteStatus>,
+    pub next_cursor: Option<String>,
+}
 impl GroupChange {
     pub fn signing_bytes(&self) -> Vec<u8> {
         serde_json::to_vec(&(

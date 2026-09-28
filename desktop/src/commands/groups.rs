@@ -563,6 +563,51 @@ pub async fn recover(state: &AppState, id: String, confirmed: String) -> Result<
     ctx.client.recover_trusted(&id, &owner).await?;
     current(state, &ctx.saved)
 }
+#[derive(Serialize)]
+pub struct SentInvitationView {
+    id: String,
+    group_id: String,
+    user_id: String,
+    device_id: String,
+    expires_at: i64,
+    status: String,
+}
+#[derive(Serialize)]
+pub struct SentInvitationPage {
+    invites: Vec<SentInvitationView>,
+    next_cursor: Option<String>,
+}
+pub async fn sent_invites(
+    state: &AppState,
+    id: String,
+    after: Option<String>,
+) -> Result<SentInvitationPage, String> {
+    let _gate = state.groups_gate.lock().await;
+    let ctx = context(state).await?;
+    let page = ctx.client.sent_invitations(&id, after.as_deref()).await?;
+    current(state, &ctx.saved)?;
+    Ok(SentInvitationPage {
+        next_cursor: page.next_cursor,
+        invites: page
+            .invites
+            .into_iter()
+            .map(|entry| SentInvitationView {
+                id: entry.invite.id,
+                group_id: entry.invite.group_id,
+                user_id: entry.invite.member.user_id,
+                device_id: entry.invite.member.device_id,
+                expires_at: entry.invite.expires_at,
+                status: entry.status,
+            })
+            .collect(),
+    })
+}
+pub async fn revoke_invite(state: &AppState, id: String) -> Result<(), String> {
+    let _gate = state.groups_gate.lock().await;
+    let ctx = context(state).await?;
+    ctx.client.decline(&id).await?;
+    current(state, &ctx.saved)
+}
 pub async fn decline(state: &AppState, id: String) -> Result<(), String> {
     let _gate = state.groups_gate.lock().await;
     let ctx = context(state).await?;

@@ -16,6 +16,18 @@ pub struct Request {
 #[derive(Deserialize)]
 #[serde(tag = "name", content = "args", deny_unknown_fields)]
 pub enum Command {
+    #[serde(rename = "get_sent_group_invites")]
+    GetSentGroupInvites {
+        #[serde(rename = "groupId")]
+        group_id: String,
+        #[serde(rename = "afterId", default)]
+        after_id: Option<String>,
+    },
+    #[serde(rename = "revoke_group_invite")]
+    RevokeGroupInvite {
+        #[serde(rename = "inviteId")]
+        invite_id: String,
+    },
     #[serde(rename = "set_group_muted")]
     SetGroupMuted {
         #[serde(rename = "groupId")]
@@ -570,6 +582,12 @@ impl Response {
 
 pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, String> {
     let result = match command {
+        Command::GetSentGroupInvites { group_id, after_id } => {
+            serde_json::to_value(commands::groups::sent_invites(state, group_id, after_id).await?)
+        }
+        Command::RevokeGroupInvite { invite_id } => {
+            serde_json::to_value(commands::groups::revoke_invite(state, invite_id).await?)
+        }
         Command::SetGroupMuted { group_id, muted } => {
             serde_json::to_value(commands::groups::set_muted(state, group_id, muted).await?)
         }

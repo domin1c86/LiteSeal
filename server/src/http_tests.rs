@@ -37,6 +37,7 @@ async fn parameterized_routes_reach_authentication_instead_of_returning_404() {
         (reqwest::Method::POST,"/groups/00000000-0000-0000-0000-000000000001/messages/00000000-0000-0000-0000-000000000002/cancel"),
         (reqwest::Method::GET, "/groups?device_id=test-device"),
         (reqwest::Method::POST, "/groups"),
+        (reqwest::Method::GET, "/groups/00000000-0000-0000-0000-000000000001/invites?device_id=test-device"),
         (
             reqwest::Method::GET,
             "/groups/00000000-0000-0000-0000-000000000001/changes?device_id=test-device",
