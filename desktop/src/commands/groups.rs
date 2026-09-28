@@ -1,6 +1,6 @@
 use crate::AppState;
 use liteseal_core::{
-    groups::{GroupClient, GroupHistoryPage, GroupNotification},
+    groups::{GroupClient, GroupHistoryPage, GroupNotification, GroupStorageStats},
     keystore::KeystoreData,
 };
 use liteseal_shared::{crypto, group::*};
@@ -92,6 +92,39 @@ pub struct NotificationIdentity {
     user_id: String,
     device_id: String,
     server_url: String,
+}
+#[derive(Serialize)]
+pub struct StorageView {
+    #[serde(flatten)]
+    stats: GroupStorageStats,
+    database_bytes: u64,
+    wal_bytes: u64,
+}
+pub async fn storage_stats(state: &AppState, id: String) -> Result<StorageView, String> {
+    let ctx = local_context(state).await?;
+    let stats = ctx.client.storage_stats(&id)?;
+    let database_bytes = std::fs::metadata(&state.db_path)
+        .map_err(|_| "无法读取数据库文件大小")?
+        .len();
+    let mut wal = state.db_path.as_os_str().to_os_string();
+    wal.push("-wal");
+    let wal_bytes = match std::fs::metadata(std::path::PathBuf::from(wal)) {
+        Ok(info) => info.len(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+        Err(_) => return Err("无法读取数据库日志大小".into()),
+    };
+    current(state, &ctx.saved)?;
+    Ok(StorageView {
+        stats,
+        database_bytes,
+        wal_bytes,
+    })
+}
+pub async fn clear_history(state: &AppState, id: String) -> Result<usize, String> {
+    let ctx = local_context(state).await?;
+    let count = ctx.client.clear_history(&id)?;
+    current(state, &ctx.saved)?;
+    Ok(count)
 }
 pub async fn set_muted(state: &AppState, id: String, muted: bool) -> Result<(), String> {
     let ctx = local_context(state).await?;

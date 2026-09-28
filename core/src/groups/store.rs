@@ -12,6 +12,14 @@ pub struct GroupNotification {
     pub group_id: String,
     pub message_id: String,
 }
+#[derive(Debug, Serialize)]
+pub struct GroupStorageStats {
+    pub visible_messages: i64,
+    pub hidden_messages: i64,
+    pub unread_messages: i64,
+    pub pending_tasks: i64,
+    pub logical_bytes: i64,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GroupLocalMessage {
     pub id: String,
@@ -516,6 +524,49 @@ impl GroupStore {
     ) -> Result<Vec<GroupLocalMessage>, String> {
         Ok(self.history(id, None, keys)?.messages)
     }
+    pub fn clear_history(&mut self, id: &str) -> Result<usize, String> {
+        self.state(id)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db)?;
+        let count = tx.execute("INSERT OR IGNORE INTO local_group_hidden(scope,group_id,message_id) SELECT scope,group_id,message_id FROM local_group_messages m WHERE scope=?1 AND group_id=?2 AND status NOT IN ('queued','cancelled') AND NOT EXISTS(SELECT 1 FROM local_group_outbox o WHERE o.scope=m.scope AND o.group_id=m.group_id AND o.message_id=m.message_id AND o.status='queued')",params![self.scope,id]).map_err(db)?;
+        tx.commit().map_err(db)?;
+        self.notifications.retain(|item| item.group_id != id);
+        Ok(count)
+    }
+    pub fn storage_stats(&self, id: &str) -> Result<GroupStorageStats, String> {
+        self.state(id)?;
+        // One read transaction keeps counts and byte totals consistent with concurrent connections.
+        let tx = self.conn.unchecked_transaction().map_err(db)?;
+        let (visible,hidden,unread) = tx.query_row("SELECT COALESCE(SUM(CASE WHEN h.message_id IS NULL THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN h.message_id IS NOT NULL THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN h.message_id IS NULL AND m.status='received' THEN 1 ELSE 0 END),0) FROM local_group_messages m LEFT JOIN local_group_hidden h ON h.scope=m.scope AND h.group_id=m.group_id AND h.message_id=m.message_id WHERE m.scope=?1 AND m.group_id=?2 AND m.status!='cancelled'",params![self.scope,id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(db)?;
+        let pending = tx.query_row("SELECT COUNT(*) FROM local_group_outbox WHERE scope=?1 AND group_id=?2 AND status='queued'",params![self.scope,id],|r|r.get(0)).map_err(db)?;
+        // Logical payload bytes only: not SQLite page allocation or filesystem space.
+        let mut logical_bytes = 0_i64;
+        for (table, expression) in [
+            ("local_group_roots", "length(CAST(owner AS BLOB))"),
+            ("local_group_events", "length(CAST(body AS BLOB))"),
+            ("local_group_heads", "length(CAST(body AS BLOB))"),
+            (
+                "local_group_messages",
+                "length(body)+COALESCE(length(CAST(envelope AS BLOB)),0)",
+            ),
+            ("local_group_outbox", "length(CAST(batch AS BLOB))"),
+            ("local_group_drafts", "length(body)"),
+            ("local_group_ack", "length(CAST(message_id AS BLOB))"),
+            ("local_group_hidden", "length(CAST(message_id AS BLOB))"),
+        ] {
+            logical_bytes += tx.query_row(&format!("SELECT COALESCE(SUM({expression}),0) FROM {table} WHERE scope=?1 AND group_id=?2"),params![self.scope,id],|r|r.get::<_,i64>(0)).map_err(db)?;
+        }
+        tx.commit().map_err(db)?;
+        Ok(GroupStorageStats {
+            visible_messages: visible,
+            hidden_messages: hidden,
+            unread_messages: unread,
+            pending_tasks: pending,
+            logical_bytes,
+        })
+    }
     pub fn muted(&self, id: &str) -> Result<bool, String> {
         self.state(id)?;
         Ok(self
@@ -542,7 +593,9 @@ impl GroupStore {
         let mut result = Vec::new();
         for item in pending {
             let state = self.state(&item.group_id)?;
-            if !self.muted(&item.group_id)?
+            let visible: bool = self.conn.query_row("SELECT EXISTS(SELECT 1 FROM local_group_messages m WHERE scope=?1 AND group_id=?2 AND message_id=?3 AND status='received' AND NOT EXISTS(SELECT 1 FROM local_group_hidden h WHERE h.scope=m.scope AND h.group_id=m.group_id AND h.message_id=m.message_id))",params![self.scope,item.group_id,item.message_id],|r|r.get(0)).map_err(db)?;
+            if visible
+                && !self.muted(&item.group_id)?
                 && !state.closed()
                 && state
                     .member(&self.identity.user_id)
@@ -554,7 +607,7 @@ impl GroupStore {
         Ok(result)
     }
     pub fn unread(&self, id: &str) -> Result<i64, String> {
-        self.conn.query_row("SELECT COUNT(*) FROM local_group_messages WHERE scope=?1 AND group_id=?2 AND status='received'",params![self.scope,id],|row|row.get(0)).map_err(db)
+        self.conn.query_row("SELECT COUNT(*) FROM local_group_messages m WHERE scope=?1 AND group_id=?2 AND status='received' AND NOT EXISTS(SELECT 1 FROM local_group_hidden h WHERE h.scope=m.scope AND h.group_id=m.group_id AND h.message_id=m.message_id)",params![self.scope,id],|row|row.get(0)).map_err(db)
     }
     pub fn mark_seen(&mut self, id: &str, ids: &[String]) -> Result<(), String> {
         if ids.len() > 100 {
@@ -562,7 +615,7 @@ impl GroupStore {
         }
         let tx = self.conn.transaction().map_err(db)?;
         for message in ids {
-            tx.execute("UPDATE local_group_messages SET status='seen' WHERE scope=?1 AND group_id=?2 AND message_id=?3 AND status='received'",params![self.scope,id,message]).map_err(db)?;
+            tx.execute("UPDATE local_group_messages AS m SET status='seen' WHERE scope=?1 AND group_id=?2 AND message_id=?3 AND status='received' AND NOT EXISTS(SELECT 1 FROM local_group_hidden h WHERE h.scope=m.scope AND h.group_id=m.group_id AND h.message_id=m.message_id)",params![self.scope,id,message]).map_err(db)?;
         }
         tx.commit().map_err(db)
     }
@@ -615,7 +668,7 @@ impl GroupStore {
         if before.is_some_and(|value| value < 1) {
             return Err(invalid());
         }
-        let mut q=self.conn.prepare("SELECT body,status,message_id,rowid FROM local_group_messages WHERE scope=?1 AND group_id=?2 AND status!='cancelled' AND (?3 IS NULL OR rowid<?3) ORDER BY rowid DESC LIMIT 101").map_err(db)?;
+        let mut q=self.conn.prepare("SELECT body,status,message_id,rowid FROM local_group_messages m WHERE scope=?1 AND group_id=?2 AND status!='cancelled' AND NOT EXISTS(SELECT 1 FROM local_group_hidden h WHERE h.scope=m.scope AND h.group_id=m.group_id AND h.message_id=m.message_id) AND (?3 IS NULL OR rowid<?3) ORDER BY rowid DESC LIMIT 101").map_err(db)?;
         let rows = q
             .query_map(params![self.scope, id, before], |row| {
                 Ok((
@@ -656,6 +709,7 @@ impl GroupStore {
     }
 }
 const SCHEMA:&str="
+CREATE TABLE IF NOT EXISTS local_group_hidden(scope TEXT NOT NULL,group_id TEXT NOT NULL,message_id TEXT NOT NULL,PRIMARY KEY(scope,group_id,message_id));
 CREATE TABLE IF NOT EXISTS local_group_preferences(scope TEXT NOT NULL,group_id TEXT NOT NULL,muted INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(scope,group_id));
 CREATE TABLE IF NOT EXISTS local_group_roots(scope TEXT NOT NULL,group_id TEXT NOT NULL,owner TEXT NOT NULL,PRIMARY KEY(scope,group_id));
 CREATE TABLE IF NOT EXISTS local_group_events(scope TEXT NOT NULL,group_id TEXT NOT NULL,epoch INTEGER NOT NULL,body TEXT NOT NULL,PRIMARY KEY(scope,group_id,epoch));

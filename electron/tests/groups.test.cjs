@@ -134,6 +134,16 @@ test('two isolated Rust desktops verify group consent, encrypted delivery, draft
   assert.equal((await bob.bridge.call('get_groups', {})).groups[0].unread, 1);
   await bob.bridge.call('mark_group_seen', { groupId: group, ids: [history.messages[0].id] });
   assert.equal((await bob.bridge.call('get_groups', {})).groups[0].unread, 0);
+  const storage = await bob.bridge.call('get_group_storage_stats', { groupId: group });
+  assert.equal(storage.visible_messages, 1); assert.equal(storage.hidden_messages, 0); assert.ok(storage.logical_bytes > 0); assert.ok(storage.database_bytes > 0);
+  await bob.bridge.call('group_draft', { groupId: group, text: 'draft survives local clear' });
+  assert.equal(await bob.bridge.call('clear_group_history', { groupId: group }), 1);
+  assert.deepEqual((await bob.bridge.call('get_group_history', { groupId: group })).messages, []);
+  assert.equal((await bob.bridge.call('get_group_storage_stats', { groupId: group })).hidden_messages, 1);
+  assert.equal(await bob.bridge.call('group_draft', { groupId: group }), 'draft survives local clear');
+  assert.equal((await alice.bridge.call('get_group_history', { groupId: group })).messages.length, 1);
+  await bob.bridge.call('set_group_muted', { groupId: group, muted: true });
+  assert.equal((await bob.bridge.call('get_groups', {})).groups[0].muted, true);
   alice.token = `rotated-${randomUUID()}`;
   await alice.bridge.call('save_session', { userId: alice.id, deviceId: alice.device, token: alice.token, refreshToken: 'next-refresh', serverUrl: origin });
   const rotated = await alice.bridge.call('get_groups', { refresh: true }); assert.deepEqual(rotated.errors, []); assert.equal(rotated.groups.length, 1);

@@ -307,6 +307,7 @@ else {
             // A failed notification must never consume or fail a persisted relay batch.
             await notifications.receive(result as import("../ui/src/types").PollMessagesResult).catch(() => {});
           }
+          if (name === "clear_group_history") { notifications.suppressGroup((args as { groupId: string }).groupId); mainWindow?.webContents.send("liteseal:groups-changed"); }
           if (name === "set_group_muted") notifications.suppressGroup((args as { groupId: string }).groupId);
           if (name === "set_conversation_muted") notifications.dismiss((args as { peerId: string }).peerId);
           if (name === "set_contact_policy") notifications.dismiss((args as { peerId: string }).peerId);

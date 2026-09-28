@@ -16,6 +16,16 @@ pub struct Request {
 #[derive(Deserialize)]
 #[serde(tag = "name", content = "args", deny_unknown_fields)]
 pub enum Command {
+    #[serde(rename = "get_group_storage_stats")]
+    GetGroupStorageStats {
+        #[serde(rename = "groupId")]
+        group_id: String,
+    },
+    #[serde(rename = "clear_group_history")]
+    ClearGroupHistory {
+        #[serde(rename = "groupId")]
+        group_id: String,
+    },
     #[serde(rename = "get_sent_group_invites")]
     GetSentGroupInvites {
         #[serde(rename = "groupId")]
@@ -582,6 +592,12 @@ impl Response {
 
 pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, String> {
     let result = match command {
+        Command::GetGroupStorageStats { group_id } => {
+            serde_json::to_value(commands::groups::storage_stats(state, group_id).await?)
+        }
+        Command::ClearGroupHistory { group_id } => {
+            serde_json::to_value(commands::groups::clear_history(state, group_id).await?)
+        }
         Command::GetSentGroupInvites { group_id, after_id } => {
             serde_json::to_value(commands::groups::sent_invites(state, group_id, after_id).await?)
         }

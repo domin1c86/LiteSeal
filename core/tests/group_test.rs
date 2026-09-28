@@ -842,3 +842,156 @@ fn group_notifications_are_fresh_private_scoped_and_muting_survives_restart() {
     );
     assert!(!other.muted(id).unwrap());
 }
+
+#[test]
+fn logical_group_clear_preserves_pending_drafts_ack_chain_and_scoped_history() {
+    let path = TempDb::new();
+    let (alice, bob, _, state, events) = fixture();
+    let id = state.group_id();
+    let mut store = seed(
+        &path.0,
+        "http://localhost:3000",
+        bob.identity(),
+        &alice.identity(),
+        &events,
+    );
+    let first = envelope(
+        &state,
+        &alice,
+        &bob,
+        &uuid::Uuid::new_v4().to_string(),
+        "before clear",
+        None,
+    );
+    store.receive(&first, &bob.keys).unwrap();
+    store
+        .seal_text(id, "pending local send", &bob.keys)
+        .unwrap();
+    let outbox = store.queued(id).unwrap().unwrap();
+    store.save_draft(id, "keep my draft", &bob.keys).unwrap();
+    let before = store.storage_stats(id).unwrap();
+    assert_eq!(before.visible_messages, 2);
+    assert_eq!(before.pending_tasks, 1);
+    assert_eq!(before.unread_messages, 1);
+    let ack = store
+        .acknowledgements(id, first.recipient_join_epoch)
+        .unwrap();
+    let mut other = seed(
+        &path.0,
+        "http://localhost:3001",
+        bob.identity(),
+        &alice.identity(),
+        &events,
+    );
+    other.receive(&first, &bob.keys).unwrap();
+    assert_eq!(store.clear_history(id).unwrap(), 1);
+    assert_eq!(store.clear_history(id).unwrap(), 0);
+    assert_eq!(store.queued(id).unwrap().unwrap(), outbox);
+    assert_eq!(store.draft(id, &bob.keys).unwrap(), "keep my draft");
+    assert_eq!(
+        store
+            .acknowledgements(id, first.recipient_join_epoch)
+            .unwrap(),
+        ack
+    );
+    assert!(store.take_notifications().unwrap().is_empty());
+    assert_eq!(other.unread(id).unwrap(), 1);
+    assert_eq!(other.messages(id, &bob.keys).unwrap().len(), 1);
+    store
+        .mark_seen(id, std::slice::from_ref(&first.message_id))
+        .unwrap();
+    let db = Connection::open(&path.0).unwrap();
+    let raw: Vec<(Vec<u8>, String, String)> = {
+        let mut query=db.prepare("SELECT body,envelope,status FROM local_group_messages WHERE message_id=?1 ORDER BY scope").unwrap();
+        query
+            .query_map([&first.message_id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    };
+    assert!(raw.iter().all(|row| !row.0.is_empty()
+        && row.1 == serde_json::to_string(&first).unwrap()
+        && row.2 == "received"));
+    let after = store.storage_stats(id).unwrap();
+    assert_eq!(after.hidden_messages, 1);
+    assert_eq!(after.visible_messages, 1);
+    assert_eq!(after.unread_messages, 0);
+    assert!(after.logical_bytes >= before.logical_bytes);
+    drop(store);
+    let mut store = GroupStore::open(&path.0, "http://localhost:3000", bob.identity()).unwrap();
+    assert!(!store.receive(&first, &bob.keys).unwrap());
+    assert_eq!(store.messages(id, &bob.keys).unwrap()[0].status, "queued");
+    assert!(store.take_notifications().unwrap().is_empty());
+    let next = envelope(
+        &state,
+        &alice,
+        &bob,
+        &uuid::Uuid::new_v4().to_string(),
+        "after clear",
+        Some(&first),
+    );
+    assert!(store.receive(&next, &bob.keys).unwrap());
+    assert_eq!(store.take_notifications().unwrap().len(), 1);
+    assert_eq!(store.unread(id).unwrap(), 1);
+    store.accepted(id, &receipt(&outbox)).unwrap();
+    store
+        .seal_text(id, "next send uses preserved chain", &bob.keys)
+        .unwrap();
+    for next in store.queued(id).unwrap().unwrap() {
+        validate_chain(
+            &next,
+            outbox
+                .iter()
+                .find(|old| old.recipient_device_id == next.recipient_device_id),
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn group_clear_is_atomic_and_upgrade_preserves_paged_ciphertext() {
+    let path = TempDb::new();
+    let (alice, _, _, state, events) = fixture();
+    let id = state.group_id();
+    let mut store = seed(
+        &path.0,
+        "http://localhost:3000",
+        alice.identity(),
+        &alice.identity(),
+        &events,
+    );
+    for n in 0..105 {
+        store
+            .seal_text(id, &format!("old {n}"), &alice.keys)
+            .unwrap();
+        let batch = store.queued(id).unwrap().unwrap();
+        store.accepted(id, &receipt(&batch)).unwrap();
+    }
+    drop(store);
+    let db = Connection::open(&path.0).unwrap();
+    db.execute_batch("DROP TABLE local_group_hidden; DROP TABLE local_group_preferences;")
+        .unwrap();
+    let mut store = GroupStore::open(&path.0, "http://localhost:3000", alice.identity()).unwrap();
+    let old_page = store.history(id, None, &alice.keys).unwrap();
+    assert_eq!(old_page.messages.len(), 100);
+    db.execute_batch("CREATE TRIGGER block_clear BEFORE INSERT ON local_group_hidden BEGIN SELECT RAISE(ABORT,'simulated full disk'); END;").unwrap();
+    assert!(store.clear_history(id).is_err());
+    assert_eq!(store.storage_stats(id).unwrap().visible_messages, 105);
+    db.execute_batch("DROP TRIGGER block_clear;").unwrap();
+    assert_eq!(store.clear_history(id).unwrap(), 105);
+    let page = store.history(id, None, &alice.keys).unwrap();
+    assert!(page.messages.is_empty());
+    assert!(page.next_before.is_none());
+    assert!(store
+        .history(id, old_page.next_before, &alice.keys)
+        .unwrap()
+        .messages
+        .is_empty());
+    store.seal_text(id, "new history", &alice.keys).unwrap();
+    let page = store.history(id, None, &alice.keys).unwrap();
+    assert_eq!(page.messages.len(), 1);
+    assert!(page.next_before.is_none());
+    assert_eq!(store.storage_stats(id).unwrap().hidden_messages, 105);
+}

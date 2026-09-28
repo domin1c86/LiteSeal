@@ -7,7 +7,10 @@ export interface NotificationIdentity { user_id: string; device_id: string; serv
 export interface GroupReport { changed: number; errors: string[]; notifications: { group_id: string; message_id: string }[]; notification_identity: NotificationIdentity | null }
 export interface SentGroupInvite { id: string; group_id: string; user_id: string; device_id: string; expires_at: number; status: "pending" | "accepted" | "rejected" | "revoked" | "expired" | "invalidated" }
 export interface SentGroupInvites { invites: SentGroupInvite[]; next_cursor: string | null }
+export interface GroupStorageStats { visible_messages: number; hidden_messages: number; unread_messages: number; pending_tasks: number; logical_bytes: number; database_bytes: number; wal_bytes: number }
 export interface CommandMap {
+  get_group_storage_stats: { args: { groupId: string }; result: GroupStorageStats };
+  clear_group_history: { args: { groupId: string }; result: number };
   get_sent_group_invites: { args: { groupId: string; afterId?: string }; result: SentGroupInvites };
   revoke_group_invite: { args: { inviteId: string }; result: void };
   set_group_muted: { args: { groupId: string; muted: boolean }; result: void };
@@ -131,7 +134,7 @@ export type DesktopApi = {
 };
 export const commandNames = [
   "sync_group",
-  "get_sent_group_invites", "revoke_group_invite", "set_group_muted", "get_groups", "create_group", "inspect_group", "inspect_group_peer", "recover_group", "invite_group_member", "accept_group_invite", "decline_group_invite", "change_group_membership", "get_group_history", "group_draft", "mark_group_seen", "send_group_text", "cancel_group_send", "process_groups",
+  "get_group_storage_stats", "clear_group_history", "get_sent_group_invites", "revoke_group_invite", "set_group_muted", "get_groups", "create_group", "inspect_group", "inspect_group_peer", "recover_group", "invite_group_member", "accept_group_invite", "decline_group_invite", "change_group_membership", "get_group_history", "group_draft", "mark_group_seen", "send_group_text", "cancel_group_send", "process_groups",
   "save_scheduled_message", "list_scheduled_messages", "cancel_scheduled_message", "send_scheduled_now", "process_scheduled_messages", "suspend_scheduled_messages",
   "configure_app_lock",
   "preview_attachment_task",
