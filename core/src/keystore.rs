@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, zeroize::Zeroize)]
 pub struct KeystoreData {
     pub user_id: String,
     #[serde(default)]

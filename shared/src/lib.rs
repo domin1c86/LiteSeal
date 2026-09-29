@@ -1,3 +1,4 @@
+pub mod backup_crypto;
 pub mod crypto;
 pub mod group;
 pub mod protocol;

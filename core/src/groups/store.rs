@@ -150,6 +150,9 @@ fn save_head(
     Ok(())
 }
 impl GroupStore {
+    pub(crate) fn backup_scope(&self) -> &str {
+        &self.scope
+    }
     pub fn open(path: &str, origin: &str, identity: GroupIdentity) -> Result<Self, String> {
         identity.validate().map_err(|_| invalid())?;
         let origin = api::canonical_origin(origin)?;
