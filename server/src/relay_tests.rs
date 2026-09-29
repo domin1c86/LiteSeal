@@ -90,6 +90,7 @@ async fn only_recipient_can_submit_idempotent_signed_read_receipt() {
     let server = TestServer::start().await;
     let alice = server.register().await;
     let bob = server.register().await;
+    server.accept(&bob, &alice).await;
     let mut sender = server.connect(&alice).await;
     let mut recipient = server.connect(&bob).await;
     let original = envelope(&alice, &bob);
@@ -191,6 +192,7 @@ async fn message_operation_targets_survive_acknowledged_delivery() {
     let server = TestServer::start().await;
     let alice = server.register().await;
     let bob = server.register().await;
+    server.accept(&bob, &alice).await;
     let mut sender = server.connect(&alice).await;
     let mut recipient = server.connect(&bob).await;
     let original = envelope(&alice, &bob);
@@ -247,6 +249,7 @@ async fn receipts_survive_rejection_and_reject_conflicting_replays() {
     let server = TestServer::start().await;
     let alice = server.register().await;
     let bob = server.register().await;
+    server.accept(&bob, &alice).await;
     let mut sender = server.connect(&alice).await;
     let mut recipient = server.connect(&bob).await;
     let original = envelope(&alice, &bob);
@@ -323,6 +326,7 @@ async fn thousand_message_backlog_drains_without_reconnect_and_preserves_quota()
     let server = TestServer::start().await;
     let alice = server.register().await;
     let bob = server.register().await;
+    server.accept(&bob, &alice).await;
     let mut previous = Vec::new();
     let mut expected = Vec::new();
     for seq in 1..=1001 {
@@ -502,6 +506,14 @@ impl TestServer {
         }
     }
 
+    async fn accept(&self, recipient: &TestUser, sender: &TestUser) {
+        let response = http_client().post(format!("{}/contact-policy", self.url))
+            .bearer_auth(&recipient.token)
+            .json(&serde_json::json!({"device_id":recipient.device_id,"peer_id":sender.user_id,"status":"accepted"}))
+            .send().await.unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::NO_CONTENT);
+    }
+
     async fn connect(&self, user: &TestUser) -> Socket {
         let (mut socket, _) = connect_async(format!("{}/ws", self.url.replacen("http", "ws", 1)))
             .await
@@ -592,6 +604,7 @@ async fn online_delivery_survives_disconnect_until_authenticated_recipient_ack()
     let server = TestServer::start().await;
     let alice = server.register().await;
     let bob = server.register().await;
+    server.accept(&bob, &alice).await;
     let mut alice_socket = server.connect(&alice).await;
     let mut bob_socket = server.connect(&bob).await;
     let original = envelope(&alice, &bob);

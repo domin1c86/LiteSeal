@@ -227,7 +227,7 @@ async fn public_profile_updates_without_changing_account_identity() {
             &[1; 32],
             &[2; 32],
             &auth::service::hash_token(&access),
-            "unused-refresh",
+            &format!("refresh-{username}"),
         )
         .await
         .unwrap();

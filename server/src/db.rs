@@ -59,6 +59,22 @@ pub struct AckedMessage {
 const MAX_OFFLINE_MESSAGES_PER_DEVICE: i64 = 1_000;
 const MAX_OFFLINE_BYTES_PER_DEVICE: i64 = 10 * 1024 * 1024;
 
+fn migrations() -> &'static [(i64, &'static str)] {
+    &[
+        (1_i64, MIGRATIONS),
+        (2, BETA_MIGRATIONS),
+        (3, OPERATION_MIGRATIONS),
+        (4, crate::attachments::MIGRATION),
+        (5, crate::contact_policy::MIGRATION),
+        (6, crate::reactions::MIGRATION),
+        (7, crate::profile::MIGRATION),
+        (8, crate::read_receipts::MIGRATION),
+        (9, crate::groups::MIGRATION),
+        (10, crate::groups::MESSAGE_MIGRATION),
+        (11, crate::groups::CANCEL_MIGRATION),
+    ]
+}
+
 impl Db {
     pub async fn connect(database_url: &str) -> Result<Self, sqlx::Error> {
         let pool = PgPoolOptions::new()
@@ -96,19 +112,7 @@ impl Db {
         )
         .execute(&mut *transaction)
         .await?;
-        for (version, sql) in [
-            (1_i64, MIGRATIONS),
-            (2, BETA_MIGRATIONS),
-            (3, OPERATION_MIGRATIONS),
-            (4, crate::attachments::MIGRATION),
-            (5, crate::contact_policy::MIGRATION),
-            (6, crate::reactions::MIGRATION),
-            (7, crate::profile::MIGRATION),
-            (8, crate::read_receipts::MIGRATION),
-            (9, crate::groups::MIGRATION),
-            (10, crate::groups::MESSAGE_MIGRATION),
-            (11, crate::groups::CANCEL_MIGRATION),
-        ] {
+        for &(version, sql) in migrations() {
             let applied = sqlx::query("SELECT 1 FROM schema_migrations WHERE version = $1")
                 .bind(version)
                 .fetch_optional(&mut *transaction)
@@ -887,7 +891,7 @@ mod integration_tests {
             .fetch_one(db.pool())
             .await
             .unwrap();
-        assert_eq!(versions, 3);
+        assert_eq!(versions, migrations().len() as i64);
         sqlx::query("SELECT 1 FROM offline_messages LIMIT 1")
             .execute(db.pool())
             .await
