@@ -17,6 +17,7 @@ mod relay;
 #[cfg(test)]
 mod relay_tests;
 mod state;
+mod test_database;
 
 use axum::{
     extract::State,
@@ -31,6 +32,10 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
 #[tokio::main]
 async fn main() {
+    if std::env::args().any(|arg| arg == "--test-database-check") {
+        test_database::run().await;
+        return;
+    }
     tracing_subscriber::fmt::init();
 
     let config = ServerConfig::from_env().expect("invalid server configuration");

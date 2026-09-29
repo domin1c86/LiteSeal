@@ -17,7 +17,8 @@
     "build:electron": "tsc -p electron/tsconfig.json && node scripts/build-electron.mjs",
     "build": "npm run build --workspace liteseal-ui && npm run build:electron && cargo build --locked --release -p liteseal-desktop",
     "test": "npm run build:electron && cargo build --locked -p liteseal-desktop && node --test --test-timeout=30000 electron/tests/*.test.cjs && cargo test --locked --workspace",
-    "dist:win": "node scripts/dist-win.mjs"
+    "dist:win": "node scripts/dist-win.mjs",
+    "test:database": "node scripts/test-database.mjs"
   },
   "devDependencies": {
     "electron": "44.3.0",
@@ -59,7 +60,9 @@
       ],
       "icon": "electron/icons/icon.svg",
       "signAndEditExecutable": false,
-      "signExts": ["liteseal-desktop.exe"]
+      "signExts": [
+        "liteseal-desktop.exe"
+      ]
     },
     "nsis": {
       "oneClick": false,
