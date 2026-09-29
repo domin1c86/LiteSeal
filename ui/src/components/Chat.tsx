@@ -687,11 +687,11 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
         <button disabled={forwarding} onClick={() => setForwardDraft(null)}>取消</button>
         {actionStatus && <p role="status">{actionStatus}</p>}
       </PanelDialog>}
-      {(draft.reply || draft.forwarded) && <div className="draft-reference">
+      {(draft.reply || draft.forwarded) && <div className="draft-reference inset-indicator" data-indicator-active="true"><div className="draft-reference-content">
         {draft.reply && <div>回复 {draft.reply.sender}：{draft.reply.text}</div>}
         {draft.forwarded && <div>转发：{draft.forwarded.sender}</div>}
         <button disabled={sending || !!draft.messageId} onClick={() => { void onDraftChange({ ...draft, reply: undefined, forwarded: undefined }).catch(error => setActionStatus(String(error))); }}>移除引用/转发标记</button>
-      </div>}
+      </div></div>}
       {readError && <p role="alert">{readError}</p>}
       {receiptError && <p role="alert">{receiptError}</p>}
       {sendError && <div style={styles.sendError}>{sendError}</div>}

@@ -3,6 +3,10 @@
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
     "Segoe UI", sans-serif;
+  --indicator-color: var(--accent);
+  --indicator-width: 3px;
+  --indicator-height: 24px;
+  --indicator-inset: 8px;
   --app-bg: #0f0f0f;
   --workspace-bg: #0f0f0f;
   --sidebar-bg: #161616;
@@ -193,7 +197,26 @@ body { font-size: 14px; line-height: 1.5; }
 .sidebar-filters > button, .sidebar-filters > select { background: transparent; font-size: 11px; padding: 5px 8px; }
 .sidebar-filters > select { flex: 1; }
 .sidebar-organizer { width: 100%; text-align: left; border-color: transparent; color: var(--text-subtle); }
-.contact-row { position: relative; min-height: 64px; }
+/* Reusable inset rail: reserve its space even when the indicator is inactive. */
+.inset-indicator {
+  position: relative;
+  padding-inline-start: calc(var(--indicator-inset) + var(--indicator-width) + 8px);
+}
+.inset-indicator::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: var(--indicator-inset);
+  top: 50%;
+  transform: translateY(-50%);
+  width: var(--indicator-width);
+  height: max(0px, min(var(--indicator-height), calc(100% - 16px)));
+  border-radius: 999px;
+  background: var(--indicator-color);
+  opacity: 0;
+  pointer-events: none;
+}
+.inset-indicator[data-indicator-active="true"]::before { opacity: 1; }
+.contact-row { min-height: 64px; padding-block: 9px; padding-inline-end: 12px; }
 .contact-info { display: flex; flex: 1; min-width: 0; }
 .contact-meta { order: 2; color: var(--text-subtle); }
 .contact-actions { order: 3; flex-shrink: 0; }
@@ -242,7 +265,8 @@ body { font-size: 14px; line-height: 1.5; }
 .message-search { font-size: 12px; background: var(--sidebar-bg); flex-shrink: 0; }
 .message-search > button { margin: 3px; }
 .message-search > p { color: var(--text-muted); font-size: 11px; }
-.draft-reference { width: calc(100% - 48px); max-width: 840px; margin: 6px auto; padding: 10px 14px; border-left: 2px solid var(--text-subtle); background: var(--surface-muted); font-size: 12px; overflow-wrap: anywhere; max-height: 120px; overflow: auto; }
+.draft-reference { width: calc(100% - 48px); max-width: 840px; margin: 6px auto; padding-block: 10px; padding-inline-end: 14px; --indicator-color: var(--text-subtle); background: var(--surface-muted); font-size: 12px; overflow-wrap: anywhere; flex-shrink: 0; }
+.draft-reference-content { max-height: 100px; overflow: auto; }
 .panel-dialog { width: min(480px, calc(100vw - 32px)); max-width: none; max-height: calc(100dvh - 40px); padding: 0; border: 1px solid var(--border-strong); border-radius: var(--radius-lg); background: var(--sidebar-bg); color: var(--text); box-shadow: var(--shadow-modal); }
 .panel-dialog::backdrop { background: var(--overlay); }
 .panel-dialog-wide { width: min(680px, calc(100vw - 32px)); }
@@ -279,7 +303,7 @@ body { font-size: 14px; line-height: 1.5; }
   .sidebar-filters { padding: 6px; }
   .sidebar-filters > button { width: 100%; white-space: normal; padding-inline: 2px; font-size: 10px; }
   .sidebar-filters > select { width: 100%; }
-  .contact-row { flex-wrap: wrap; justify-content: center; padding: 8px 4px !important; gap: 3px !important; }
+  .contact-row { flex-wrap: wrap; justify-content: center; padding-block: 8px; padding-inline-end: 4px; gap: 3px !important; }
   .contact-row .contact-info, .contact-meta time { display: none; }
   .contact-actions { width: 100%; text-align: center; }
   .contact-actions .action-menu > summary { text-align: center; }

@@ -1,3 +1,4 @@
+import { checkIndicator, checkNoSelectionShift } from "./indicator-checks";
 import { createRoot } from 'react-dom/client';
 import '../src/theme.css';
 import GroupPanel from '../src/components/GroupPanel';
@@ -27,7 +28,8 @@ let active: string | null = null;
 let busy = false;
 const onActive = (id: string | null) => { active = id; };
 const onBusy = (value: boolean) => { busy = value; };
-const snapshot = () => ({ groups: [copy(group)], invitations: [], errors: [], next_cursor: null });
+let extraGroups: GroupView[] = [];
+const snapshot = () => ({ groups: [copy(group), ...copy(extraGroups)], invitations: [], errors: [], next_cursor: null });
 const invitation = (id: string, status: string) => ({ id, group_id: group.id, user_id: 'target-' + id, device_id: 'device-' + id, expires_at: 2000000000000, status });
 const api = {
   get_group_collaboration: async ({ messageIds }: { messageIds?: string[] }) => ({ ...copy(collab), polls: copy(collab.polls.filter(poll => !messageIds || messageIds.includes(poll.id))) }),
@@ -73,6 +75,7 @@ async function select() {
   await wait(() => document.querySelector('textarea')?.getAttribute('placeholder')?.startsWith('输入群消息'), 'composer');
 }
 function reset() {
+  extraGroups = [];
   group = { id: 'group-one', name: 'Trial group', owner: 'owner', epoch: 3, closed: false, active: true, trusted: true, members: [member('owner'), member('member')], unread: 1, pending: false, muted: false };
   messages = [{ id: 'old', sender_user_id: 'member', sender_device_id: 'device-member', sent_at: 1000000000000, text: 'Synthetic old message', status: 'received' }];
   draft = 'retained draft'; hidden = 0; failDraft = false; conflict = false; inviteStatus = 'pending'; clearCalls = 0; sentCalls = [];
@@ -174,4 +177,18 @@ async function input(text: string) {
   await api.submit_group_collaboration({command:{kind:'poll',question:'下次群讨论选择哪个时间？',options:['周三 19:00','周四 20:00','周六 10:00']}});
   collab.polls[0].votes = { member:'option-0' }; collab.pin='intro'; collab.pin_revision=1;
   await mount();await select();
+};
+
+(window as any).showGroupIndicators = async () => {
+  reset(); group.name = '很长的群会话名称，用于检查多行布局与指示条';
+  extraGroups = [{ ...copy(group), id: 'second-group', name: '另一个群会话' }];
+  await mount(); await select();
+  const rows = Array.from(document.querySelectorAll<HTMLButtonElement>('.group-sidebar nav button'));
+  const positions = rows.map(row => row.firstElementChild!.getBoundingClientRect().left);
+  checkIndicator(rows[0], rows[0].firstElementChild!);
+  rows[1].click(); await wait(() => rows[1].getAttribute('aria-current') === 'true' && !busy, 'second group selected');
+  checkNoSelectionShift(positions, rows); checkIndicator(rows[1], rows[1].firstElementChild!);
+  rows[0].click(); await wait(() => rows[0].getAttribute('aria-current') === 'true' && !busy, 'first group selected');
+  checkNoSelectionShift(positions, rows);
+  return ['group selection without layout shift', 'long group name spacing and theme color'];
 };

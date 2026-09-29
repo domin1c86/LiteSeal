@@ -18,10 +18,10 @@
 .group-sidebar > h3 { padding-inline: 8px; font-size: 11px; font-weight: 500; color: var(--text-subtle); }
 .group-sidebar > .group-muted { padding-inline: 8px; }
 .group-sidebar nav { gap: 6px; }
-.group-sidebar nav button { border: 0; border-left: 2px solid transparent; padding: 12px; gap: 3px; background: transparent; border-radius: var(--radius-md); }
+.group-sidebar nav button { border: 0; padding-block: 12px; padding-inline-end: 12px; padding-inline-start: calc(var(--indicator-inset) + var(--indicator-width) + 8px); gap: 3px; background: transparent; border-radius: var(--radius-md); }
 .group-sidebar nav strong { font-size: 14px; font-weight: 500; }
 .group-sidebar nav span { font: 10.5px var(--font-mono); color: var(--text-subtle); }
-.group-sidebar nav .group-selected { border-left-color: var(--text); background: var(--surface-active); }
+.group-sidebar nav .group-selected { background: var(--surface-active); }
 .group-panel button { font-size: 12px; padding: 6px 10px; color: var(--text-muted); }
 .group-panel button:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
 .group-heading { padding: 14px 24px; align-items: center; flex-wrap: nowrap; gap: 12px; }

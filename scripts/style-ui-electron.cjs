@@ -17,11 +17,14 @@ app.whenReady().then(async () => {
     window.setContentSize(width, height);
     await window.loadFile(path.join(directory, 'app.html'));
     const checks = await window.webContents.executeJavaScript('window.checkStyleInteractions()');
+    checks.push(...await window.webContents.executeJavaScript('window.checkInsetIndicators()'));
     report.checks.push({ theme, width, checks });
-    for (const screen of ['login', 'register', 'chat', 'contacts', 'account', 'organizer', 'storage', 'lock', 'edit', 'search', 'scheduled', 'attachments', 'emoji', 'group', 'group-storage']) {
+    for (const screen of ['login', 'register', 'chat', 'contacts', 'account', 'organizer', 'storage', 'lock', 'edit', 'search', 'scheduled', 'attachments', 'emoji', 'quote', 'indicators', 'group', 'group-indicators', 'group-storage']) {
       if (screen === 'group') {
         await window.loadFile(path.join(directory, 'groups.html'));
         await window.webContents.executeJavaScript('window.showCollaboration()');
+      } else if (screen === 'group-indicators') {
+        checks.push(...await window.webContents.executeJavaScript('window.showGroupIndicators()'));
       } else if (screen === 'group-storage') await window.webContents.executeJavaScript('window.showStorage()');
       else await window.webContents.executeJavaScript(`window.tour(${JSON.stringify(screen)})`);
       await pause(100);

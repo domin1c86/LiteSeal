@@ -1,3 +1,4 @@
+import { checkIndicator, checkIndicatorSizeOverride, checkNoSelectionShift } from "./indicator-checks";
 import { createRoot } from 'react-dom/client';
 import App from '../src/App';
 import AppLock from '../src/components/AppLock';
@@ -52,7 +53,17 @@ const noop=()=>{};
  (document.querySelector('.contact-row') as HTMLElement)?.click();await sleep(500);
  if(mode==='search'){await click('搜索历史（Ctrl+F）');await fill('[aria-label="搜索关键词"]','讨论');await sleep(800);}
  if(mode==='scheduled'){const b=Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find(b=>b.textContent?.startsWith('本机定时文字'))!;b.click();await sleep();b.scrollIntoView();}
- if(mode==='quote')await click('回复');
+ if(mode==='quote'){
+  const original=rows[0].ciphertext;rows[0].ciphertext=enc('引用中需要保留的长段文字。'.repeat(30));
+  root.render(<App key={++generation}/>);await sleep(500);(document.querySelector('.contact-row') as HTMLElement).click();await sleep(500);
+  await click('回复');rows[0].ciphertext=original;
+ }
+ if(mode==='indicators'){
+  const label=document.querySelector('.contact-name')!;label.textContent='很长的联系人昵称，用于检查指示条与文字之间的留白';
+  const menu=document.querySelector('.contact-actions details') as HTMLDetailsElement;menu.open=true;
+  (document.querySelector('.contact-row') as HTMLElement).style.setProperty('--indicator-color','var(--ok)');
+  await sleep();
+ }
  if(mode==='image-preview'){await click('发送前预览');document.querySelector('[aria-label="发送加密附件"]')?.scrollIntoView();}
  if(mode==='edit')await click('编辑');
  if(mode==='revoke')await click('撤回');
@@ -98,4 +109,23 @@ const noop=()=>{};
  (contactMenu.querySelector('summary') as HTMLElement).click();await sleep();check(contactMenu.open,'contact actions open');
  document.body.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));check(!contactMenu.open,'outside click dismisses menu');
  return ['message actions and boundary placement','Escape and outside dismissal','modal focus containment and restoration','editable message form','busy Escape guard and visible submission failure','visible reaction chips'];
+};
+
+(window as any).checkInsetIndicators=async()=>{
+ await (window as any).tour('chat');
+ let rows=Array.from(document.querySelectorAll<HTMLElement>('.contact-row'));
+ const positions=rows.map(row=>row.firstElementChild!.getBoundingClientRect().left);
+ checkIndicator(rows[0],rows[0].firstElementChild!);
+ rows[1].click();await sleep();checkNoSelectionShift(positions,rows);
+ checkIndicator(rows[1],rows[1].firstElementChild!);
+ await (window as any).tour('contacts');
+ rows=Array.from(document.querySelectorAll<HTMLElement>('.contact-row'));
+ checkIndicator(rows[0],rows[0].firstElementChild!);
+ await (window as any).tour('quote');
+ const quote=document.querySelector<HTMLElement>('.draft-reference')!;
+ checkIndicator(quote,quote.firstElementChild!,'--text-subtle');
+ const content=quote.firstElementChild!;content.scrollTop=content.scrollHeight;
+ checkIndicator(quote,content,'--text-subtle');
+ checkIndicatorSizeOverride();
+ return ['contact and conversation selection without layout shift','quoted draft with long text and scrolling','theme and per-instance color','custom dimensions and short containers'];
 };

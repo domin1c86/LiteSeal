@@ -113,7 +113,9 @@ export default function ContactList({
             role="button"
             tabIndex={0}
             onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onSelect(contact.user_id); } }}
-            className="contact-row"
+            className="contact-row inset-indicator"
+            data-indicator-active={isActive}
+            aria-current={isActive ? "true" : undefined}
             key={contact.user_id}
             style={{
               ...styles.item,
@@ -248,24 +250,23 @@ const styles: Record<string, React.CSSProperties> = {
   item: {
     display: "flex",
     alignItems: "center",
-    padding: "9px 12px",
     margin: "6px 8px 0",
     borderRadius: "var(--radius-md)",
-    borderLeft: "2px solid transparent",
     cursor: "pointer",
     gap: "10px",
     transition: "background-color 0.15s",
   },
   itemActive: {
     backgroundColor: "var(--surface-active)",
-    borderLeftColor: "var(--text)",
   },
   avatar: {
     width: "34px",
     height: "34px",
     borderRadius: "var(--radius-md)",
     backgroundColor: "var(--accent-soft)",
-    border: "1px solid var(--border)",
+    borderWidth: "1px",
+    borderStyle: "solid",
+    borderColor: "var(--border)",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",

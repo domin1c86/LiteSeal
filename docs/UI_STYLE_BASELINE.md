@@ -38,12 +38,32 @@ npm run build
 
 `test:ui:style` 编译真实 React 组件，在临时 Electron 配置目录中运行。业务接口全部模拟，姓名、消息、指纹与账号均为虚构；不访问真实用户数据库、密钥目录或服务端。
 
-- 浅/深色各检查 1360×1000 与 390×844；每组合 15 张截图，共 60 张。
-- 覆盖登录、注册、聊天、联系人、账号、整理、存储、锁定、编辑、搜索、定时、附件、emoji、群聊与群数据窗口。
+- 浅/深色各检查 1360×1000 与 390×844；每组合 18 张截图，共 72 张（包含后续内嵌指示条回归）。
+- 覆盖登录、注册、聊天、联系人、账号、整理、存储、锁定、编辑、搜索、定时、附件、emoji、群聊与群数据窗口，以及长引用、长名称/展开菜单/自定义颜色、群会话选中切换。
 - 检查横向溢出、弹窗视口边界、首条消息菜单裁切、外部点击/Escape、焦点进入/恢复、编辑输入、忙碌关闭保护、窗内提交错误及已有回应可见性。
 - 每次生成 `target/test-results/ui-style-*/result.json`、`index.html` 图册及 PNG。失败保留本轮证据；不纳入 Git。
 - 群交互仍通过既有 `test:groups:ui` 验证邀请、静音、提及、置顶、改票、关闭、冲突、草稿、清理与会话生命周期。菜单测试会先展开实际入口。
 
-本次 `npm test`：15 项 Electron/Node 与 132 项 Rust 通过；20 项 PostgreSQL 用例在常规测试中忽略。本次没有重跑专用数据库或真实三客户端入口，不把之前的通过结果当作本次执行。生产构建通过，既有 LNK4098/LNK4099 链接警告保留。系统通知、双 Windows、安装和独立安全验收仍属另项；不改变 T20/T21 验收勾选。
+上一批 da66ac0 风格对齐的 `npm test`：15 项 Electron/Node 与 132 项 Rust 通过；20 项 PostgreSQL 用例在常规测试中忽略。本次没有重跑专用数据库或真实三客户端入口，不把之前的通过结果当作本次执行。生产构建通过，既有 LNK4098/LNK4099 链接警告保留。系统通知、双 Windows、安装和独立安全验收仍属另项；不改变 T20/T21 验收勾选。
 
-本次最终截图证据：`target/test-results/ui-style-3aaRbd/`，60/60 截图与四种主题/尺寸组合下的 6 组交互检查通过，无 renderer 错误。群交互证据：`target/test-results/group-ui-O4dUzn/`。完整测试与构建日志：`target/test-results/ui-refresh-npm-test.log`、`target/test-results/ui-refresh-build.log`。这些路径为本机忽略产物，克隆仓库后可用上述命令重新生成。
+上一批风格对齐的截图证据：`target/test-results/ui-style-3aaRbd/`，60/60 截图与四种主题/尺寸组合下的 6 组交互检查通过，无 renderer 错误。群交互证据：`target/test-results/group-ui-O4dUzn/`。完整测试与构建日志：`target/test-results/ui-refresh-npm-test.log`、`target/test-results/ui-refresh-build.log`。这些路径为本机忽略产物，克隆仓库后可用上述命令重新生成。
+
+
+## 内嵌圆头指示条（2026-09-30）
+
+根据确认草图，将会话/联系人选中项、群会话选中项和引用草稿的左侧贴边长线统一改为短竖条。保留背景、圆角和外轮廓，不新增描边。
+
+共享样式 `inset-indicator` 配合 `data-indicator-active="true"` 显示伪元素；其他值隐藏竖条但保留内容留白。列表选中项同时设置 `aria-current="true"`。伪元素不参与布局、不接收鼠标事件，不替代键盘焦点提示。
+
+| 可覆盖变量 | 默认值 | 用途 |
+| --- | --- | --- |
+| `--indicator-color` | `var(--accent)` | 随浅深色主题变化；引用草稿覆写为 `var(--text-subtle)` |
+| `--indicator-width` | `3px` | 竖条宽度 |
+| `--indicator-height` | `24px` | 期望高度，实际不超过容器高度减 16px |
+| `--indicator-inset` | `8px` | 距卡片起始边缘的间距 |
+
+竖条垂直居中、完全圆头；内容起始位置至少为 inset + width + 8px，未选中项保留相同空间。长引用在内层滚动，外层竖条始终居中。颜色覆盖由使用场景提供，不增加用户配色设置，也不将静音/未读自动映射为额外颜色。图册中的绿色仅是测试夹具的覆盖示例。
+
+新增渲染回归检查尺寸、居中、留白、短容器限高、主题色/实例颜色覆盖、选中切换无位移，以及长引用内部滚动。仍使用隔离 Electron 与模拟接口，不访问真实用户数据；不改变后端或协议。
+
+本次指示条最终验证：`npm run test:ui:style` 通过，72 张截图及四种主题/尺寸组合各 12 组检查通过，无 renderer 警告；图册为 `target/test-results/ui-style-Yk88Km/index.html`。群 UI 宽窄各 12 组与前端生产构建通过。首轮选中切换发现的头像边框简写冲突已修复；失败证据保留于 `ui-style-JFW5AX/`。本次未重跑 Rust/数据库/真实服务集成测试。
