@@ -100,6 +100,10 @@ async fn submit(
         }
         return Ok(Json(row.get("seq")));
     }
+    let collision:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM group_message_batches WHERE group_id=$1 AND message_id=$2) OR EXISTS(SELECT 1 FROM group_message_cancellations WHERE group_id=$1 AND message_id=$2)").bind(&id).bind(&event.id).fetch_one(&mut *tx).await.map_err(unavailable)?;
+    if collision {
+        return Err(conflict());
+    }
     let meta = metadata(&mut tx, &id, true).await?;
     let group = replay(&mut tx, &id, &meta).await?;
     if group
@@ -244,9 +248,14 @@ async fn list(
     let mut cursor = access.after;
     for row in rows.into_iter().take(100) {
         cursor = row.get("seq");
+        let event: c::Event =
+            serde_json::from_str(&row.get::<String, _>("header")).map_err(|_| corrupt())?;
+        if !policy_read(&mut tx, &actor.user_id, &event.actor.user).await? {
+            return Err(conflict());
+        }
         items.push(c::Delivery {
             seq: cursor,
-            event: serde_json::from_str(&row.get::<String, _>("header")).map_err(|_| corrupt())?,
+            event,
             ciphertext: row.get("ciphertext"),
         });
     }

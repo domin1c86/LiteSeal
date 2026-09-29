@@ -1270,3 +1270,85 @@ async fn collaboration_votes_close_and_fanout_are_atomic_and_scoped() {
         reqwest::StatusCode::NOT_FOUND
     );
 }
+
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn collaboration_and_text_ids_cannot_alias_and_blocking_stops_download() {
+    use liteseal_shared::collaboration as c;
+    let f = Fixture::start().await;
+    let a = f.account().await;
+    let b = f.account().await;
+    let root = event(
+        None,
+        &a,
+        GroupAction::Create {
+            name: "collab boundaries".into(),
+            owner: a.identity.clone(),
+        },
+    );
+    assert!(f.change(&a, &root, true).await.status().is_success());
+    let initial = pin_creation(&root, &a.identity).unwrap();
+    let g = f.add(&initial, &a, &b).await;
+    let endpoint = format!("{}/groups/{}/collaboration", f.url, g.group_id());
+    let poll = collab_event(
+        &g,
+        &a,
+        c::Action::Poll {
+            options: vec!["a".into(), "b".into()],
+        },
+        None,
+    );
+    assert!(f
+        .client
+        .post(&endpoint)
+        .bearer_auth(&a.token)
+        .json(&poll)
+        .send()
+        .await
+        .unwrap()
+        .status()
+        .is_success());
+    let mut text = batch(&g, &a, &[(&b, None)]);
+    text[0].message_id = poll.event.id.clone();
+    text[0].signature = crypto::sign(&text[0].signing_bytes(), &a.keys.ed25519_sk).unwrap();
+    assert_eq!(
+        f.send_group(&a, &text).await.status(),
+        reqwest::StatusCode::CONFLICT
+    );
+    let text = batch(&g, &a, &[(&b, None)]);
+    assert!(f.send_group(&a, &text).await.status().is_success());
+    let mut alias = collab_event(&g, &a, c::Action::Mention, None);
+    alias.event.id = text[0].message_id.clone();
+    alias.event.object = alias.event.id.clone();
+    alias.event.signature = crypto::sign(&alias.event.signing_bytes(), &a.keys.ed25519_sk).unwrap();
+    assert_eq!(
+        f.client
+            .post(&endpoint)
+            .bearer_auth(&a.token)
+            .json(&alias)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::CONFLICT
+    );
+    for policy in ["blocked", "accepted"] {
+        assert_eq!(f.client.post(format!("{}/contact-policy",f.url)).bearer_auth(&b.token).json(&serde_json::json!({"device_id":b.identity.device_id,"peer_id":a.identity.user_id,"status":policy})).send().await.unwrap().status(),reqwest::StatusCode::NO_CONTENT);
+        let response = f
+            .client
+            .get(&endpoint)
+            .bearer_auth(&b.token)
+            .query(&[("device_id", &b.identity.device_id)])
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            if policy == "blocked" {
+                reqwest::StatusCode::CONFLICT
+            } else {
+                reqwest::StatusCode::OK
+            }
+        );
+    }
+}

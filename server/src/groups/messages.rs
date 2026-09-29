@@ -150,6 +150,17 @@ async fn send(
         }
         return receipt_in(&mut tx, &id, &first.message_id).await;
     }
+    let collab_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM group_collab_events WHERE group_id=$1 AND id=$2)",
+    )
+    .bind(&id)
+    .bind(&first.message_id)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(unavailable)?;
+    if collab_exists {
+        return Err(conflict());
+    }
     let meta = metadata(&mut tx, &id, true).await?;
     let cancelled:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM group_message_cancellations WHERE group_id=$1 AND message_id=$2 AND sender_device_id=$3)")
         .bind(&id).bind(&first.message_id).bind(&actor.device_id).fetch_one(&mut *tx).await.map_err(unavailable)?;
