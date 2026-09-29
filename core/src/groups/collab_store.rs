@@ -29,6 +29,7 @@ pub struct CollaborationView {
     pub pin_revision: u64,
     pub pending: bool,
     pub conflict: bool,
+    pub pending_message: Option<String>,
 }
 fn replay(
     conn: &Connection,
@@ -134,6 +135,13 @@ impl GroupStore {
             c::validate_content(e, plain).map_err(|_| invalid())?;
             save_message(&tx, &self.scope, e, plain, "queued", keys)?;
         }
+        if matches!(e.action, c::Action::Mention) {
+            tx.execute(
+                "DELETE FROM local_group_drafts WHERE scope=?1 AND group_id=?2",
+                params![self.scope, e.group],
+            )
+            .map_err(db)?;
+        }
         tx.commit().map_err(db)
     }
     pub fn collaboration_accepted(&mut self, id: &str, event: &str) -> Result<(), String> {
@@ -218,6 +226,10 @@ impl GroupStore {
                     return Err(invalid());
                 }
             } else {
+                let collides:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM local_group_messages WHERE scope=?1 AND group_id=?2 AND message_id=?3) AND NOT EXISTS(SELECT 1 FROM local_collab_outbox WHERE scope=?1 AND group_id=?2 AND id=?3)",params![self.scope,id,e.id],|r|r.get(0)).map_err(db)?;
+                if collides {
+                    return Err(invalid());
+                }
                 let prior = replay(&tx, &self.scope, id, &e.object)?;
                 c::transition(prior.as_ref(), &group, e).map_err(|_| invalid())?;
                 let plain = if let Some(cipher) = &delivery.ciphertext {
@@ -377,6 +389,7 @@ impl GroupStore {
             pin_revision: self.collaboration_object(id, id)?.map_or(0, |p| p.revision),
             pending: self.collaboration_pending(id)?.is_some(),
             conflict: self.collaboration_conflicted(id)?,
+            pending_message:self.conn.query_row("SELECT id FROM local_collab_outbox WHERE scope=?1 AND group_id=?2 AND status IN ('queued','conflict')",params![self.scope,id],|r|r.get(0)).optional().map_err(db)?,
         })
     }
     pub fn collaboration_pin_audience(

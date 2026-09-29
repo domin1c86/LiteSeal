@@ -12,7 +12,7 @@ app.whenReady().then(async () => {
   window.webContents.on('render-process-gone', () => { report.errors.push('renderer terminated'); });
   await window.loadFile(path.join(directory, 'index.html'));
   report.tests = await window.webContents.executeJavaScript('window.runGroupTests()');
-  await window.webContents.executeJavaScript('window.showStorage()');
+  await window.webContents.executeJavaScript('window.showCollaboration()');
   window.setContentSize(1281, 900);
   await new Promise(resolve => setTimeout(resolve, 100));
   window.setContentSize(1280, 900);
@@ -20,7 +20,7 @@ app.whenReady().then(async () => {
   await fs.writeFile(path.join(directory, 'wide.png'), (await window.webContents.capturePage()).toPNG());
   window.setContentSize(390, 844);
   report.narrowTests = await window.webContents.executeJavaScript('window.runGroupTests()');
-  await window.webContents.executeJavaScript('window.showStorage()');
+  await window.webContents.executeJavaScript('window.showCollaboration()');
   window.setContentSize(391, 844);
   await new Promise(resolve => setTimeout(resolve, 100));
   window.setContentSize(390, 844);

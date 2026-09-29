@@ -1,18 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getDesktopApi } from "../lib/desktopApi";
 import type { Contact } from "../types";
-import type { GroupStorageStats, SentGroupInvites, GroupInspection, GroupMember, GroupMessage, GroupSnapshot } from "../../../electron/contracts";
+import type { CollaborationMember, CollaborationCommand, GroupCollaboration, GroupStorageStats, SentGroupInvites, GroupInspection, GroupMember, GroupMessage, GroupSnapshot } from "../../../electron/contracts";
 import "./groups.css";
 
 const empty: GroupSnapshot = { groups: [], invitations: [], errors: [], next_cursor: null };
 const bytes = (text: string) => new TextEncoder().encode(text).length;
 const validName = (name: string) => !!name.trim() && bytes(name) <= 160 && !/[\u0000-\u001f\u007f-\u009f]/.test(name);
-type Dialog = { kind: "create" } | { kind: "inspect"; detail: GroupInspection; inviteId?: string }
+const emptyCollaboration: GroupCollaboration = { polls: [], pin: null, pin_unavailable: false, pin_revision: 0, pending: false, conflict: false, pending_message: null };
+type Dialog = { kind: "poll" } | { kind: "create" } | { kind: "inspect"; detail: GroupInspection; inviteId?: string }
   | { kind: "storage"; stats: GroupStorageStats; groupId: string; result?: string } | { kind: "sent"; page: SentGroupInvites; groupId: string } | { kind: "invite"; peer?: GroupMember } | { kind: "rename" } | { kind: "danger"; action: "leave" | "close" | "remove"; memberId?: string; label: string };
 interface Props { target?: { id: string; nonce: number } | null; onActiveChange: (id: string | null) => void; userId: string; contacts: Contact[]; obscured: boolean; onClose: () => void; onBusyChange: (busy: boolean) => void }
 
 export default function GroupPanel({ target, onActiveChange, userId, contacts, obscured, onClose, onBusyChange }: Props) {
   const [snapshot, setSnapshot] = useState(empty);
+  const [collaboration, setCollaboration] = useState<GroupCollaboration>(emptyCollaboration);
+  const [collaborationSupported, setCollaborationSupported] = useState<boolean | null>(null);
+  const [mentions, setMentions] = useState<CollaborationMember[]>([]);
+  const [mentionMenu, setMentionMenu] = useState(false);
+  const [pollQuestion, setPollQuestion] = useState("");
+  const [pollOptions, setPollOptions] = useState(["", ""]);
   const [ready, setReady] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [messages, setMessages] = useState<GroupMessage[]>([]);
@@ -49,8 +56,9 @@ export default function GroupPanel({ target, onActiveChange, userId, contacts, o
   }, []);
   const history = useCallback(async (id: string, reset = false) => {
     const version = ++historyVersion.current;
-    const page = await getDesktopApi().get_group_history({ groupId: id });
+    const [page, collab] = await Promise.all([getDesktopApi().get_group_history({ groupId: id }), getDesktopApi().get_group_collaboration({ groupId: id })]);
     if (!mounted.current || activeId.current !== id || version !== historyVersion.current) return;
+    setCollaboration(collab);
     if (reset) { setMessages(page.messages); setBefore(page.next_before); }
     else setMessages(previous => [...previous.filter(old => !page.messages.some(next => next.id === old.id)), ...page.messages]);
   }, []);
@@ -108,9 +116,14 @@ export default function GroupPanel({ target, onActiveChange, userId, contacts, o
   },[dialog?.kind]);
   useEffect(() => {
     activeId.current = selected;
+    setCollaboration(emptyCollaboration); setCollaborationSupported(null); setMentions([]); setMentionMenu(false);
     setMessages([]); setBefore(null); setText(""); setDraftReady(false); dirty.current = null; savedVersion.current = 0;
     if (!selected || !group?.trusted) return;
     const id = selected;
+    void getDesktopApi().sync_group_collaboration({ groupId: id }).then(async supported => {
+      if (!mounted.current || activeId.current !== id) return;
+      setCollaborationSupported(supported); if (supported) await history(id, true);
+    }).catch(failure => { if (mounted.current && activeId.current === id) setError(String(failure)); });
     void Promise.all([getDesktopApi().group_draft({ groupId: id }), history(id, true)]).then(([draft]) => {
       if (!mounted.current || activeId.current !== id) return;
       dirty.current = { id, text: draft, version: 1 }; savedVersion.current = 1; setText(draft); setDraftReady(true);
@@ -149,7 +162,7 @@ export default function GroupPanel({ target, onActiveChange, userId, contacts, o
   }
   async function choose(id: string) { await run(async () => { await flush(); activeId.current = id; setSelected(id); }); }
   function edit(value: string) {
-    setText(value); if (!selected) return;
+    setText(value); if (value.endsWith("@")) setMentionMenu(true); if (!selected) return;
     dirty.current = { id: selected, text: value, version: (dirty.current?.version ?? 0) + 1 };
     void flush().catch(() => {});
   }
@@ -159,9 +172,44 @@ export default function GroupPanel({ target, onActiveChange, userId, contacts, o
   async function send() {
     if (!selected) return;
     await run(async () => {
-      await flush(); const result = await getDesktopApi().send_group_text({ groupId: selected, text });
+      await flush();
+      if (mentions.length) {
+        try { await getDesktopApi().submit_group_collaboration({ groupId: selected, command: { kind: "mention", text, mentions } }); }
+        finally {
+          // Rust clears the draft atomically only after preserving the original encrypted task.
+          const storedDraft = await getDesktopApi().group_draft({ groupId: selected });
+          if (storedDraft === "") {
+            const version = (dirty.current?.version ?? 0) + 1; dirty.current = { id: selected, text: "", version }; savedVersion.current = version;
+            if (mounted.current) { setText(""); setMentions([]); setMentionMenu(false); }
+          }
+        }
+        return;
+      }
+      const result = await getDesktopApi().send_group_text({ groupId: selected, text });
       const version = (dirty.current?.version ?? 0) + 1; dirty.current = { id: selected, text: "", version }; savedVersion.current = version;
       if (mounted.current) { setText(""); if (result.error) setError(`消息已保留待重试：${result.error}`); }
+    });
+  }
+  async function collaborate(command: CollaborationCommand) {
+    if (!selected) return;
+    await run(async () => { await flush(); await getDesktopApi().submit_group_collaboration({ groupId: selected, command }); });
+  }
+  async function locatePin() {
+    if (!selected || !collaboration.pin) return;
+    const id = selected, target = collaboration.pin;
+    await run(async () => {
+      let cursor = before;
+      let found = messages.some(message => message.id === target);
+      while (!found && cursor !== null) {
+        const page = await getDesktopApi().get_group_history({ groupId: id, before: cursor });
+        if (!mounted.current || activeId.current !== id) return;
+        setMessages(previous => [...page.messages.filter(m => !previous.some(p => p.id === m.id)), ...previous]);
+        found = page.messages.some(m => m.id === target);
+        if (page.next_before !== null && page.next_before >= cursor) throw new Error("历史游标无效");
+        cursor = page.next_before; setBefore(cursor);
+      }
+      if (!found) throw new Error("置顶原消息已隐藏或不可用");
+      requestAnimationFrame(() => listRef.current?.querySelector(`[data-message-id="${CSS.escape(target)}"]`)?.scrollIntoView({ block: "center" }));
     });
   }
   async function earlier() {
@@ -186,16 +234,24 @@ export default function GroupPanel({ target, onActiveChange, userId, contacts, o
       {busy && <p role="status" className="group-muted">处理中，请稍候…</p>}
       {!group ? <div className="group-empty"><h2>小型私密群</h2><p>选择一个群，或核实待接受的邀请。</p><p>首轮支持最多 10 位成员的加密文字聊天。</p></div> : <>
         <header className="group-heading"><div><h2>{group.name}</h2><small>{group.id}</small><p>{group.closed ? "群已关闭，本机历史仍可查看" : group.active ? "加密文字聊天" : "当前不可发送，可查看已有本机历史"}</p></div><div className="group-actions">{group.trusted && <button disabled={busy} onClick={() => { void run(async () => { const stats = await getDesktopApi().get_group_storage_stats({ groupId: group.id }); setConfirmed(false); setDialog({ kind: "storage", stats, groupId: group.id }); }); }}>群数据管理</button>}{group.trusted && <button disabled={busy} onClick={() => { void run(async () => { await getDesktopApi().set_group_muted({ groupId: group.id, muted: !group.muted }); }); }}>{group.muted ? "取消静音" : "群静音"}</button>}{group.trusted && <button disabled={busy} onClick={() => { void run(async () => { await getDesktopApi().sync_group({ groupId: group.id }); }); }}>补收消息</button>}{!group.trusted && <button disabled={busy} onClick={() => { void inspect(group.id); }}>核实并恢复</button>}{group.trusted && owner && <button disabled={busy} onClick={() => { void run(async () => { const page = await getDesktopApi().get_sent_group_invites({ groupId: group.id }); setDialog({ kind: "sent", page, groupId: group.id }); }); }}>已发邀请</button>}{group.active && owner && <><button disabled={busy || group.members.length >= 10} onClick={() => { setPeerId(""); setConfirmed(false); setDialog({ kind: "invite" }); }}>邀请成员</button><button disabled={busy} onClick={() => { setName(group.name); setDialog({ kind: "rename" }); }}>修改群名</button><button disabled={busy} onClick={() => { setConfirmed(false); setDialog({ kind: "danger", action: "close", label: "关闭群" }); }}>关闭群</button></>}{group.active && !owner && <button disabled={busy} onClick={() => { setConfirmed(false); setDialog({ kind: "danger", action: "leave", label: "退出群" }); }}>退出群</button>}</div></header>
+        {group.trusted && <section className="group-collaboration" aria-label="群协作">
+          <p className="group-muted">群协作需所有成员使用新版客户端；旧版仅支持普通文字。{!group.active ? "当前仅可查看本机协作历史。" : collaborationSupported === false ? "当前服务端不支持群协作。" : collaborationSupported === null ? "正在检查协作能力…" : "投票实名可见，题目与选项文字端到端加密。"}</p>
+          <div className="group-actions"><button disabled={busy || !group.active || collaborationSupported !== true || collaboration.pending || collaboration.conflict} onClick={() => { setPollQuestion(""); setPollOptions(["", ""]); setDialog({ kind: "poll" }); }}>创建投票</button>
+          {collaboration.pending && <><span role="status">协作任务待提交，重试使用原编号。</span><button disabled={busy} onClick={() => { void run(async () => { await getDesktopApi().retry_group_collaboration({ groupId: group.id }); }); }}>重试协作任务</button></>}
+          {collaboration.conflict && <><span role="status">协作版本或权限冲突。放弃后可重新操作。</span><button disabled={busy} onClick={() => { void run(async () => { await getDesktopApi().discard_group_collaboration_conflict({ groupId: group.id }); }); }}>放弃冲突任务</button></>}
+          {(collaboration.pin || collaboration.pin_unavailable) && <aside aria-label="群置顶">{collaboration.pin ? <button disabled={busy} onClick={() => { void locatePin(); }}>定位置顶消息</button> : <span>置顶原消息已隐藏或无权访问</span>}{owner && group.active && <button disabled={busy || collaborationSupported !== true || collaboration.pending || collaboration.conflict} onClick={() => { void collaborate({ kind: "pin", message: null, revision: collaboration.pin_revision }); }}>取消置顶</button>}</aside>}</div>
+        </section>}
         {group.trusted && <details className="group-members"><summary>成员（{group.members.length}）</summary><div>{group.members.map(member => <article key={member.user_id}><strong>{member.name}{member.user_id === group.owner ? " · 群主" : ""}</strong><small>账号：{member.user_id}<br />设备：{member.device_id}<br />指纹：{member.fingerprint}</small>{owner && group.active && member.user_id !== userId && <button disabled={busy} onClick={() => { setConfirmed(false); setDialog({ kind: "danger", action: "remove", memberId: member.user_id, label: `移除 ${member.name}` }); }}>移除成员</button>}</article>)}</div></details>}
         <div ref={listRef} className="group-message-list" role="log" aria-label="群消息">
           {before !== null && <button disabled={busy} onClick={() => { void earlier(); }}>更早消息</button>}
           {!messages.length && group.trusted && <p className="group-muted">暂无本机消息。新成员不会取得加入前的消息。</p>}
-          {messages.map(message => <article key={message.id} data-message-id={message.id} data-unseen={message.status === "received" ? "true" : "false"} className={message.sender_user_id === userId ? "group-message group-message-own" : "group-message"}><header><strong>{message.sender_user_id === userId ? "我" : group.members.find(member => member.user_id === message.sender_user_id)?.name ?? message.sender_user_id}</strong><time>{new Date(message.sent_at).toLocaleString()}</time></header><p>{message.text}</p><small>{message.status === "queued" ? "待发送" : message.status === "accepted" ? "已提交" : "已接收"}</small>{message.status === "queued" && <div className="group-actions"><button disabled={busy} onClick={() => { void run(async () => { const result = await getDesktopApi().send_group_text({ groupId: group.id }); if (result.error) setError(result.error); }); }}>重试原消息</button><button disabled={busy} onClick={() => { void run(async () => { await getDesktopApi().cancel_group_send({ groupId: group.id }); }, true); }}>取消未发送</button></div>}</article>)}
+          {messages.map(message => <article key={message.id} data-message-id={message.id} data-unseen={message.status === "received" ? "true" : "false"} className={message.sender_user_id === userId ? "group-message group-message-own" : "group-message"}><header><strong>{message.sender_user_id === userId ? "我" : group.members.find(member => member.user_id === message.sender_user_id)?.name ?? message.sender_user_id}</strong><time>{new Date(message.sent_at).toLocaleString()}</time></header><p>{message.text}</p>{collaboration.polls.filter(poll => poll.id === message.id).map(poll => <section key={poll.id} className="group-poll" aria-label={`投票：${poll.question}`}><strong>{poll.closed ? "投票已关闭" : "实名单选投票"}</strong><div>{poll.options.map(option => <button key={option.id} disabled={busy || !group.active || !poll.eligible || poll.closed || collaborationSupported !== true || collaboration.pending || collaboration.conflict} aria-pressed={poll.votes[userId] === option.id} onClick={() => { void collaborate({ kind: "vote", poll: poll.id, option: option.id, revision: poll.revision }); }}>{option.text} · {Object.values(poll.votes).filter(id => id === option.id).length} 票{poll.votes[userId] === option.id ? " · 已选" : ""}</button>)}</div><ul>{Object.entries(poll.votes).map(([voter, choice]) => <li key={voter}>{group.members.find(m => m.user_id === voter)?.name ?? voter}{poll.departed.includes(voter) ? "（已离开）" : ""}：{poll.options.find(o => o.id === choice)?.text}</li>)}</ul>{!poll.eligible && <p>此投票仅限创建时且仍处于原加入阶段的成员参与。</p>}{!poll.closed && group.active && (owner || poll.creator === userId) && <button disabled={busy || collaboration.pending || collaboration.conflict} onClick={() => { void collaborate({ kind: "close", poll: poll.id, revision: poll.revision }); }}>关闭投票</button>}</section>)}{owner && group.active && message.status !== "queued" && <button disabled={busy || collaborationSupported !== true || collaboration.pending || collaboration.conflict} onClick={() => { void collaborate({ kind: "pin", message: message.id, revision: collaboration.pin_revision }); }}>置顶此消息</button>}<small>{message.status === "queued" ? "待发送" : message.status === "accepted" ? "已提交" : "已接收"}</small>{message.status === "queued" && message.id !== collaboration.pending_message && <div className="group-actions"><button disabled={busy} onClick={() => { void run(async () => { const result = await getDesktopApi().send_group_text({ groupId: group.id }); if (result.error) setError(result.error); }); }}>重试原消息</button><button disabled={busy} onClick={() => { void run(async () => { await getDesktopApi().cancel_group_send({ groupId: group.id }); }, true); }}>取消未发送</button></div>}</article>)}
         </div>
-        {group.trusted && <footer className="group-composer"><textarea aria-label="群消息正文" placeholder={!group.active ? "当前无法发送" : group.members.length < 2 ? "邀请成员后开始聊天" : "输入群消息（Enter 发送，Shift+Enter 换行）"} disabled={busy || !draftReady || !group.active || group.pending || group.members.length < 2} value={text} onChange={event => edit(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && text.trim() && bytes(text) <= 4096) { event.preventDefault(); void send(); } }} /><div className="group-actions"><span role="status">{draftError ?? (saving ? "草稿保存中…" : "草稿已加密保存在本机")}</span>{draftError && <button disabled={busy} onClick={() => { void flush().catch(() => {}); }}>重试保存</button>}<button disabled={busy || !draftReady || !group.active || group.pending || group.members.length < 2 || !text.trim() || bytes(text) > 4096} onClick={() => { void send(); }}>发送</button></div>{bytes(text) > 4096 && <p role="alert">文字过长，请缩短后发送。</p>}</footer>}
+        {group.trusted && <footer className="group-composer">{mentions.length > 0 && <div className="group-actions">{mentions.map(m => <button key={m.user} disabled={busy} onClick={() => setMentions(previous => previous.filter(item => item.user !== m.user))}>移除提及 {group.members.find(member => member.user_id === m.user)?.name ?? m.user}</button>)}</div>}{mentionMenu && <div className="group-actions" aria-label="选择提及成员">{group.members.filter(m => m.user_id !== userId).map(member => <button key={member.user_id} disabled={busy || collaborationSupported !== true} onClick={() => { setMentions(previous => previous.some(m => m.user === member.user_id) ? previous : [...previous, { user: member.user_id, device: member.device_id, joined: member.joined_epoch }]); edit(text.replace(/@$/, "") + `@${member.name} `); setMentionMenu(false); }}>提及 {member.name}</button>)}<button onClick={() => setMentionMenu(false)}>关闭成员选择</button></div>}<textarea aria-label="群消息正文" placeholder={!group.active ? "当前无法发送" : group.members.length < 2 ? "邀请成员后开始聊天" : "输入群消息（Enter 发送，Shift+Enter 换行）"} disabled={busy || !draftReady || !group.active || group.pending || group.members.length < 2} value={text} onChange={event => edit(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && text.trim() && bytes(text) <= 4096) { event.preventDefault(); void send(); } }} /><div className="group-actions"><button disabled={busy || !group.active || collaborationSupported !== true || collaboration.pending || collaboration.conflict} onClick={() => setMentionMenu(value => !value)}>提及成员</button><span role="status">{draftError ?? (saving ? "草稿保存中…" : "草稿已加密保存在本机")}</span>{draftError && <button disabled={busy} onClick={() => { void flush().catch(() => {}); }}>重试保存</button>}<button disabled={busy || !draftReady || !group.active || group.pending || group.members.length < 2 || !text.trim() || bytes(text) > 4096 || (mentions.length > 0 && (collaborationSupported !== true || collaboration.pending || collaboration.conflict))} onClick={() => { void send(); }}>发送</button></div>{bytes(text) > 4096 && <p role="alert">文字过长，请缩短后发送。</p>}</footer>}
       </>}
     </div>
-    {dialog && <div className="group-dialog-backdrop"><section ref={dialogRef} role="dialog" aria-modal="true" aria-label={dialog.kind === "create" ? "创建群" : dialog.kind === "inspect" ? "核实群身份" : dialog.kind === "invite" ? "邀请成员" : dialog.kind === "rename" ? "修改群名" : dialog.kind === "sent" ? "已发邀请" : dialog.kind === "storage" ? "群数据管理" : dialog.label} className="group-dialog"><button className="group-dialog-close" aria-label="关闭对话框" disabled={busy} onClick={closeDialog}>×</button>
+    {dialog && <div className="group-dialog-backdrop"><section ref={dialogRef} role="dialog" aria-modal="true" aria-label={dialog.kind === "poll" ? "创建投票" : dialog.kind === "create" ? "创建群" : dialog.kind === "inspect" ? "核实群身份" : dialog.kind === "invite" ? "邀请成员" : dialog.kind === "rename" ? "修改群名" : dialog.kind === "sent" ? "已发邀请" : dialog.kind === "storage" ? "群数据管理" : dialog.label} className="group-dialog"><button className="group-dialog-close" aria-label="关闭对话框" disabled={busy} onClick={closeDialog}>×</button>
+      {dialog.kind === "poll" && <form onSubmit={event => { event.preventDefault(); if (!selected) return; void run(async () => { await flush(); try { await getDesktopApi().submit_group_collaboration({ groupId: selected, command: { kind: "poll", question: pollQuestion, options: pollOptions } }); closeDialog(); } catch (failure) { const view = await getDesktopApi().get_group_collaboration({ groupId: selected }); if (view.pending || view.conflict) closeDialog(); throw failure; } }); }}><h2>创建实名单选投票</h2><label>题目<input aria-label="投票题目" value={pollQuestion} onChange={e => setPollQuestion(e.target.value)} /></label>{pollOptions.map((option, index) => <label key={index}>选项 {index + 1}<input aria-label={`投票选项 ${index + 1}`} value={option} onChange={e => setPollOptions(previous => previous.map((v, i) => i === index ? e.target.value : v))} /></label>)}<div className="group-actions"><button type="button" disabled={pollOptions.length >= 10 || busy} onClick={() => setPollOptions(previous => [...previous, ""])}>添加选项</button><button type="button" disabled={pollOptions.length <= 2 || busy} onClick={() => setPollOptions(previous => previous.slice(0, -1))}>移除末项</button></div><p>题目最多 200 字符，选项各 100 字符。创建后不可编辑；投票人可改票，发起人或群主可关闭，关闭不可撤销。</p><button disabled={busy || !pollQuestion.trim() || Array.from(pollQuestion).length > 200 || pollOptions.some(option => !option.trim() || Array.from(option).length > 100) || new Set(pollOptions.map(option => option.trim())).size !== pollOptions.length}>发布投票</button></form>}
       {(dialog.kind === "create" || dialog.kind === "rename") && <form onSubmit={event => { event.preventDefault(); void run(async () => { if (dialog.kind === "create") { await flush(); const id = await getDesktopApi().create_group({ name: name.trim() }); activeId.current = id; setSelected(id); } else if (selected) await getDesktopApi().change_group_membership({ groupId: selected, action: "rename", value: name.trim() }); closeDialog(); }); }}><h2>{dialog.kind === "create" ? "创建群" : "修改群名"}</h2><label>群名<input autoFocus value={name} onChange={event => setName(event.target.value)} /></label><p className="group-muted">最多 10 位成员。创建后可邀请已核实的联系人。</p><button disabled={busy || !validName(name)}>确认</button></form>}
       {dialog.kind === "inspect" && <><h2>{dialog.detail.name}</h2><p>群主：{dialog.detail.owner_name}</p><div className="group-identity">账号：{dialog.detail.owner_id}<br />设备：{dialog.detail.owner_device}<br />公钥指纹：<br />{dialog.detail.fingerprint}</div>{!dialog.detail.eligible && <p role="alert">{dialog.detail.reason}</p>}<label className="group-check"><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} />已通过可信渠道核对账号、设备和两组指纹</label><button disabled={busy || !confirmed || !dialog.detail.eligible} onClick={() => { void run(async () => { await flush(); const id = dialog.inviteId ? await getDesktopApi().accept_group_invite({ inviteId: dialog.inviteId, confirmedFingerprint: dialog.detail.fingerprint }) : (await getDesktopApi().recover_group({ groupId: dialog.detail.group_id, confirmedFingerprint: dialog.detail.fingerprint }), dialog.detail.group_id); activeId.current = id; setSelected(id); closeDialog(); }); }}>{dialog.inviteId ? "接受邀请" : "确认并恢复"}</button></>}
       {dialog.kind === "invite" && <><h2>邀请成员</h2><label>已核实的联系人<select aria-label="邀请联系人" value={peerId} disabled={busy} onChange={event => { setPeerId(event.target.value); setConfirmed(false); setDialog({ kind: "invite" }); }}><option value="">请选择</option>{eligibleContacts.map(contact => <option key={contact.user_id} value={contact.user_id}>{contact.username}</option>)}</select></label>{!eligibleContacts.length && <p>请先返回联系人页面添加并核实身份。</p>}<button disabled={busy || !peerId} onClick={() => { void run(async () => { const peer = await getDesktopApi().inspect_group_peer({ peerId }); setDialog({ kind: "invite", peer }); }); }}>查看设备和指纹</button>{dialog.peer && <><div className="group-identity">账号：{dialog.peer.user_id}<br />设备：{dialog.peer.device_id}<br />公钥指纹：<br />{dialog.peer.fingerprint}</div><label className="group-check"><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} />已核对目标账号、设备和两组指纹</label><button disabled={busy || !confirmed} onClick={() => { void run(async () => { if (!selected || !dialog.peer) return; await getDesktopApi().invite_group_member({ groupId: selected, peerId: dialog.peer.user_id, confirmedFingerprint: dialog.peer.fingerprint }); closeDialog(); }); }}>发送邀请</button></>}</>}

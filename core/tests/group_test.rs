@@ -1159,10 +1159,12 @@ fn collaboration_pending_and_conflict_require_explicit_resolution() {
         mentions: vec![c::Member::from(g.member(&b.user).unwrap())],
     };
     let packet = collaboration_packet(&g, &a, plain.clone());
+    store.save_draft(id, "pending mention", &a.keys).unwrap();
     store
         .collaboration_queue(&packet, Some(&plain), &a.keys)
         .unwrap();
     assert_eq!(store.storage_stats(id).unwrap().pending_tasks, 1);
+    assert_eq!(store.draft(id, &a.keys).unwrap(), "");
     assert_eq!(store.clear_history(id).unwrap(), 0);
     drop(store);
     let mut store = GroupStore::open(&path.0, "http://localhost:3000", a.identity()).unwrap();

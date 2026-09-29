@@ -10,7 +10,7 @@ export interface SentGroupInvites { invites: SentGroupInvite[]; next_cursor: str
 export interface GroupStorageStats { visible_messages: number; hidden_messages: number; unread_messages: number; pending_tasks: number; logical_bytes: number; database_bytes: number; wal_bytes: number }
 export interface CollaborationMember { user: string; device: string; joined: number }
 export interface GroupPoll { id: string; creator: string; question: string; options: { id: string; text: string }[]; votes: Record<string,string>; departed: string[]; closed: boolean; eligible: boolean; revision: number }
-export interface GroupCollaboration { polls: GroupPoll[]; pin: string | null; pin_unavailable: boolean; pin_revision: number; pending: boolean; conflict: boolean }
+export interface GroupCollaboration { polls: GroupPoll[]; pin: string | null; pin_unavailable: boolean; pin_revision: number; pending: boolean; conflict: boolean; pending_message: string | null }
 export type CollaborationCommand = { kind: "mention"; text: string; mentions: CollaborationMember[] } | { kind: "poll"; question: string; options: string[] } | { kind: "vote"; poll: string; option: string; revision: number } | { kind: "close"; poll: string; revision: number } | { kind: "pin"; message: string | null; revision: number };
 export interface CommandMap {
   get_group_collaboration: { args: { groupId: string }; result: GroupCollaboration };
