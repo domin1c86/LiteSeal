@@ -28,17 +28,22 @@ try {
   assert.equal(execute(process.execPath, ['scripts/build-electron.mjs']).code, 0);
   const { DesktopBridge } = createRequire(import.meta.url)('../dist-electron/bridge.cjs');
   root = await mkdtemp(path.join(os.tmpdir(), 'liteseal-real-groups-'));
-  const reservation = createServer(); await listen(reservation);
-  const port = reservation.address().port; await close(reservation);
-  const upstream = `http://127.0.0.1:${port}`;
+  let upstream;
   const code = randomUUID();
-  server = spawn(checked.binary, [], { windowsHide: true, stdio: 'ignore', env: { ...process.env, DATABASE_URL: process.env.LITESEAL_TEST_DATABASE_URL, LITESEAL_BIND: `127.0.0.1:${port}`, LITESEAL_CORS_ALLOW_ORIGIN: 'http://localhost:5173', LITESEAL_INVITE_CODES: code } });
-  let serverError = false; server.on('error', () => { serverError = true; });
+  server = spawn(checked.binary, [], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, DATABASE_URL: process.env.LITESEAL_TEST_DATABASE_URL, LITESEAL_BIND: '127.0.0.1:0', RUST_LOG: 'liteseal_server=info', LITESEAL_CORS_ALLOW_ORIGIN: 'http://localhost:5173', LITESEAL_INVITE_CODES: code } });
+  let serverError = false, startupOutput = '';
+  server.on('error', error => { serverError = true; report.server_spawn_code = typeof error.code === 'string' ? error.code : 'unknown'; });
+  server.stdout.on('data', chunk => {
+    if (upstream) return;
+    startupOutput = (startupOutput + chunk.toString('utf8')).slice(-4096);
+    const address = /Server listening on (127\.0\.0\.1:\d+)/.exec(startupOutput);
+    if (address) { upstream = 'http://' + address[1]; startupOutput = ''; }
+  });
   stage = 'server readiness';
   let ready = false;
-  for (let attempt = 0; attempt < 100; attempt++) {
+  for (let attempt = 0; attempt < 300; attempt++) {
     if (serverError || server.exitCode !== null) break;
-    try { ready = (await fetch(`${upstream}/readyz`, { signal: AbortSignal.timeout(500) })).ok; } catch {}
+    try { ready = !!upstream && (await fetch(`${upstream}/readyz`, { signal: AbortSignal.timeout(500) })).ok; } catch {}
     if (ready) break;
     await new Promise(resolve => setTimeout(resolve, 100));
   }
@@ -178,6 +183,7 @@ try {
   await bob.bridge.stop();await start(bob);await save(bob);await syncCollab(bob);assert.equal((await bob.bridge.call('get_group_collaboration',{groupId})).polls.length,0);
   report.stages.push(stage); report.status = 'passed';
 } catch {
+  if (stage === 'server readiness') { report.server_exit_code = server?.exitCode; report.server_signal = server?.signalCode; }
   report.reason = stage === 'preflight' ? 'Windows and marked dedicated test database required; see database runner report' : `failed at ${stage}; raw errors suppressed`;
   if (stage !== 'preflight') report.status = 'failed';
 } finally {
@@ -185,6 +191,8 @@ try {
   await close(proxy); await stopTree(server);
   if (root && path.dirname(root) === path.resolve(os.tmpdir()) && path.basename(root).startsWith('liteseal-real-groups-')) await rm(root, { recursive: true, force: true });
   await mkdir('target/test-results', { recursive: true });
-  await writeFile('target/test-results/group-integration.json', JSON.stringify(report, null, 2) + '\n');
+  const evidence = JSON.stringify(report, null, 2) + '\n';
+  await writeFile('target/test-results/group-integration.json', evidence);
+  await writeFile('target/test-results/group-integration-' + report.at.replace(/[:.]/g, '-') + '.json', evidence);
   console.log(JSON.stringify(report, null, 2)); process.exitCode = report.status === 'passed' ? 0 : 2;
 }

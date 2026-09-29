@@ -56,7 +56,9 @@ export function runSuite(env = process.env, run = execute) {
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const report = runSuite();
   mkdirSync('target/test-results', { recursive: true });
-  writeFileSync('target/test-results/database.json', JSON.stringify(report, null, 2) + '\n');
+  const evidence = JSON.stringify(report, null, 2) + '\n';
+  writeFileSync('target/test-results/database.json', evidence);
+  writeFileSync('target/test-results/database-' + report.at.replace(/[:.]/g, '-') + '.json', evidence);
   console.log(JSON.stringify(report, null, 2));
   process.exitCode = report.status === 'passed' ? 0 : 2;
 }

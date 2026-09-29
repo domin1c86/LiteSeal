@@ -61,7 +61,7 @@ async fn main() {
     let listener = tokio::net::TcpListener::bind(&config.bind_addr)
         .await
         .unwrap();
-    tracing::info!("Server listening on {}", config.bind_addr);
+    tracing::info!("Server listening on {}", listener.local_addr().unwrap());
 
     axum::serve(
         listener,
