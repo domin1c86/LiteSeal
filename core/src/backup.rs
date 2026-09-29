@@ -569,6 +569,9 @@ pub fn export_guarded(
     let summary = rebuild(&snapshot, &clean, &identity, include_attachments, cancel)?;
     drop(snapshot);
     let total = fs::metadata(&clean).map_err(io)?.len();
+    if !(512..=8 * 1024 * 1024 * 1024).contains(&total) {
+        return Err("备份数据库大小不支持（上限 8 GiB）".into());
+    }
     let metadata = Zeroizing::new(Manifest {
         version: 1,
         identity: (*identity).clone(),
