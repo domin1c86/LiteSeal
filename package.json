@@ -20,7 +20,8 @@
     "dist:win": "node scripts/dist-win.mjs",
     "test:database": "node scripts/test-database.mjs",
     "test:groups:integration": "node scripts/test-group-integration.mjs",
-    "test:groups:ui": "node scripts/test-group-ui.mjs"
+    "test:groups:ui": "node scripts/test-group-ui.mjs",
+    "test:ui:style": "node scripts/test-ui-style.mjs"
   },
   "devDependencies": {
     "electron": "44.3.0",

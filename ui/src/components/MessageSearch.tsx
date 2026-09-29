@@ -81,7 +81,7 @@ export default function MessageSearch({ userId, conversationId, peerKey, operati
     setSelected(index);
     try { await onSelect(hits[index].id); } catch (failure) { setError(String(failure)); }
   }
-  return <section aria-label="搜索本机会话历史" onKeyDown={event => {
+  return <section className="message-search" aria-label="搜索本机会话历史" onKeyDown={event => {
     if (event.key === "Escape") { event.stopPropagation(); onClose(); }
     if (event.key === "Enter" && event.target === input.current && !event.nativeEvent.isComposing) {
       event.preventDefault(); void select(Math.min(hits.length - 1, selected + 1));

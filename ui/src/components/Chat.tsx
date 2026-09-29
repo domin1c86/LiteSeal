@@ -1,3 +1,5 @@
+import ActionMenu from "./ActionMenu";
+import PanelDialog from "./PanelDialog";
 import { getDesktopApi } from "../lib/desktopApi";
 import { latestOperations } from "../lib/messageOperations";
 import { deliveryStatusLabel } from "../lib/deliveryStatus";
@@ -490,7 +492,7 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
   }
 
   return (
-    <div style={styles.container} onKeyDown={event => {
+    <div className="chat-workspace" style={styles.container} onKeyDown={event => {
       if (event.key !== "Escape" || event.nativeEvent.isComposing) return;
       if (!operationBusy) setOperationDialog(null);
       if (!deleting) setDeleteTarget(null);
@@ -513,6 +515,7 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
             </span>
             {peerTyping && online && <span role="status" style={styles.headerMeta}>正在输入…</span>}
           </div>
+          <div className="chat-header-actions">{activeContact && <button onClick={() => setSearchOpen(value => !value)}>搜索历史（Ctrl+F）</button>}
           {activeContact && (
             <button
               className="outline-button"
@@ -527,10 +530,9 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
             >
               {activeContact.trust_state === "verified" ? "Unverify" : "Verify"}
             </button>
-          )}
+          )}</div>
         </div>
       </div>
-      {activeContact && <button onClick={() => setSearchOpen(value => !value)}>搜索历史（Ctrl+F）</button>}
       {searchOpen && storageConversationId && activeContact && operationsLoaded && <MessageSearch
         userId={userId} conversationId={storageConversationId} peerKey={activeContact.public_key}
         operations={operations} revision={searchRevision} onSelect={locateMessage} onClose={() => setSearchOpen(false)} />}
@@ -566,7 +568,7 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
                 justifyContent: isMine ? "flex-end" : "flex-start",
               }}
             >
-              <div
+              <div className={`message-bubble${isMine ? " message-bubble-own" : ""}`}
                 style={{
                   ...styles.bubble,
                   ...(isMine ? styles.bubbleMine : styles.bubbleTheirs),
@@ -580,8 +582,24 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
                 {!revoked && content.forwarded && <div style={{ fontSize: 12 }}>转发内容（来源由转发者提供）：{content.forwarded.sender}</div>}
                 <span style={styles.messageText}>{revoked ? "此消息已被发送者撤回" : content.text}</span>
                 {!revoked && content.attachment && <AttachmentCard messageId={msg.id} name={content.attachment.name} image={content.attachment.mime.startsWith("image/")} audio={content.attachment.mime === "audio/webm" && !!content.attachment.durationMs} />}
-                {!revoked && <div aria-label="消息回应">
+                {operation?.kind === "edit" && <span style={styles.timestamp}>已编辑 · 版本 {operation.revision}</span>}
+                {notices.map(item => <div key={item.id} role="status">{item.status === "pending" ? "变更等待服务端确认，将自动重试" : item.error ?? "变更未通过校验"}</div>)}
+                {!revoked && reactions.some(item => item.target_id === msg.id) && <div className="message-reactions" aria-label="已有回应">
                   {reactions.filter(item => item.target_id === msg.id).map(item => <span key={item.actor} title={item.actor}>{item.emoji} {item.actor === userId ? "我" : contacts.find(peer => peer.user_id === item.actor)?.username ?? item.actor} </span>)}
+                </div>}
+                <div className="message-tools"><ActionMenu label="消息操作">
+                <div className="message-action-list">
+                  {!revoked && <button onClick={() => { void copyMessageText(content.text).then(() => setActionStatus("已复制消息正文")).catch(error => setActionStatus(String(error))); }}>复制</button>}
+                  {!revoked && <button onClick={() => { void onFavorite(msg.id).then(() => setActionStatus("已收藏本机引用")).catch(error => setActionStatus(String(error))); }}>收藏</button>}
+                  {!revoked && <button disabled={sending || !!draft.messageId} onClick={() => { void onDraftChange({ ...draft, reply: reference }).catch(error => setActionStatus(String(error))); }}>回复</button>}
+                  <button disabled={sending || deleting || draft.messageId === msg.id} onClick={() => { setActionStatus(null); setDeleteTarget(msg.id); }}>从本机删除</button>
+                  {!revoked && <button onClick={() => { setActionStatus(null); setForwardDraft({ text: content.text, forwarded: reference }); setForwardTarget(""); }}>转发</button>}
+                  {isMine && !revoked && <>
+                    <button disabled={!canModify || !!content.attachment} title="原发送设备可在服务器首次接收后的 48 小时内编辑文字消息" onClick={() => { setActionStatus(null); setOperationDialog({ targetId: msg.id, kind: "edit", content, revision: operation?.revision ?? 0 }); setEditedText(content.text); }}>编辑</button>
+                    <button disabled={!canModify} title="原发送设备可在服务器首次接收后的 48 小时内撤回" onClick={() => { setActionStatus(null); setOperationDialog({ targetId: msg.id, kind: "revoke", content, revision: operation?.revision ?? 0 }); }}>撤回</button>
+                  </>}
+                </div>
+                {!revoked && <div aria-label="消息回应">
                   <select aria-label="回应或撤销回应" disabled={!online || reactionBusy} value={reactions.find(item => item.target_id === msg.id && item.actor === userId)?.emoji ?? ""} onChange={async event => {
                     setReactionBusy(true);
                     try { await getDesktopApi().submit_reaction({ targetId: msg.id, peerId: conversationId, emoji: event.target.value }); }
@@ -589,19 +607,7 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
                     finally { if (alive.current) setReactionBusy(false); }
                   }}><option value="">无回应 / 撤销</option>{["👍", "❤️", "😂", "😮", "😢", "🙏"].map(emoji => <option key={emoji} value={emoji}>{emoji}</option>)}</select>
                 </div>}
-                {operation?.kind === "edit" && <span style={styles.timestamp}>已编辑 · 版本 {operation.revision}</span>}
-                {notices.map(item => <div key={item.id} role="status">{item.status === "pending" ? "变更等待服务端确认，将自动重试" : item.error ?? "变更未通过校验"}</div>)}
-                <div style={{ display: "flex", gap: 6 }}>
-                  {!revoked && <button onClick={() => { void copyMessageText(content.text).then(() => setActionStatus("已复制消息正文")).catch(error => setActionStatus(String(error))); }}>复制</button>}
-                  {!revoked && <button onClick={() => { void onFavorite(msg.id).then(() => setActionStatus("已收藏本机引用")).catch(error => setActionStatus(String(error))); }}>收藏</button>}
-                  {!revoked && <button disabled={sending || !!draft.messageId} onClick={() => { void onDraftChange({ ...draft, reply: reference }).catch(error => setActionStatus(String(error))); }}>回复</button>}
-                  <button disabled={sending || deleting || draft.messageId === msg.id} onClick={() => setDeleteTarget(msg.id)}>从本机删除</button>
-                  {!revoked && <button onClick={() => { setForwardDraft({ text: content.text, forwarded: reference }); setForwardTarget(""); }}>转发</button>}
-                  {isMine && !revoked && <>
-                    <button disabled={!canModify || !!content.attachment} title="原发送设备可在服务器首次接收后的 48 小时内编辑文字消息" onClick={() => { setOperationDialog({ targetId: msg.id, kind: "edit", content, revision: operation?.revision ?? 0 }); setEditedText(content.text); }}>编辑</button>
-                    <button disabled={!canModify} title="原发送设备可在服务器首次接收后的 48 小时内撤回" onClick={() => setOperationDialog({ targetId: msg.id, kind: "revoke", content, revision: operation?.revision ?? 0 })}>撤回</button>
-                  </>}
-                </div>
+                </ActionMenu></div>
                 {msg.local_state === "integrity_failed" && <span role="alert">消息顺序或完整性链异常，请核对来源</span>}
                 <span style={styles.timestamp}>
                   {new Date(msg.timestamp).toLocaleTimeString([], {
@@ -632,7 +638,7 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
         catch (error) { setActionStatus(String(error)); }
         finally { if (alive.current) { setOperationBusy(false); setOperationRefresh(value => value + 1); } }
       }}>立即重试待确认变更</button>}
-      {operationDialog && <div role="dialog" aria-modal="true" aria-label={operationDialog.kind === "edit" ? "编辑消息" : "撤回消息"}>
+      {operationDialog && <PanelDialog label={operationDialog.kind === "edit" ? "编辑消息" : "撤回消息"} busy={operationBusy} onClose={() => setOperationDialog(null)}>
         <p>{operationDialog.kind === "edit" ? "保存后同步更新双方正文，保留已编辑标记。" : "确认后同步显示撤回提示，不能恢复编辑；对方此前已查看、复制或转发的内容不会被擦除。"}仅原发送设备可在服务器首次接收后的 48 小时内操作。</p>
         {operationDialog.kind === "edit" && <textarea aria-label="编辑后的正文" disabled={operationBusy} value={editedText} onChange={event => setEditedText(event.target.value)} />}
         <button disabled={operationBusy || !online || (operationDialog.kind === "edit" && !editedText.trim()) || operations.some(item => item.target_id === operationDialog.targetId && item.status === "pending")} onClick={async () => {
@@ -645,8 +651,9 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
           finally { if (alive.current) { setOperationBusy(false); setOperationRefresh(value => value + 1); } }
         }}>{operationBusy ? "正在提交…" : operationDialog.kind === "edit" ? "保存编辑" : "确认撤回"}</button>
         <button disabled={operationBusy} onClick={() => setOperationDialog(null)}>关闭</button>
-      </div>}
-      {deleteTarget && <div role="dialog" aria-modal="true" aria-label="从本机删除消息">
+        {actionStatus && <p role="status">{actionStatus}</p>}
+      </PanelDialog>}
+      {deleteTarget && <PanelDialog label="从本机删除消息" busy={deleting} onClose={() => setDeleteTarget(null)}>
         <p>从本机聊天、摘要和未读计数中移除此消息。为保持消息链校验，加密记录仍保留；对方的消息、已经生成的引用/转发和正在进行的投递不受影响。这不是撤回或彻底擦除。</p>
         <button disabled={deleting} onClick={async () => {
           if (!storageConversationId) return;
@@ -664,9 +671,10 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
           finally { if (alive.current) setDeleting(false); }
         }}>确认从本机删除</button>
         <button disabled={deleting} onClick={() => setDeleteTarget(null)}>取消</button>
-      </div>}
+        {actionStatus && <p role="status">{actionStatus}</p>}
+      </PanelDialog>}
       {actionStatus && <div role="status">{actionStatus}</div>}
-      {forwardDraft && <div role="dialog" aria-label="转发消息">
+      {forwardDraft && <PanelDialog label="转发消息" busy={forwarding} onClose={() => setForwardDraft(null)}>
         <label>目标联系人 <select value={forwardTarget} disabled={forwarding} onChange={event => setForwardTarget(event.target.value)}>
           <option value="">请选择</option>{contacts.map(contact => <option key={contact.user_id} value={contact.user_id}>{contact.username}</option>)}
         </select></label>
@@ -677,8 +685,9 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
           finally { if (alive.current) setForwarding(false); }
         }}>生成转发草稿</button>
         <button disabled={forwarding} onClick={() => setForwardDraft(null)}>取消</button>
-      </div>}
-      {(draft.reply || draft.forwarded) && <div>
+        {actionStatus && <p role="status">{actionStatus}</p>}
+      </PanelDialog>}
+      {(draft.reply || draft.forwarded) && <div className="draft-reference">
         {draft.reply && <div>回复 {draft.reply.sender}：{draft.reply.text}</div>}
         {draft.forwarded && <div>转发：{draft.forwarded.sender}</div>}
         <button disabled={sending || !!draft.messageId} onClick={() => { void onDraftChange({ ...draft, reply: undefined, forwarded: undefined }).catch(error => setActionStatus(String(error))); }}>移除引用/转发标记</button>
@@ -689,10 +698,11 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
       {draft.messageId && <div style={styles.sendError}>原消息内容已保留，重试沿用同一编号。
         <button disabled={sending} onClick={() => { void onDraftChange({ text: "" }).catch(() => {}); }}>保留已提交消息，另写一条</button>
       </div>}
+      <div className="composer-dock">
       <form className="chat-composer" onSubmit={handleSend} style={styles.inputBar}>
         <span style={styles.prompt}>›</span>
         <button type="button" aria-expanded={emojiOpen} aria-label="选择 emoji" disabled={sending || !!draft.messageId} onClick={() => setEmojiOpen(value => !value)}>☺</button>
-        {emojiOpen && <div role="dialog" aria-label="emoji 选择器" onKeyDown={event => {
+        {emojiOpen && <div className="emoji-picker" role="dialog" aria-label="emoji 选择器" onKeyDown={event => {
           if (event.key === "Escape") { event.preventDefault(); setEmojiOpen(false); composer.current?.focus(); }
           const buttons = Array.from(event.currentTarget.querySelectorAll("button"));
           const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
@@ -739,6 +749,7 @@ export default function Chat({ onFavorite, draft, onDraftChange, onForward, onli
       </form>
       <AttachmentComposer peerId={conversationId} online={online} onSent={() => setAttachmentRevision(value => value + 1)} />
       <ScheduledMessages peerId={conversationId} initialText={draft.text} online={online} revision={scheduledRevision + attachmentRevision} onChanged={() => setAttachmentRevision(value=>value+1)} />
+      </div>
     </div>
   );
 }
@@ -880,9 +891,6 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     flexWrap: "wrap",
     alignItems: "center",
-    width: "calc(100% - 48px)",
-    maxWidth: "840px",
-    margin: "0 auto 20px",
     padding: "8px 8px 8px 14px",
     border: "1px solid var(--border-strong)",
     borderRadius: "var(--composer-radius)",

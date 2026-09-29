@@ -29,8 +29,8 @@ export function ScheduledMessages({ peerId, initialText, online, revision, onCha
     catch(failure){setError(String(failure));}
     finally{setBusy(false);}
   }
-  return <section aria-label="本机定时消息" style={{padding:"6px 24px"}}>
-    <button onClick={()=>{ if(!open){setText(initialText);setTime(localTime(Date.now()+5*60_000));setEditing(undefined);} setOpen(value=>!value); }}>本机定时文字 · {tasks.length} 个任务</button>
+  return <section className="scheduled-messages" aria-label="本机定时消息" style={{padding:"6px 24px"}}>
+    <button aria-expanded={open} onClick={()=>{ if(!open){setText(initialText);setTime(localTime(Date.now()+5*60_000));setEditing(undefined);} setOpen(value=>!value); }}>本机定时文字 · {tasks.length} 个任务</button>
     {tasks.some(task=>["missed","failed","needs_retry"].includes(task.state)) && <p role="status">有定时任务需要处理，未自动补发。</p>}
     {open && <div>
       <p>应用持续运行且联网时执行，收起或锁定后已安排的任务仍可执行；错过时间需手动处理。这里只安排文字副本，不含引用、转发或附件，也不会清空当前草稿。</p>

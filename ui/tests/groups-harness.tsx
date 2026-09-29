@@ -10,7 +10,7 @@ const check = (value: unknown, message: string) => { if (!value) throw new Error
 const wait = async (condition: () => unknown, label: string) => { for (let i = 0; i < 100; i++) { if (condition()) return; await pause(); } throw new Error('timeout: ' + label); };
 const buttons = () => Array.from(document.querySelectorAll<HTMLButtonElement>('button'));
 const button = (text: string) => buttons().find(node => node.textContent === text);
-const click = async (text: string) => { await wait(() => button(text) && !button(text)!.disabled, text); button(text)!.click(); await pause(); };
+const click = async (text: string) => { await wait(() => button(text) && !button(text)!.disabled, text); const menu=button(text)!.closest('details'); if(menu) { menu.open=true; await pause(); } button(text)!.click(); await pause(); };
 const body = () => document.body.textContent ?? '';
 const member = (id: string) => ({ user_id: id, device_id: 'device-' + id, name: id, fingerprint: 'synthetic fingerprint', joined_epoch: 1 });
 let group: GroupView, messages: GroupMessage[], draft = '', hidden = 0, failDraft = false, conflict = false, generation = 0, clearCalls = 0;

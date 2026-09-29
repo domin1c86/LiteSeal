@@ -35,7 +35,7 @@ export default function ContactDetail({ contact, profile, alias, onAlias, onMess
   }
 
   return (
-    <div style={styles.container}>
+    <div className="contact-detail" style={styles.container}>
       <div style={styles.card}>
         <div style={styles.avatar}>{profile?.avatar_png
           ? <img src={`data:image/png;base64,${profile.avatar_png}`} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: "inherit" }} />

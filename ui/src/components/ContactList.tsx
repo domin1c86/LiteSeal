@@ -1,3 +1,4 @@
+import ActionMenu from "./ActionMenu";
 import { useState } from "react";
 import { useConversationSummaries } from "../hooks/useConversationSummaries";
 import type { Contact, Draft, PublicProfile } from "../types";
@@ -89,14 +90,14 @@ export default function ContactList({
           contacts
         </button>
       </div>
-      {tab === "chats" && <button onClick={() => setShowArchived(value => !value)}>
+      <div className="sidebar-filters">{tab === "chats" && <button onClick={() => setShowArchived(value => !value)}>
         {showArchived ? "返回聊天" : `已归档 (${archiveCount})`}
       </button>}
       {tab === "chats" && <select aria-label="筛选会话" value={filter} onChange={event => setFilter(event.target.value)}>
         <option value="all">全部</option><option value="unread">未读</option>
         {lists.map(list => <option key={list.id} value={list.id}>{list.name}</option>)}
       </select>}
-      <button onClick={onOrganizer}>本机列表、收藏和便笺</button>
+      <button className="sidebar-organizer" onClick={onOrganizer}>本机列表、收藏和便笺</button></div>
       {ordered.length === 0 && (
         <p style={styles.empty}>{showArchived && tab === "chats" ? "暂无归档会话" : "暂无会话"}</p>
       )}
@@ -125,17 +126,17 @@ export default function ContactList({
                 ? <img src={`data:image/png;base64,${profiles[contact.user_id].avatar_png}`} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: "inherit" }} />
                 : contact.username.charAt(0).toUpperCase()}
             </div>
-            <div style={styles.info}>
+            <div className="contact-info" style={styles.info}>
               <span className="contact-name" style={styles.name} title={`${contact.username} · ${contact.user_id}`}>{tab === "chats" && preference.pinned ? "📌 " : ""}{aliases[contact.user_id] || profiles[contact.user_id]?.display_name || contact.username}</span>
               {tab === "chats" ? <span style={styles.trust} title={summary}>{summary}</span>
                 : <span style={{ ...styles.trust, color: trust.color }}>{trust.text}</span>}
             </div>
-            {tab === "chats" && <div style={{ display: "flex", flexDirection: "column", gap: 4 }} onClick={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}>
+            {tab === "chats" && <div className="contact-actions" onClick={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}><ActionMenu label={`管理会话 ${contact.username}`}>
               <button disabled={!preferencesReady} aria-label={`${preference.pinned ? "取消置顶" : "置顶"} ${contact.username}`} onClick={() => onFlagsChange(contact.user_id, { ...preference, pinned: !preference.pinned })}>{preference.pinned ? "取消置顶" : "置顶"}</button>
               <button disabled={!preferencesReady} aria-label={`${preference.archived ? "取消归档" : "归档"} ${contact.username}`} onClick={() => onFlagsChange(contact.user_id, { ...preference, archived: !preference.archived })}>{preference.archived ? "移回聊天" : "归档"}</button>
               <button disabled={!preferencesReady} aria-pressed={!!muted[contact.user_id]} onClick={() => onMutedChange(contact.user_id, !muted[contact.user_id])}>{muted[contact.user_id] ? "取消静音" : "静音"}</button>
-            </div>}
-            {tab === "chats" && preview && <div style={{ marginLeft: "auto", textAlign: "right", flexShrink: 0, fontSize: 11 }}>
+            </ActionMenu></div>}
+            {tab === "chats" && preview && <div className="contact-meta" style={{ marginLeft: "auto", textAlign: "right", flexShrink: 0, fontSize: 11 }}>
               {preview.timestamp > 0 && <time dateTime={new Date(preview.timestamp).toISOString()} title={new Date(preview.timestamp).toLocaleString()}>
                 {new Date(preview.timestamp).toLocaleDateString() === new Date().toLocaleDateString()
                   ? new Date(preview.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
@@ -280,7 +281,6 @@ const styles: Record<string, React.CSSProperties> = {
   },
   info: {
     overflow: "hidden",
-    display: "flex",
     flexDirection: "column",
     gap: "2px",
   },

@@ -1,3 +1,4 @@
+import PanelDialog from "./PanelDialog";
 import { getDesktopApi } from "../lib/desktopApi";
 import { useEffect, useState } from "react";
 import type { useOrganizer } from "../hooks/useOrganizer";
@@ -45,7 +46,7 @@ export default function OrganizerPanel({ organizer, userId, contacts, onClose, o
     return () => { active = false; clearInterval(timer); };
   }, [userId, contacts, organizer.value.favorites]);
 
-  return <section role="dialog" aria-modal="true" aria-label="本机列表、收藏和便笺" style={{ position: "fixed", inset: "8%", zIndex: 20, background: "var(--surface)", color: "var(--text)", padding: 24, overflow: "auto", border: "1px solid var(--border)" }}>
+  return <PanelDialog label="本机列表、收藏和便笺" wide busy={organizer.busy} onClose={() => { if (notes === organizer.value.notes || window.confirm("便笺尚未保存，放弃这些修改？")) onClose(); }}>
     <button disabled={organizer.busy} onClick={() => { if (notes === organizer.value.notes || window.confirm("便笺尚未保存，放弃这些修改？")) onClose(); }}>关闭</button>
     <h2>本机列表</h2>
     <input aria-label="新列表名称" maxLength={40} value={name} onChange={event => setName(event.target.value)} />
@@ -63,5 +64,5 @@ export default function OrganizerPanel({ organizer, userId, contacts, onClose, o
     <textarea aria-label="本机便笺" value={notes} onChange={event => setNotes(event.target.value)} rows={8} style={{ width: "100%" }} />
     <button disabled={organizer.busy || notes === organizer.value.notes} onClick={() => apply(value => ({ ...value, notes }))}>保存便笺</button>
     {(error || organizer.error) && <p role="alert">{error || organizer.error}</p>}
-  </section>;
+  </PanelDialog>;
 }

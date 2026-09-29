@@ -54,14 +54,14 @@ export function AttachmentComposer({ peerId, online, onSent }: { peerId: string;
     } catch (failure) { if (alive.current) { setError(String(failure)); await reload().catch(() => {}); } }
     finally { if (alive.current) setBusy(false); }
   }
-  return <section aria-label="发送加密附件" style={{ padding: "6px 24px" }} onDragOver={event => {
+  return <section className="attachment-composer" aria-label="发送加密附件" style={{ padding: "6px 24px" }} onDragOver={event => {
     if (event.dataTransfer.types.includes("Files")) event.preventDefault();
   }} onDrop={event => {
     if (!event.dataTransfer.files.length) return;
     event.preventDefault();
     void stageFile(event.dataTransfer.files[0]);
   }}>
-    <p>可拖入一个文件，或按 Ctrl+V 粘贴图片及已复制的文件。</p>
+    <p className="attachment-hint">可拖入一个文件，或按 Ctrl+V 粘贴图片及已复制的文件。</p>
     <button disabled={busy} onClick={async () => {
       setBusy(true); setError("");
       try { await getDesktopApi().select_attachment({ peerId }); await reload(); } catch (failure) { if (alive.current) setError(String(failure)); }

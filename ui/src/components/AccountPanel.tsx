@@ -1,3 +1,4 @@
+import PanelDialog from "./PanelDialog";
 import { getDesktopApi } from "../lib/desktopApi";
 import { useEffect, useState } from "react";
 import type { Contact } from "../types";
@@ -33,7 +34,7 @@ export default function AccountPanel({ userId, contacts, typingEnabled, onTyping
     catch (failure) { setError(String(failure)); } finally { setBusy(false); }
   }
   const peers = [...requests, ...contacts.filter(peer => !requests.some(row => row.peer_id === peer.user_id)).map(peer => ({ peer_id: peer.user_id, username: peer.username, status: "未设置" }))];
-  return <section role="dialog" aria-modal="true" aria-label="账号与消息请求" style={{ position: "fixed", inset: "8%", zIndex: 25, background: "var(--surface)", color: "var(--text)", padding: 24, overflow: "auto" }}>
+  return <PanelDialog label="账号与消息请求" wide busy={busy} onClose={onClose}>
     <button onClick={onClose} disabled={busy}>关闭</button><button disabled={busy} onClick={() => void refresh().catch(failure => setError(String(failure)))}>刷新</button>
     <h2>公开资料</h2>
     <p>账号名 {accountName || "读取中…"} 和身份密钥保持不变。公开昵称与头像可被其他已登录用户看到，不作为验签依据。</p>
@@ -85,9 +86,9 @@ export default function AccountPanel({ userId, contacts, typingEnabled, onTyping
     }}>退出全部会话</button>
     <h3>修改账号密码</h3>
     <p>需要当前密码；成功后全部会话立即失效，本机会保留身份密钥和历史并返回登录。密码无法恢复丢失的设备密钥。</p>
-    <input type="password" autoComplete="current-password" aria-label="当前账号密码" value={currentPassword} disabled={busy} onChange={event => setCurrentPassword(event.target.value)} />
-    <input type="password" autoComplete="new-password" aria-label="新账号密码" value={newPassword} disabled={busy} onChange={event => setNewPassword(event.target.value)} />
-    <input type="password" autoComplete="new-password" aria-label="确认新账号密码" value={confirmPassword} disabled={busy} onChange={event => setConfirmPassword(event.target.value)} />
+    <input type="password" autoComplete="current-password" placeholder="当前账号密码" aria-label="当前账号密码" value={currentPassword} disabled={busy} onChange={event => setCurrentPassword(event.target.value)} />
+    <input type="password" autoComplete="new-password" placeholder="新账号密码" aria-label="新账号密码" value={newPassword} disabled={busy} onChange={event => setNewPassword(event.target.value)} />
+    <input type="password" autoComplete="new-password" placeholder="确认新账号密码" aria-label="确认新账号密码" value={confirmPassword} disabled={busy} onChange={event => setConfirmPassword(event.target.value)} />
     <button disabled={busy || !currentPassword || newPassword.length < 8 || newPassword !== confirmPassword} onClick={async () => {
       setBusy(true); setError("");
       try {
@@ -99,7 +100,7 @@ export default function AccountPanel({ userId, contacts, typingEnabled, onTyping
     }}>验证并修改密码</button>
     <h2>应用锁</h2>
     <p>先验证当前 Windows 账号密码再启用；Windows Hello PIN 不适用于此验证。启用后锁屏、空闲 5 分钟和重启均需解锁。</p>
-    <input type="password" autoComplete="off" aria-label="设置应用锁的 Windows 账号密码" value={windowsPassword} onChange={event => setWindowsPassword(event.target.value)} />
+    <input type="password" autoComplete="off" placeholder="设置应用锁的 Windows 账号密码" aria-label="设置应用锁的 Windows 账号密码" value={windowsPassword} onChange={event => setWindowsPassword(event.target.value)} />
     {[true, false].map(enabled => <button key={String(enabled)} disabled={busy || !windowsPassword} onClick={async () => {
       setBusy(true); setError(""); const password = windowsPassword; setWindowsPassword("");
       try { await getDesktopApi().configure_app_lock({ enabled, password }); setLockStatus(enabled ? "应用锁已启用" : "应用锁已关闭"); }
@@ -113,5 +114,5 @@ export default function AccountPanel({ userId, contacts, typingEnabled, onTyping
     {update && <p>当前 {update.current} · 最新 {update.latest} · {update.available ? "有可用更新" : "无需更新"} <button onClick={() => { void getDesktopApi().open_app_release({}).catch(failure => setError(String(failure))); }}>打开此版本发布页</button></p>}
     <p>升级前完全退出应用并备份本机身份和数据库，核对安装包签名。安装不自动执行；升级失败可按升级指南恢复原版本和对应数据快照。</p>
     {error && <p role="alert">{error}</p>}
-  </section>;
+  </PanelDialog>;
 }

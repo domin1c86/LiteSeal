@@ -18,7 +18,7 @@ export default function AppLock({ children }: { children: React.ReactNode }) {
   }, []);
   if (loading) return <p role="status">正在读取应用锁…{error}</p>;
   if (!locked) return <>{children}</>;
-  return <main style={{ maxWidth: 440, margin: "15vh auto", padding: 24 }}>
+  return <main className="lock-screen"><div className="lock-wordmark">liteseal<span>▌</span></div>
     <h1>LiteSeal 已锁定</h1><p>请输入当前 Windows 账号密码（不是 Windows Hello PIN）。锁屏、空闲 5 分钟或重启后需要再次验证。</p>
     <form onSubmit={async event => {
       event.preventDefault(); if (busy) return; setBusy(true); setError("");

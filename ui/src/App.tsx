@@ -296,12 +296,12 @@ export default function App() {
   const detailContact = contacts.find((c) => c.user_id === selectedContact) ?? null;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
-      <div role="status" style={{ padding: "6px 12px", background: "var(--surface)", color: "var(--text-muted)", fontSize: 12 }}>
+    <div className="app-frame">
+      <div className="app-toolbar">
         <button onClick={() => setShowAccount(true)}>账号与消息请求</button>
         <button disabled={groupBusy} onClick={() => { void preferences.flush().then(() => setShowGroups(true)).catch(error => setConnectionError(String(error))); }}>群聊{groupAttention > 0 ? ` (${groupAttention})` : ""}</button>
         <button disabled={groupBusy} onClick={() => { void preferences.flush().then(() => getDesktopApi().lock_app({})).catch(error => setConnectionError(String(error))); }}>锁定</button>
-        {{ online: "已连接", connecting: "正在连接…", reconnecting: "正在重连…", offline: "离线", auth_required: "需要重新登录" }[connection]}
+        <span role="status" className="connection-state" data-state={connection}>{{ online: "已连接", connecting: "正在连接…", reconnecting: "正在重连…", offline: "离线", auth_required: "需要重新登录" }[connection]}</span>
         {connectionError && <span> · {connectionError}</span>}
         {scheduledError && <span role="alert"> · 定时任务检查失败：{scheduledError}</span>}
         {!!scheduledAttention.length && <span role="status"> · 定时任务待处理：{scheduledAttention.map(peer=><button key={peer} onClick={()=>{setActiveConversation(peer);setSidebarTab("chats");}}>{contacts.find(contact=>contact.user_id===peer)?.username ?? peer.slice(0,8)}</button>)}</span>}
@@ -309,7 +309,7 @@ export default function App() {
           ? <button onClick={() => { void preferences.flush().then(() => setSession(null)).catch(() => {}); }}>重新登录</button>
           : connection !== "online" && <button onClick={() => setRetry(value => value + 1)}>立即重连</button>}
       </div>
-      {preferences.ready && <div role="status" style={{ padding: "2px 12px", fontSize: 12 }}>{preferences.saving ? "会话更改保存中，请稍候再关闭窗口" : "会话更改已保存到本机"}</div>}
+      {preferences.ready && <div className="save-status" role="status">{preferences.saving ? "会话更改保存中，请稍候再关闭窗口" : "会话更改已保存到本机"}</div>}
       {preferences.error && <div role="alert">{preferences.error} <button onClick={() => { void preferences.retry().catch(() => {}); }}>重试</button></div>}
     <div className="app-shell" style={{ ...styles.layout, flex: 1, minHeight: 0 }}>
       {showGroups ? <GroupPanel key={`${session.user_id}:${session.deviceId}:${session.serverUrl}`} userId={session.user_id} target={groupTarget} onActiveChange={setActiveGroup} contacts={contacts} obscured={showAccount || showStorage || showOrganizer || showAddContact} onBusyChange={setGroupBusy} onClose={() => { setShowGroups(false); setGroupTarget(null); }} /> : <>
