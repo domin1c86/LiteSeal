@@ -152,6 +152,11 @@ fn encrypted_content_mapping_mentions_and_pin_permissions_are_bound() {
         },
         None,
     );
+    let mut reserved = root.clone();
+    reserved.id = g.group_id().into();
+    reserved.object = g.group_id().into();
+    reserved.signature = crypto::sign(&reserved.signing_bytes(), &a.keys.ed25519_sk).unwrap();
+    assert!(transition(None, &g, &reserved).is_err());
     let good = Content::Poll {
         question: "question".into(),
         options: vec![

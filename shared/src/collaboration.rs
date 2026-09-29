@@ -159,6 +159,8 @@ impl Event {
         if self.version != 1
             || !valid_id(&self.id)
             || !valid_id(&self.object)
+            || self.id == self.group
+            || (!matches!(self.action, Action::Pin { .. }) && self.object == self.group)
             || self.group != group.group_id()
             || self.epoch != group.epoch()
             || self.membership_hash != group.revision_hash()
