@@ -10,6 +10,7 @@ const vm = require('node:vm');
 test('main process restricts IPC origins, navigation and packaged assets without opening a GUI', { timeout: 10000 }, async t => {
   const handlers = new Map();
   const intervals = [], commands = [], rendererEvents = [];
+  const windows = [];
   const userData = await fs.mkdtemp(path.join(os.tmpdir(), 'liteseal-main-test-'));
   const avatarPath = path.join(userData, 'avatar.png');
   await fs.writeFile(avatarPath, Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
@@ -36,7 +37,7 @@ test('main process restricts IPC origins, navigation and packaged assets without
     app,
     BrowserWindow: class extends EventEmitter {
       constructor(options) {
-        super(); window = this; preferences = options.webPreferences;
+        super(); if (!window) window = this; windows.push(this); preferences = options.webPreferences;
         this.webContents = Object.assign(new EventEmitter(), {
           mainFrame: { url: 'liteseal://app/index.html' },
           send(...args) { rendererEvents.push(args); },
@@ -46,7 +47,9 @@ test('main process restricts IPC origins, navigation and packaged assets without
       setMenuBarVisibility() {}
       isDestroyed() { return false; }
       close() { this.emit('closed'); }
-      async loadURL(url) { assert.equal(url, 'liteseal://app/index.html'); loaded(); }
+      destroy() { this.emit('closed'); }
+      show() {} focus() {}
+      async loadURL(url) { assert.ok(url === 'liteseal://app/index.html' || url === 'liteseal://app/index.html#archive=archive-job'); loaded(); }
     },
     dialog: { showErrorBox(_title, error) { startupError = error; loaded(); }, async showOpenDialog() { return { canceled: false, filePaths: [avatarPath] }; } },
     nativeImage: { createFromPath() { return { isEmpty: () => false, resize() { return { toPNG: () => Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]) }; } }; } },
@@ -101,13 +104,37 @@ test('main process restricts IPC origins, navigation and packaged assets without
   assert.equal((await handlers.get('liteseal:stage_recorded_audio')(valid, { peerId: 'bob', encoded: Buffer.from([0x1a, 0x45, 0xdf, 0xa3]).toString('base64'), durationMs: 1000 })).ok, true);
   assert.equal((await handlers.get('liteseal:choose_profile_avatar')(valid, {})).result, Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).toString('base64'));
   assert.equal((await handlers.get('liteseal:stage_clipboard_image')(valid, { peerId: 'bob' })).ok, true);
+  const originalChooser = electron.dialog.showOpenDialog;
+  let finishChooser;
+  electron.dialog.showOpenDialog = () => new Promise(resolve => { finishChooser = resolve; });
+  const delayedRestore = handlers.get('liteseal:start_backup_restore')(valid, { password: 'independent restore password' });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  electron.powerMonitor.emit('lock-screen');
+  finishChooser({ canceled: false, filePaths: [avatarPath] });
+  assert.equal((await delayedRestore).ok, false, 'system lock rejects pending file selection without optional app lock');
+  electron.dialog.showOpenDialog = originalChooser;
   const lock = handlers.get('liteseal:lock_app');
+  assert.equal((await handlers.get('liteseal:start_backup_export')(valid, { password: 'independent password', includeAttachments: false, path: 'C:\\arbitrary.db' })).ok, false);
+  assert.equal((await handlers.get('liteseal:start_backup_restore')(valid, { password: 'short' })).ok, false);
+  assert.equal((await handlers.get('liteseal:open_backup_archive')(valid, { id: 'archive-job' })).ok, true);
+  const reader = windows[1];
+  assert.ok(reader);
+  const readerEvent = { sender: reader.webContents, senderFrame: reader.webContents.mainFrame };
+  for (const name of ['get_contacts', 'send_message', 'connect_relay', 'sign_message', 'prepare_identity', 'process_groups', 'start_backup_export', 'start_backup_restore']) {
+    assert.equal((await handlers.get(`liteseal:${name}`)(readerEvent, {})).ok, false, name);
+  }
+  assert.equal((await handlers.get('liteseal:get_backup_archive_info')(readerEvent, { id: 'archive-job' })).ok, true);
+  assert.equal((await handlers.get('liteseal:get_backup_archive_info')(readerEvent, { id: 'other-job' })).ok, false);
   const configure = handlers.get('liteseal:configure_app_lock');
   const unlock = handlers.get('liteseal:unlock_app');
   const lockState = handlers.get('liteseal:app_lock_state');
   assert.equal((await configure(valid, { enabled: true, password: 'test-password' })).ok, true);
   assert.equal((await lock(valid, {})).ok, true);
+  assert.equal((await handlers.get('liteseal:get_backup_archive_info')(readerEvent, { id: 'archive-job' })).ok, false);
   assert.equal((await lockState(valid, {})).result, true);
+  for (const name of ['start_backup_export', 'start_backup_restore', 'get_backup_job', 'get_backup_history', 'export_backup_attachment']) {
+    assert.equal((await handlers.get(`liteseal:${name}`)(valid, {})).ok, false, name);
+  }
   const previousCalls = commands.filter(name => name === 'process_scheduled_messages').length;
   const previousEvents = rendererEvents.length;
   intervals[0](); await new Promise(resolve => setTimeout(resolve, 0));

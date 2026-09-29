@@ -16,6 +16,55 @@ pub struct Request {
 #[derive(Deserialize)]
 #[serde(tag = "name", content = "args", deny_unknown_fields)]
 pub enum Command {
+    #[serde(rename = "start_backup_export")]
+    StartBackupExport {
+        path: String,
+        password: String,
+        #[serde(rename = "includeAttachments")]
+        include_attachments: bool,
+    },
+    #[serde(rename = "start_backup_restore")]
+    StartBackupRestore {
+        path: String,
+        parent: String,
+        password: String,
+    },
+    #[serde(rename = "get_backup_job")]
+    GetBackupJob { id: String },
+    #[serde(rename = "cancel_backup_job")]
+    CancelBackupJob { id: String },
+    #[serde(rename = "open_backup_archive")]
+    OpenBackupArchive { id: String },
+    #[serde(rename = "get_backup_archive_info")]
+    GetBackupArchiveInfo { id: String },
+    #[serde(rename = "get_backup_conversations")]
+    GetBackupConversations {
+        id: String,
+        #[serde(default)]
+        after: Option<String>,
+    },
+    #[serde(rename = "get_backup_history")]
+    GetBackupHistory {
+        id: String,
+        kind: String,
+        #[serde(rename = "conversationId")]
+        conversation_id: String,
+        #[serde(rename = "beforeTime", default)]
+        before_time: Option<i64>,
+        #[serde(rename = "beforeId", default)]
+        before_id: Option<String>,
+        #[serde(rename = "beforeGroup", default)]
+        before_group: Option<i64>,
+    },
+    #[serde(rename = "export_backup_attachment")]
+    ExportBackupAttachment {
+        id: String,
+        #[serde(rename = "messageId")]
+        message_id: String,
+        path: String,
+    },
+    #[serde(rename = "close_backup_archive")]
+    CloseBackupArchive {},
     #[serde(rename = "get_group_collaboration")]
     GetGroupCollaboration {
         #[serde(rename = "groupId")]
@@ -620,6 +669,61 @@ impl Response {
 
 pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, String> {
     let result = match command {
+        Command::StartBackupExport {
+            path,
+            password,
+            include_attachments,
+        } => serde_json::to_value(commands::backup::start_export(
+            state,
+            path,
+            password,
+            include_attachments,
+        )?),
+        Command::StartBackupRestore {
+            path,
+            parent,
+            password,
+        } => serde_json::to_value(commands::backup::start_restore(
+            state, path, parent, password,
+        )?),
+        Command::GetBackupJob { id } => serde_json::to_value(commands::backup::status(state, &id)?),
+        Command::CancelBackupJob { id } => {
+            serde_json::to_value(commands::backup::cancel(state, &id)?)
+        }
+        Command::OpenBackupArchive { id } => Ok(commands::backup::open(state, &id)?),
+        Command::GetBackupArchiveInfo { id } => Ok(commands::backup::info(state, &id)?),
+        Command::GetBackupConversations { id, after } => Ok(commands::backup::conversations(
+            state,
+            &id,
+            after.as_deref(),
+        )?),
+        Command::GetBackupHistory {
+            id,
+            kind,
+            conversation_id,
+            before_time,
+            before_id,
+            before_group,
+        } => Ok(commands::backup::page(
+            state,
+            &id,
+            &kind,
+            &conversation_id,
+            before_time,
+            before_id.as_deref(),
+            before_group,
+        )?),
+        Command::ExportBackupAttachment {
+            id,
+            message_id,
+            path,
+        } => serde_json::to_value(commands::backup::export_attachment(
+            state,
+            &id,
+            &message_id,
+            &path,
+        )?),
+        Command::CloseBackupArchive {} => serde_json::to_value(commands::backup::reset(state)?),
         Command::GetGroupCollaboration {
             group_id,
             message_ids,

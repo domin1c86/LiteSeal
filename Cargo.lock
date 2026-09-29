@@ -1202,6 +1202,7 @@ dependencies = [
  "liteseal-core",
  "liteseal-shared",
  "reqwest",
+ "rusqlite",
  "serde",
  "serde_json",
  "tokio",

@@ -1,4 +1,5 @@
 import PanelDialog from "./PanelDialog";
+import BackupPanel from "./BackupPanel";
 import { getDesktopApi } from "../lib/desktopApi";
 import { useEffect, useState } from "react";
 import type { Contact } from "../types";
@@ -8,6 +9,7 @@ export default function AccountPanel({ userId, contacts, typingEnabled, onTyping
   userId: string; contacts: Contact[]; typingEnabled: boolean; onTypingEnabledChange: (enabled: boolean) => void; onClose: () => void; onContactsChanged: () => void; onLogout: () => void;
 }) {
   const [requests, setRequests] = useState<CommandMap["list_contact_requests"]["result"]>([]);
+  const [showBackup, setShowBackup] = useState(false);
   const [sessions, setSessions] = useState<CommandMap["list_account_sessions"]["result"]>([]);
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
   const [update, setUpdate] = useState<CommandMap["check_app_update"]["result"] | null>(null);
@@ -35,6 +37,9 @@ export default function AccountPanel({ userId, contacts, typingEnabled, onTyping
   }
   const peers = [...requests, ...contacts.filter(peer => !requests.some(row => row.peer_id === peer.user_id)).map(peer => ({ peer_id: peer.user_id, username: peer.username, status: "未设置" }))];
   return <PanelDialog label="账号与消息请求" wide busy={busy} onClose={onClose}>
+    <h2>备份与恢复</h2>
+    <button disabled={busy} onClick={() => setShowBackup(true)}>备份与隔离恢复</button>
+    {showBackup && <BackupPanel onClose={() => setShowBackup(false)} />}
     <button onClick={onClose} disabled={busy}>关闭</button><button disabled={busy} onClick={() => void refresh().catch(failure => setError(String(failure)))}>刷新</button>
     <h2>公开资料</h2>
     <p>账号名 {accountName || "读取中…"} 和身份密钥保持不变。公开昵称与头像可被其他已登录用户看到，不作为验签依据。</p>

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import BackupPanel from "./BackupPanel";
 import { useDesktop, validateInvite } from "../hooks/useDesktop";
 import type { Identity, RegisterResult } from "../types";
 
@@ -8,6 +9,7 @@ interface LoginProps {
 
 export default function Login({ onLogin }: LoginProps) {
   const [username, setUsername] = useState("");
+  const [showBackup, setShowBackup] = useState(false);
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [inviteCode, setInviteCode] = useState("");
@@ -181,6 +183,8 @@ export default function Login({ onLogin }: LoginProps) {
           </button>
           {error && <p role="alert" style={styles.error}>{error}</p>}
         </form>
+        <button type="button" disabled={loading} onClick={() => setShowBackup(true)}>离线恢复备份</button>
+        {showBackup && <BackupPanel canExport={false} onClose={() => setShowBackup(false)} />}
       </div>
     </div>
   );

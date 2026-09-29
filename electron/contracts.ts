@@ -13,6 +13,16 @@ export interface GroupPoll { id: string; creator: string; question: string; opti
 export interface GroupCollaboration { polls: GroupPoll[]; pin: string | null; pin_unavailable: boolean; pin_revision: number; pending: boolean; conflict: boolean; pending_message: string | null }
 export type CollaborationCommand = { kind: "mention"; text: string; mentions: CollaborationMember[] } | { kind: "poll"; question: string; options: string[] } | { kind: "vote"; poll: string; option: string; revision: number } | { kind: "close"; poll: string; revision: number } | { kind: "pin"; message: string | null; revision: number };
 export interface CommandMap {
+  start_backup_export: { args: { password: string; includeAttachments: boolean }; result: string | null };
+  start_backup_restore: { args: { password: string }; result: string | null };
+  get_backup_job: { args: { id: string }; result: BackupJob };
+  cancel_backup_job: { args: { id: string }; result: void };
+  open_backup_archive: { args: { id: string }; result: BackupArchiveInfo };
+  get_backup_archive_info: { args: { id: string }; result: BackupArchiveInfo };
+  get_backup_conversations: { args: { id: string; after?: string }; result: { items: BackupConversation[]; next: string | null } };
+  get_backup_history: { args: { id: string; kind: "direct" | "group"; conversationId: string; beforeTime?: number; beforeId?: string; beforeGroup?: number }; result: BackupHistory };
+  export_backup_attachment: { args: { id: string; messageId: string; preview?: boolean }; result: string | null };
+  close_backup_archive: { args: {}; result: void };
   get_group_collaboration: { args: { groupId: string; messageIds?: string[] }; result: GroupCollaboration };
   sync_group_collaboration: { args: { groupId: string }; result: boolean };
   submit_group_collaboration: { args: { groupId: string; command: CollaborationCommand }; result: void };
@@ -131,6 +141,11 @@ export interface CommandMap {
   clear_downloaded_attachments: { args: {  }; result: number };
 }
 export type CommandName = keyof CommandMap;
+export interface BackupSummary { messages: number; groups: number; attachments: number; missing_attachments: number; skipped_attachments: number }
+export interface BackupJob { id: string; state: "running" | "completed" | "failed" | "cancelled"; completed: number; total: number; summary: BackupSummary | null; error: string | null; restorable: boolean }
+export interface BackupArchiveInfo { id: string; user_id: string; device_id: string; server_url: string; fingerprint: string; signing_fingerprint: string; summary: BackupSummary }
+export interface BackupConversation { id: string; kind: "direct" | "group"; name: string }
+export interface BackupHistory { messages: { id: string; sender: string; timestamp: number; text: string; status: string }[]; next?: { time: number; id: string } | null; next_group?: number | null; collaboration?: GroupCollaboration; draft?: string; reactions?: { target_id: string; actor: string; emoji: string }[] }
 export interface GroupMember { user_id: string; device_id: string; name: string; fingerprint: string; joined_epoch: number }
 export interface GroupView { id: string; name: string; owner: string; epoch: number; closed: boolean; active: boolean; trusted: boolean; members: GroupMember[]; unread: number; pending: boolean; muted: boolean }
 export interface GroupMessage { id: string; sender_user_id: string; sender_device_id: string; sent_at: number; text: string; status: string }
@@ -142,6 +157,7 @@ export type DesktopApi = {
   [K in CommandName]: (args: CommandMap[K]["args"]) => Promise<CommandMap[K]["result"]>;
 };
 export const commandNames = [
+  "start_backup_export", "start_backup_restore", "get_backup_job", "cancel_backup_job", "open_backup_archive", "get_backup_archive_info", "get_backup_conversations", "get_backup_history", "export_backup_attachment", "close_backup_archive",
   "get_group_collaboration", "sync_group_collaboration", "submit_group_collaboration", "retry_group_collaboration", "discard_group_collaboration_conflict",
   "sync_group",
   "get_group_storage_stats", "clear_group_history", "get_sent_group_invites", "revoke_group_invite", "set_group_muted", "get_groups", "create_group", "inspect_group", "inspect_group_peer", "recover_group", "invite_group_member", "accept_group_invite", "decline_group_invite", "change_group_membership", "get_group_history", "group_draft", "mark_group_seen", "send_group_text", "cancel_group_send", "process_groups",

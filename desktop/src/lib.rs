@@ -13,6 +13,8 @@ pub struct AppState {
     pub(crate) scheduled_tick: Mutex<Option<(String, i64)>>,
     pub(crate) groups_runtime: Mutex<commands::groups::Runtime>,
     pub(crate) groups_gate: tokio::sync::Mutex<()>,
+    pub(crate) backup_runtime: std::sync::Arc<Mutex<commands::backup::Runtime>>,
+    pub(crate) backup_commit: std::sync::Arc<Mutex<()>>,
 }
 
 impl AppState {
@@ -31,6 +33,8 @@ impl AppState {
             scheduled_tick: Mutex::new(None),
             groups_runtime: Mutex::new(commands::groups::Runtime::default()),
             groups_gate: tokio::sync::Mutex::new(()),
+            backup_runtime: Default::default(),
+            backup_commit: Default::default(),
         })
     }
 
@@ -49,8 +53,19 @@ impl AppState {
     }
 
     pub fn save_identity(&self, data: KeystoreData) -> Result<(), String> {
+        let _commit = self.backup_commit.lock().map_err(|_| "备份提交锁不可用")?;
         let mut cached = self.identity.lock().map_err(|e| e.to_string())?;
         let previous = cached.clone();
+        if previous.as_ref().is_some_and(|old| {
+            old.user_id != data.user_id
+                || old.device_id != data.device_id
+                || old.server_url != data.server_url
+                || old.public_key != data.public_key
+                || old.ed25519_pk != data.ed25519_pk
+                || old.token != data.token && data.token.is_empty()
+        }) {
+            commands::backup::invalidate(&self.backup_runtime)?;
+        }
         let changed = previous.as_ref().is_some_and(|old| {
             old.user_id != data.user_id
                 || old.device_id != data.device_id
@@ -76,6 +91,8 @@ impl AppState {
     }
 
     pub fn clear_identity(&self) -> Result<(), String> {
+        let _commit = self.backup_commit.lock().map_err(|_| "备份提交锁不可用")?;
+        commands::backup::invalidate(&self.backup_runtime)?;
         let mut cached = self.identity.lock().map_err(|e| e.to_string())?;
         let previous = cached.clone();
         match &self.keystore_path {

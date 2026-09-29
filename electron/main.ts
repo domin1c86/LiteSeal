@@ -10,6 +10,17 @@ protocol.registerSchemesAsPrivileged([{ scheme: "liteseal", privileges: { standa
 const devUrl = "http://127.0.0.1:1420";
 const bridge = new DesktopBridge();
 let mainWindow: BrowserWindow | undefined;
+let archiveWindow: BrowserWindow | undefined;
+let archiveHandle: string | null = null;
+let backupGeneration = 0;
+const archiveCommands = new Set(["get_backup_archive_info", "get_backup_conversations", "get_backup_history", "export_backup_attachment", "close_backup_archive", "app_lock_state"]);
+function invalidateBackups() {
+  backupGeneration++;
+  archiveHandle = null;
+  const window = archiveWindow; archiveWindow = undefined;
+  window?.destroy();
+  void bridge.call("close_backup_archive", {}).catch(() => {});
+}
 let quitting = false;
 let cleanedUp = false;
 let exitRequested = false;
@@ -23,6 +34,7 @@ let unlockAfter = 0;
 let unlockBusy = false;
 let releaseUrl: string | null = null;
 function lockApp() {
+  invalidateBackups();
   if (!lockEnabled || locked) return;
   locked = true; lockGeneration++;
   notifications.lock(true);
@@ -39,6 +51,7 @@ else {
   });
   app.on("window-all-closed", () => app.quit());
   app.on("before-quit", event => {
+    invalidateBackups();
     if (cleanedUp) return;
     exitRequested = true;
     event.preventDefault();
@@ -92,7 +105,7 @@ else {
     if (quitting) return;
     app.setAppUserModelId("com.liteseal.app");
     powerMonitor.on("lock-screen", () => { notifications.lock(true); lockApp(); });
-    powerMonitor.on("suspend", () => { void bridge.call("suspend_scheduled_messages", {}).catch(() => {}); });
+    powerMonitor.on("suspend", () => { invalidateBackups(); void bridge.call("suspend_scheduled_messages", {}).catch(() => {}); });
     powerMonitor.on("unlock-screen", () => { if (!locked) notifications.lock(false); });
     setInterval(() => { if (powerMonitor.getSystemIdleTime() >= 300) lockApp(); }, 1000).unref();
     const csp = `default-src 'self'; script-src 'self'${app.isPackaged ? "" : " 'unsafe-inline'"}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' data: blob:; connect-src 'self'${app.isPackaged ? "" : " ws://127.0.0.1:1420"}; object-src 'none'; base-uri 'none'; frame-src 'none'`;
@@ -124,12 +137,14 @@ else {
       && details.isMainFrame && details.mediaType === "audio" && trustedUrl(details.requestingUrl ?? origin));
     session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
       callback({ responseHeaders: { ...details.responseHeaders,
-        "Content-Security-Policy": [csp],
+        "Content-Security-Policy": [details.webContentsId === archiveWindow?.webContents.id ? csp.replace(/connect-src [^;]+/, "connect-src 'none'") : csp],
       } });
     });
     for (const name of commandNames) {
       ipcMain.handle(`liteseal:${name}`, async (event, args: object) => {
-        if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame || !trustedUrl(event.senderFrame.url)) {
+        const readingArchive = event.sender === archiveWindow?.webContents;
+        const senderWindow = readingArchive ? archiveWindow : mainWindow;
+        if (!senderWindow || event.sender !== senderWindow.webContents || event.senderFrame !== senderWindow.webContents.mainFrame || !trustedUrl(event.senderFrame.url) || readingArchive && !archiveCommands.has(name)) {
           return { ok: false, error: "不允许的桌面接口来源" };
         }
         try {
@@ -147,6 +162,76 @@ else {
           }
           if (locked) throw new Error("应用已锁定，请先验证 Windows 身份");
           const generation = lockGeneration;
+          const backupEpoch = backupGeneration;
+          if (name === "start_backup_export" || name === "start_backup_restore") {
+            const input = args as { password: string; includeAttachments?: boolean };
+            const allowed = name === "start_backup_export" ? ["password", "includeAttachments"] : ["password"];
+            if (Object.keys(args).some(key => !allowed.includes(key)) || typeof input.password !== "string" || Buffer.byteLength(input.password, "utf8") < 12 || Buffer.byteLength(input.password, "utf8") > 1024 || name === "start_backup_export" && typeof input.includeAttachments !== "boolean") throw new Error("备份口令须为 12–1024 字节，且只能传入备份选项");
+            if (archiveWindow) throw new Error("请先关闭离线恢复档案");
+            let selected: string | undefined;
+            if (name === "start_backup_export") {
+              const result = await dialog.showSaveDialog(mainWindow!, { title: "创建口令加密备份（新文件）", defaultPath: "LiteSeal-history.lseal", filters: [{ name: "LiteSeal 加密备份", extensions: ["lseal"] }] });
+              if (!result.canceled) selected = result.filePath;
+              if (selected) {
+                try { await fs.lstat(selected); throw new Error("备份目标已存在，请选择新文件"); }
+                catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+              }
+            } else {
+              const result = await dialog.showOpenDialog(mainWindow!, { title: "选择加密备份，隔离离线恢复", properties: ["openFile"], filters: [{ name: "LiteSeal 加密备份", extensions: ["lseal"] }] });
+              if (!result.canceled) selected = result.filePaths[0];
+            }
+            if (!selected) return { ok: true, result: null };
+            if (locked || generation !== lockGeneration || backupEpoch !== backupGeneration) throw new Error("应用锁定或恢复档案已关闭，操作已取消");
+            const result = name === "start_backup_export"
+              ? await bridge.call(name, { path: selected, password: input.password, includeAttachments: input.includeAttachments } as never)
+              : await bridge.call(name, { path: selected, parent: path.join(app.getPath("userData"), "archive-work"), password: input.password } as never);
+            if (locked || generation !== lockGeneration || backupEpoch !== backupGeneration) { invalidateBackups(); throw new Error("应用锁定或恢复档案已关闭，操作已取消"); }
+            return { ok: true, result };
+          }
+          if (name === "open_backup_archive") {
+            const id = (args as { id: string }).id;
+            if (typeof id !== "string" || Object.keys(args).some(key => key !== "id")) throw new Error("恢复档案编号无效");
+            const result = await bridge.call(name, { id });
+            if (locked || generation !== lockGeneration || backupEpoch !== backupGeneration) { invalidateBackups(); throw new Error("应用锁定或恢复档案已关闭"); }
+            if (archiveWindow) { if (archiveHandle !== id) throw new Error("请先关闭已打开的档案"); archiveWindow.focus(); return { ok: true, result }; }
+            archiveHandle = id;
+            const window = archiveWindow = new BrowserWindow({ width: 1050, height: 780, minWidth: 390, title: "LiteSeal · 离线恢复档案", show: false,
+              webPreferences: { preload: path.join(root, "dist-electron", "preload.cjs"), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+            window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+            window.webContents.on("will-navigate", event => event.preventDefault());
+            window.on("closed", () => { if (archiveWindow === window) { backupGeneration++; archiveWindow = undefined; archiveHandle = null; void bridge.call("close_backup_archive", {}).catch(() => {}); } });
+            await window.loadURL(`${app.isPackaged ? "liteseal://app/index.html" : devUrl + "/"}#archive=${encodeURIComponent(id)}`);
+            if (locked || generation !== lockGeneration || backupEpoch !== backupGeneration || archiveWindow !== window) throw new Error("恢复档案已关闭");
+            window.show(); return { ok: true, result };
+          }
+          if (name === "close_backup_archive") { invalidateBackups(); return { ok: true, result: null }; }
+          if (name === "export_backup_attachment") {
+            const input = args as { id: string; messageId: string; preview?: boolean };
+            if (typeof input.id !== "string" || typeof input.messageId !== "string" || Object.keys(args).some(key => !["id", "messageId", "preview"].includes(key)) || input.preview !== undefined && typeof input.preview !== "boolean" || readingArchive && input.id !== archiveHandle) throw new Error("恢复附件参数无效");
+            let destination: string | undefined;
+            if (!input.preview) { const choice = await dialog.showSaveDialog(senderWindow, { title: "从离线档案保存附件（新文件）", defaultPath: "attachment" }); if (choice.canceled || !choice.filePath) return { ok: true, result: null }; destination = choice.filePath; }
+            const directory = await fs.mkdtemp(path.join(destination ? path.dirname(destination) : app.getPath("temp"), ".liteseal-archive-media-"));
+            try {
+              const temporary = path.join(directory, "verified");
+              const mime = await bridge.call(name, { id: input.id, messageId: input.messageId, path: temporary } as never);
+              if (locked || generation !== lockGeneration || backupEpoch !== backupGeneration) throw new Error("应用锁定或恢复档案已关闭");
+              await bridge.call("get_backup_archive_info", { id: input.id });
+              if (locked || generation !== lockGeneration || backupEpoch !== backupGeneration) throw new Error("应用锁定或恢复档案已关闭");
+              if (input.preview) {
+                const bytes = await fs.readFile(temporary);
+                if (locked || generation !== lockGeneration || backupEpoch !== backupGeneration) throw new Error("应用锁定或恢复档案已关闭");
+                const safe = mime === "image/png" && bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]))
+                  || mime === "image/jpeg" && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255
+                  || mime === "image/webp" && bytes.subarray(0,4).toString() === "RIFF" && bytes.subarray(8,12).toString() === "WEBP"
+                  || mime === "audio/webm" && bytes.subarray(0,4).equals(Buffer.from([0x1a,0x45,0xdf,0xa3]));
+                if (!safe || bytes.length > 20 * 1024 * 1024) throw new Error("此附件不支持安全预览，请另存为查看");
+                return { ok: true, result: `data:${mime};base64,${bytes.toString("base64")}` };
+              }
+              await fs.link(temporary, destination!); return { ok: true, result: "附件已保存" };
+            } finally { await fs.rm(directory, { recursive: true, force: true }); }
+          }
+          if (readingArchive && (args as { id?: string }).id !== archiveHandle) throw new Error("恢复档案编号已失效");
+          if (["sign_out", "logout_all_sessions", "change_password", "clear_keypair"].includes(name)) invalidateBackups();
           if (name === "configure_app_lock") {
             const input = args as { enabled: boolean; password: string };
             if (typeof input.enabled !== "boolean" || typeof input.password !== "string" || input.password.length > 1024) throw new Error("无效应用锁设置");
@@ -187,7 +272,7 @@ else {
             if (typeof peerId !== "string" || peerId.length > 128) throw new Error("无效联系人");
             let filePath: string;
             if (name === "select_attachment") {
-              const selected = await dialog.showOpenDialog(mainWindow, { title: "选择文件（最大 20 MiB）", properties: ["openFile"] });
+              const selected = await dialog.showOpenDialog(mainWindow!, { title: "选择文件（最大 20 MiB）", properties: ["openFile"] });
               if (locked || generation !== lockGeneration) throw new Error("应用已锁定");
               if (selected.canceled || !selected.filePaths[0]) return { ok: true, result: null };
               filePath = selected.filePaths[0];
@@ -229,7 +314,7 @@ else {
             return { ok: true, result };
           }
           if (name === "choose_profile_avatar") {
-            const selected = await dialog.showOpenDialog(mainWindow, { title: "选择公开头像", properties: ["openFile"], filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp"] }] });
+            const selected = await dialog.showOpenDialog(mainWindow!, { title: "选择公开头像", properties: ["openFile"], filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp"] }] });
             if (locked || generation !== lockGeneration) throw new Error("应用已锁定");
             if (selected.canceled || !selected.filePaths[0]) return { ok: true, result: null };
             const filePath = selected.filePaths[0];
@@ -267,7 +352,7 @@ else {
             }
             let destination: string | undefined;
             if (!input.preview) {
-              const result = await dialog.showSaveDialog(mainWindow, { title: "附件另存为", defaultPath: "attachment" });
+              const result = await dialog.showSaveDialog(mainWindow!, { title: "附件另存为", defaultPath: "attachment" });
               if (result.canceled || !result.filePath) return { ok: true, result: null };
               destination = result.filePath;
             }

@@ -181,6 +181,36 @@ try {
   await assert.rejects(submit(bob,{kind:'vote',poll:oldPoll.id,option:oldPoll.options[0].id,revision:oldPoll.revision}));
   await bob.bridge.call('clear_group_history',{groupId}); assert.equal((await bob.bridge.call('get_group_collaboration',{groupId})).polls.length,0);
   await bob.bridge.stop();await start(bob);await save(bob);await syncCollab(bob);assert.equal((await bob.bridge.call('get_group_collaboration',{groupId})).polls.length,0);
+  report.stages.push(stage);
+  stage = 'T22 offline encrypted archive preserves group polls drafts and hidden history';
+  const waitBackup = async (bridge, id) => {
+    for (let attempt = 0; attempt < 600; attempt++) {
+      const job = await bridge.call('get_backup_job', { id });
+      if (job.state !== 'running') { assert.equal(job.state, 'completed'); return job; }
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    throw new Error('archive task timeout');
+  };
+  const secret = randomUUID();
+  for (const person of [carol, bob]) {
+    const file = path.join(root, person.name + '.lseal');
+    const exported = await person.bridge.call('start_backup_export', { path: file, password: secret, includeAttachments: false });
+    await waitBackup(person.bridge, exported);
+    const viewer = new DesktopBridge(); bridges.push(viewer);
+    await viewer.start(path.resolve('target/debug/liteseal-desktop.exe'), ['--db-path', path.join(root, person.name + '-offline.db'), '--keystore-path', path.join(root, person.name + '-offline.bin')]);
+    const restored = await viewer.call('start_backup_restore', { path: file, parent: root, password: secret });
+    await waitBackup(viewer, restored);
+    const info = await viewer.call('open_backup_archive', { id: restored });
+    assert.equal(info.user_id, person.id); assert.ok(!('token' in info) && !('secret_key' in info));
+    const page = await viewer.call('get_backup_history', { id: restored, kind: 'group', conversationId: groupId });
+    if (person === carol) {
+      assert.ok(page.messages.some(m => m.text === 'synthetic @member'));
+      assert.ok(page.collaboration.polls.some(p => p.question === 'Synthetic poll question' && p.closed));
+    } else { assert.equal(page.messages.length, 0); assert.equal(page.collaboration.polls.length, 0); }
+    await viewer.call('close_backup_archive', {});
+    await assert.rejects(viewer.call('get_backup_archive_info', { id: restored }));
+    await viewer.stop();
+  }
   report.stages.push(stage); report.status = 'passed';
 } catch {
   if (stage === 'server readiness') { report.server_exit_code = server?.exitCode; report.server_signal = server?.signalCode; }
