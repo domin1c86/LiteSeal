@@ -1,4 +1,7 @@
 use super::*;
+#[path = "collab_store.rs"]
+mod collaboration;
+pub use collaboration::{CollaborationView, PollView};
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 
 pub struct GroupStore {
@@ -157,6 +160,7 @@ impl GroupStore {
         conn.busy_timeout(std::time::Duration::from_secs(5))
             .map_err(db)?;
         conn.execute_batch(SCHEMA).map_err(db)?;
+        conn.execute_batch(collaboration::SCHEMA).map_err(db)?;
         Ok(Self {
             conn,
             scope,
@@ -540,7 +544,7 @@ impl GroupStore {
         // One read transaction keeps counts and byte totals consistent with concurrent connections.
         let tx = self.conn.unchecked_transaction().map_err(db)?;
         let (visible,hidden,unread) = tx.query_row("SELECT COALESCE(SUM(CASE WHEN h.message_id IS NULL THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN h.message_id IS NOT NULL THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN h.message_id IS NULL AND m.status='received' THEN 1 ELSE 0 END),0) FROM local_group_messages m LEFT JOIN local_group_hidden h ON h.scope=m.scope AND h.group_id=m.group_id AND h.message_id=m.message_id WHERE m.scope=?1 AND m.group_id=?2 AND m.status!='cancelled'",params![self.scope,id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(db)?;
-        let pending = tx.query_row("SELECT COUNT(*) FROM local_group_outbox WHERE scope=?1 AND group_id=?2 AND status='queued'",params![self.scope,id],|r|r.get(0)).map_err(db)?;
+        let pending = tx.query_row("SELECT (SELECT COUNT(*) FROM local_group_outbox WHERE scope=?1 AND group_id=?2 AND status='queued')+(SELECT COUNT(*) FROM local_collab_outbox WHERE scope=?1 AND group_id=?2 AND status IN ('queued','conflict'))",params![self.scope,id],|r|r.get(0)).map_err(db)?;
         // Logical payload bytes only: not SQLite page allocation or filesystem space.
         let mut logical_bytes = 0_i64;
         for (table, expression) in [
@@ -555,6 +559,12 @@ impl GroupStore {
             ("local_group_drafts", "length(body)"),
             ("local_group_ack", "length(CAST(message_id AS BLOB))"),
             ("local_group_hidden", "length(CAST(message_id AS BLOB))"),
+            (
+                "local_collab_log",
+                "length(CAST(header AS BLOB))+COALESCE(length(content),0)",
+            ),
+            ("local_collab_outbox", "length(CAST(body AS BLOB))"),
+            ("local_collab_ack", "length(CAST(id AS BLOB))"),
         ] {
             logical_bytes += tx.query_row(&format!("SELECT COALESCE(SUM({expression}),0) FROM {table} WHERE scope=?1 AND group_id=?2"),params![self.scope,id],|r|r.get::<_,i64>(0)).map_err(db)?;
         }

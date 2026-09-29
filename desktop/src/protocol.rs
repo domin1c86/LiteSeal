@@ -16,6 +16,32 @@ pub struct Request {
 #[derive(Deserialize)]
 #[serde(tag = "name", content = "args", deny_unknown_fields)]
 pub enum Command {
+    #[serde(rename = "get_group_collaboration")]
+    GetGroupCollaboration {
+        #[serde(rename = "groupId")]
+        group_id: String,
+    },
+    #[serde(rename = "sync_group_collaboration")]
+    SyncGroupCollaboration {
+        #[serde(rename = "groupId")]
+        group_id: String,
+    },
+    #[serde(rename = "submit_group_collaboration")]
+    SubmitGroupCollaboration {
+        #[serde(rename = "groupId")]
+        group_id: String,
+        command: liteseal_core::groups::CollaborationCommand,
+    },
+    #[serde(rename = "retry_group_collaboration")]
+    RetryGroupCollaboration {
+        #[serde(rename = "groupId")]
+        group_id: String,
+    },
+    #[serde(rename = "discard_group_collaboration_conflict")]
+    DiscardGroupCollaborationConflict {
+        #[serde(rename = "groupId")]
+        group_id: String,
+    },
     #[serde(rename = "get_group_storage_stats")]
     GetGroupStorageStats {
         #[serde(rename = "groupId")]
@@ -592,6 +618,21 @@ impl Response {
 
 pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, String> {
     let result = match command {
+        Command::GetGroupCollaboration { group_id } => {
+            serde_json::to_value(commands::groups::collaboration_view(state, group_id).await?)
+        }
+        Command::SyncGroupCollaboration { group_id } => {
+            serde_json::to_value(commands::groups::collaboration_sync(state, group_id).await?)
+        }
+        Command::SubmitGroupCollaboration { group_id, command } => serde_json::to_value(
+            commands::groups::collaboration_send(state, group_id, command).await?,
+        ),
+        Command::RetryGroupCollaboration { group_id } => {
+            serde_json::to_value(commands::groups::collaboration_retry(state, group_id).await?)
+        }
+        Command::DiscardGroupCollaborationConflict { group_id } => {
+            serde_json::to_value(commands::groups::collaboration_discard(state, group_id).await?)
+        }
         Command::GetGroupStorageStats { group_id } => {
             serde_json::to_value(commands::groups::storage_stats(state, group_id).await?)
         }

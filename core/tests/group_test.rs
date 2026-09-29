@@ -995,3 +995,192 @@ fn group_clear_is_atomic_and_upgrade_preserves_paged_ciphertext() {
     assert!(page.next_before.is_none());
     assert_eq!(store.storage_stats(id).unwrap().hidden_messages, 105);
 }
+
+fn collaboration_packet(
+    group: &GroupState,
+    actor: &Participant,
+    plain: liteseal_shared::collaboration::Content,
+) -> liteseal_shared::collaboration::Submission {
+    use liteseal_shared::collaboration as c;
+    let id = uuid::Uuid::new_v4().to_string();
+    let action = match &plain {
+        c::Content::Mention { .. } => c::Action::Mention,
+        c::Content::Poll { options, .. } => c::Action::Poll {
+            options: options.iter().map(|o| o.id.clone()).collect(),
+        },
+        _ => unreachable!(),
+    };
+    let mut e = c::Event {
+        version: 1,
+        id: id.clone(),
+        group: group.group_id().into(),
+        epoch: group.epoch(),
+        membership_hash: group.revision_hash().to_vec(),
+        actor: c::Member::from(group.member(&actor.user).unwrap()),
+        object: id,
+        revision: 1,
+        previous: vec![],
+        at: 1004,
+        action,
+        audience: c::members(group),
+        slots: vec![],
+        signature: vec![],
+    };
+    let bytes = serde_json::to_vec(&("collab-content-v1", &e.id, &plain)).unwrap();
+    let mut boxes = vec![];
+    for member in &e.audience {
+        let pk: [u8; 32] = group
+            .member(&member.user)
+            .unwrap()
+            .identity
+            .public_key
+            .as_slice()
+            .try_into()
+            .unwrap();
+        let ciphertext = crypto::encrypt(&bytes, &pk, &actor.keys.secret_key).unwrap();
+        e.slots.push(c::Slot {
+            member: member.clone(),
+            hash: c::digest(&ciphertext),
+        });
+        boxes.push(c::Boxed {
+            member: member.clone(),
+            ciphertext,
+        });
+    }
+    e.signature = crypto::sign(&e.signing_bytes(), &actor.keys.ed25519_sk).unwrap();
+    c::Submission {
+        event: e,
+        boxes,
+        pin_target: None,
+    }
+}
+#[test]
+fn collaboration_ciphertext_ack_hide_and_replay_survive_restart() {
+    use liteseal_shared::collaboration as c;
+    let path = TempDb::new();
+    let (a, b, _, g, events) = fixture();
+    let id = g.group_id();
+    let plain = c::Content::Poll {
+        question: "private synthetic poll".into(),
+        options: vec![
+            c::OptionText {
+                id: "a".into(),
+                text: "A".into(),
+            },
+            c::OptionText {
+                id: "b".into(),
+                text: "B".into(),
+            },
+        ],
+    };
+    let submission = collaboration_packet(&g, &a, plain);
+    let encrypted = submission
+        .boxes
+        .iter()
+        .find(|x| x.member.user == b.user)
+        .unwrap()
+        .ciphertext
+        .clone();
+    let page = c::Page {
+        items: vec![c::Delivery {
+            seq: 1,
+            event: submission.event.clone(),
+            ciphertext: Some(encrypted),
+        }],
+        cursor: 1,
+        more: false,
+    };
+    let mut store = seed(
+        &path.0,
+        "http://localhost:3000",
+        b.identity(),
+        &a.identity(),
+        &events,
+    );
+    let mut broken = page.clone();
+    broken.items[0].ciphertext.as_mut().unwrap()[0] ^= 1;
+    assert!(store.collaboration_apply(id, &broken, &b.keys).is_err());
+    assert_eq!(store.collaboration_cursor(id).unwrap(), 0);
+    assert!(store.collaboration_acks(id).unwrap().is_empty());
+    store.collaboration_apply(id, &page, &b.keys).unwrap();
+    assert_eq!(
+        store.collaboration_view(id, &b.keys).unwrap().polls.len(),
+        1
+    );
+    assert_eq!(store.unread(id).unwrap(), 1);
+    assert_eq!(store.take_notifications().unwrap().len(), 1);
+    store.save_draft(id, "preserved draft", &b.keys).unwrap();
+    assert_eq!(store.clear_history(id).unwrap(), 1);
+    assert!(store
+        .collaboration_view(id, &b.keys)
+        .unwrap()
+        .polls
+        .is_empty());
+    drop(store);
+    let mut store = GroupStore::open(&path.0, "http://localhost:3000", b.identity()).unwrap();
+    assert_eq!(
+        store.collaboration_acks(id).unwrap(),
+        vec![submission.event.id.clone()]
+    );
+    assert_eq!(store.draft(id, &b.keys).unwrap(), "preserved draft");
+    // A cursor reset causes a repeated page, not a new message or restored hidden content.
+    Connection::open(&path.0)
+        .unwrap()
+        .execute("UPDATE local_collab_cursor SET position=0", [])
+        .unwrap();
+    store.collaboration_apply(id, &page, &b.keys).unwrap();
+    assert!(store
+        .collaboration_view(id, &b.keys)
+        .unwrap()
+        .polls
+        .is_empty());
+    assert_eq!(store.unread(id).unwrap(), 0);
+    assert!(store.take_notifications().unwrap().is_empty());
+    assert!(!std::fs::read(&path.0)
+        .unwrap()
+        .windows(b"private synthetic poll".len())
+        .any(|w| w == b"private synthetic poll"));
+}
+#[test]
+fn collaboration_pending_and_conflict_require_explicit_resolution() {
+    use liteseal_shared::collaboration as c;
+    let path = TempDb::new();
+    let (a, b, _, g, events) = fixture();
+    let id = g.group_id();
+    let mut store = seed(
+        &path.0,
+        "http://localhost:3000",
+        a.identity(),
+        &a.identity(),
+        &events,
+    );
+    let plain = c::Content::Mention {
+        text: "pending mention".into(),
+        mentions: vec![c::Member::from(g.member(&b.user).unwrap())],
+    };
+    let packet = collaboration_packet(&g, &a, plain.clone());
+    store
+        .collaboration_queue(&packet, Some(&plain), &a.keys)
+        .unwrap();
+    assert_eq!(store.storage_stats(id).unwrap().pending_tasks, 1);
+    assert_eq!(store.clear_history(id).unwrap(), 0);
+    drop(store);
+    let mut store = GroupStore::open(&path.0, "http://localhost:3000", a.identity()).unwrap();
+    assert_eq!(
+        store.collaboration_pending(id).unwrap().unwrap().event,
+        packet.event
+    );
+    store.collaboration_conflict(id, &packet.event.id).unwrap();
+    assert!(store.collaboration_conflicted(id).unwrap());
+    assert_eq!(store.storage_stats(id).unwrap().pending_tasks, 1);
+    assert!(store
+        .collaboration_queue(&packet, Some(&plain), &a.keys)
+        .is_err());
+    store.collaboration_discard_conflict(id).unwrap();
+    assert_eq!(store.storage_stats(id).unwrap().pending_tasks, 0);
+    assert!(store
+        .history(id, None, &a.keys)
+        .unwrap()
+        .messages
+        .is_empty());
+}

@@ -128,21 +128,39 @@ async fn submit(
             let rows=sqlx::query("SELECT b.sender_user_id,b.sender_device_id,r.sender_join_epoch,r.recipient_user_id,r.recipient_device_id,r.recipient_join_epoch FROM group_message_batches b JOIN group_message_receipts r USING(group_id,message_id) WHERE b.group_id=$1 AND b.message_id=$2")
     .bind(&id).bind(target).fetch_all(&mut *tx).await.map_err(unavailable)?;
             if rows.is_empty() {
-                return Err(conflict());
-            }
-            c::members(&group)
-                .into_iter()
-                .filter(|m| {
-                    rows.iter().any(|r| {
-                        (r.get::<String, _>("sender_user_id") == m.user
-                            && r.get::<String, _>("sender_device_id") == m.device
-                            && r.get::<i64, _>("sender_join_epoch") == m.joined as i64)
-                            || (r.get::<String, _>("recipient_user_id") == m.user
-                                && r.get::<String, _>("recipient_device_id") == m.device
-                                && r.get::<i64, _>("recipient_join_epoch") == m.joined as i64)
+                let body: Option<String> = sqlx::query_scalar(
+                    "SELECT body FROM group_collab_objects WHERE group_id=$1 AND id=$2",
+                )
+                .bind(&id)
+                .bind(target)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(unavailable)?;
+                let object: c::Object =
+                    serde_json::from_str(&body.ok_or_else(conflict)?).map_err(|_| corrupt())?;
+                if !matches!(object.action, c::Action::Mention | c::Action::Poll { .. }) {
+                    return Err(conflict());
+                }
+                object
+                    .audience
+                    .into_iter()
+                    .filter(|m| c::members(&group).contains(m))
+                    .collect()
+            } else {
+                c::members(&group)
+                    .into_iter()
+                    .filter(|m| {
+                        rows.iter().any(|r| {
+                            (r.get::<String, _>("sender_user_id") == m.user
+                                && r.get::<String, _>("sender_device_id") == m.device
+                                && r.get::<i64, _>("sender_join_epoch") == m.joined as i64)
+                                || (r.get::<String, _>("recipient_user_id") == m.user
+                                    && r.get::<String, _>("recipient_device_id") == m.device
+                                    && r.get::<i64, _>("recipient_join_epoch") == m.joined as i64)
+                        })
                     })
-                })
-                .collect::<Vec<_>>()
+                    .collect::<Vec<_>>()
+            }
         } else {
             c::members(&group)
         };

@@ -43,7 +43,7 @@ try {
     await new Promise(resolve => setTimeout(resolve, 100));
   }
   assert.ok(ready && server.exitCode === null && !serverError);
-  let dropAckFor, replayFor, replayEnvelope, captured;
+  let dropAckFor, replayFor, replayEnvelope, captured, loseCollaborationResponse = false;
   proxy = createServer(async (req, res) => {
     try {
       const chunks = []; for await (const chunk of req) chunks.push(chunk);
@@ -56,6 +56,7 @@ try {
       const response = await fetch(upstream + req.url, { method: req.method, headers: { 'content-type': 'application/json', ...(req.headers.authorization ? { authorization: req.headers.authorization } : {}) }, body: body.length ? body : undefined, signal: AbortSignal.timeout(15000) });
       const data = Buffer.from(await response.arrayBuffer());
       if (req.method === 'GET' && /\/messages(?:\?|$)/.test(req.url) && response.ok && req.headers.authorization === dropAckFor) captured = JSON.parse(data).envelopes[0] ?? captured;
+      if (loseCollaborationResponse && req.method === 'POST' && req.url.endsWith('/collaboration') && response.ok) { loseCollaborationResponse = false; res.writeHead(503); res.end(); return; }
       res.writeHead(response.status, { 'content-type': 'application/json' }); res.end(data);
     } catch { res.writeHead(502); res.end(); }
   });
@@ -137,6 +138,44 @@ try {
   assert.ok(!(await history(bob)).some(item => item.text === 'not authorized for bob'));
   await send(alice, 'after rejoin'); await bob.bridge.call('sync_group', { groupId });
   assert.ok((await history(bob)).some(item => item.text === 'after rejoin'));
+  report.stages.push(stage);
+  stage = 'collaboration mentions and encrypted retry across restart';
+  const syncCollab = async person => { assert.equal(await person.bridge.call('sync_group_collaboration', { groupId }), true); return person.bridge.call('get_group_collaboration', { groupId }); };
+  const submit = (person, command) => person.bridge.call('submit_group_collaboration', { groupId, command });
+  for (const person of [alice,bob,carol]) await syncCollab(person);
+  const bobMember = (await alice.bridge.call('get_groups', {})).groups[0].members.find(m => m.user_id === bob.id);
+  loseCollaborationResponse = true;
+  await assert.rejects(submit(alice, { kind:'mention', text:'synthetic @member', mentions:[{user:bob.id,device:bob.device,joined:bobMember.joined_epoch}] }));
+  assert.equal((await alice.bridge.call('get_group_collaboration',{groupId})).pending,true);
+  await alice.bridge.stop(); await start(alice); await save(alice);
+  await alice.bridge.call('retry_group_collaboration',{groupId});
+  await syncCollab(bob); await syncCollab(carol);
+  assert.equal((await history(bob)).filter(m=>m.text==='synthetic @member').length,1);
+  assert.equal((await alice.bridge.call('get_group_collaboration',{groupId})).pending,false);
+  report.stages.push(stage);
+  stage = 'pin permissions and original recipient incarnation';
+  const oldMessage = (await history(alice)).find(m=>m.text==='first synthetic message'); assert.ok(oldMessage);
+  await submit(alice,{kind:'pin',message:oldMessage.id,revision:0});
+  assert.equal((await syncCollab(carol)).pin,oldMessage.id);
+  const bobPin=await syncCollab(bob); assert.equal(bobPin.pin,null); assert.equal(bobPin.pin_unavailable,true);
+  await assert.rejects(submit(bob,{kind:'pin',message:null,revision:1}));
+  await submit(alice,{kind:'pin',message:null,revision:1}); assert.equal((await syncCollab(carol)).pin,null);
+  report.stages.push(stage);
+  stage = 'named polls replace votes and reject edits after closing';
+  await submit(carol,{kind:'poll',question:'Synthetic poll question',options:['First','Second']});
+  let poll=(await syncCollab(bob)).polls[0]; assert.equal(poll.question,'Synthetic poll question');
+  await submit(bob,{kind:'vote',poll:poll.id,option:poll.options[0].id,revision:poll.revision});
+  poll=(await syncCollab(bob)).polls[0];
+  await submit(bob,{kind:'vote',poll:poll.id,option:poll.options[1].id,revision:poll.revision});
+  poll=(await syncCollab(alice)).polls[0];assert.equal(Object.keys(poll.votes).length,1);assert.equal(poll.votes[bob.id],poll.options[1].id);
+  await submit(alice,{kind:'close',poll:poll.id,revision:poll.revision});poll=(await syncCollab(bob)).polls[0];assert.equal(poll.closed,true);
+  await assert.rejects(submit(bob,{kind:'vote',poll:poll.id,option:poll.options[0].id,revision:poll.revision}));
+  await submit(carol,{kind:'poll',question:'Incarnation poll',options:['Yes','No']}); await syncCollab(bob);
+  await alice.bridge.call('change_group_membership',{groupId,action:'remove',value:bob.id}); await invite(bob); await accept(bob);
+  const oldPoll=(await syncCollab(bob)).polls.find(p=>p.question==='Incarnation poll'); assert.ok(oldPoll);assert.equal(oldPoll.eligible,false);
+  await assert.rejects(submit(bob,{kind:'vote',poll:oldPoll.id,option:oldPoll.options[0].id,revision:oldPoll.revision}));
+  await bob.bridge.call('clear_group_history',{groupId}); assert.equal((await bob.bridge.call('get_group_collaboration',{groupId})).polls.length,0);
+  await bob.bridge.stop();await start(bob);await save(bob);await syncCollab(bob);assert.equal((await bob.bridge.call('get_group_collaboration',{groupId})).polls.length,0);
   report.stages.push(stage); report.status = 'passed';
 } catch {
   report.reason = stage === 'preflight' ? 'Windows and marked dedicated test database required; see database runner report' : `failed at ${stage}; raw errors suppressed`;

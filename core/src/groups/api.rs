@@ -133,6 +133,67 @@ impl GroupApi {
         )
         .await
     }
+    pub async fn collaboration_capability(&self, id: &str) -> Result<u8, ApiError> {
+        valid_id(id)?;
+        Self::decode(
+            self.request(
+                reqwest::Method::GET,
+                &format!("/groups/{id}/collaboration/capabilities"),
+            )
+            .query(&[("device_id", &self.device)])
+            .send()
+            .await
+            .map_err(|_| network())?,
+        )
+        .await
+    }
+    pub async fn collaboration_submit(
+        &self,
+        id: &str,
+        body: &liteseal_shared::collaboration::Submission,
+    ) -> Result<i64, ApiError> {
+        valid_id(id)?;
+        self.post(&format!("/groups/{id}/collaboration"), body)
+            .await
+    }
+    pub async fn collaboration_page(
+        &self,
+        id: &str,
+        after: i64,
+    ) -> Result<liteseal_shared::collaboration::Page, ApiError> {
+        valid_id(id)?;
+        Self::decode(
+            self.request(reqwest::Method::GET, &format!("/groups/{id}/collaboration"))
+                .query(&[
+                    ("device_id", self.device.clone()),
+                    ("after", after.to_string()),
+                ])
+                .send()
+                .await
+                .map_err(|_| network())?,
+        )
+        .await
+    }
+    pub async fn collaboration_ack(&self, id: &str, ids: &[String]) -> Result<(), ApiError> {
+        valid_id(id)?;
+        let response = self
+            .request(
+                reqwest::Method::POST,
+                &format!("/groups/{id}/collaboration/ack"),
+            )
+            .json(&serde_json::json!({"device_id":self.device,"ids":ids}))
+            .send()
+            .await
+            .map_err(|_| network())?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(ApiError {
+                status: Some(response.status().as_u16()),
+                message: "群协作确认失败，稍后重试".into(),
+            })
+        }
+    }
     pub async fn list(&self, after: Option<&str>) -> Result<GroupListPage, ApiError> {
         if let Some(id) = after {
             valid_id(id)?;

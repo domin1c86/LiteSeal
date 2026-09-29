@@ -1,12 +1,15 @@
 //! Private group business logic. Secrets stay in the calling Rust key owner.
 pub mod api;
+mod collaboration;
 mod store;
+pub use collaboration::CollaborationCommand;
 use liteseal_shared::{crypto, group::*};
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use std::sync::{Mutex, MutexGuard};
 pub use store::{
-    GroupHistoryPage, GroupLocalMessage, GroupNotification, GroupStorageStats, GroupStore,
+    CollaborationView, GroupHistoryPage, GroupLocalMessage, GroupNotification, GroupStorageStats,
+    GroupStore, PollView,
 };
 use tokio::sync::Mutex as AsyncMutex;
 

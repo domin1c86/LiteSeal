@@ -8,7 +8,16 @@ export interface GroupReport { changed: number; errors: string[]; notifications:
 export interface SentGroupInvite { id: string; group_id: string; user_id: string; device_id: string; expires_at: number; status: "pending" | "accepted" | "rejected" | "revoked" | "expired" | "invalidated" }
 export interface SentGroupInvites { invites: SentGroupInvite[]; next_cursor: string | null }
 export interface GroupStorageStats { visible_messages: number; hidden_messages: number; unread_messages: number; pending_tasks: number; logical_bytes: number; database_bytes: number; wal_bytes: number }
+export interface CollaborationMember { user: string; device: string; joined: number }
+export interface GroupPoll { id: string; creator: string; question: string; options: { id: string; text: string }[]; votes: Record<string,string>; departed: string[]; closed: boolean; eligible: boolean; revision: number }
+export interface GroupCollaboration { polls: GroupPoll[]; pin: string | null; pin_unavailable: boolean; pin_revision: number; pending: boolean; conflict: boolean }
+export type CollaborationCommand = { kind: "mention"; text: string; mentions: CollaborationMember[] } | { kind: "poll"; question: string; options: string[] } | { kind: "vote"; poll: string; option: string; revision: number } | { kind: "close"; poll: string; revision: number } | { kind: "pin"; message: string | null; revision: number };
 export interface CommandMap {
+  get_group_collaboration: { args: { groupId: string }; result: GroupCollaboration };
+  sync_group_collaboration: { args: { groupId: string }; result: boolean };
+  submit_group_collaboration: { args: { groupId: string; command: CollaborationCommand }; result: void };
+  retry_group_collaboration: { args: { groupId: string }; result: void };
+  discard_group_collaboration_conflict: { args: { groupId: string }; result: void };
   get_group_storage_stats: { args: { groupId: string }; result: GroupStorageStats };
   clear_group_history: { args: { groupId: string }; result: number };
   get_sent_group_invites: { args: { groupId: string; afterId?: string }; result: SentGroupInvites };
@@ -133,6 +142,7 @@ export type DesktopApi = {
   [K in CommandName]: (args: CommandMap[K]["args"]) => Promise<CommandMap[K]["result"]>;
 };
 export const commandNames = [
+  "get_group_collaboration", "sync_group_collaboration", "submit_group_collaboration", "retry_group_collaboration", "discard_group_collaboration_conflict",
   "sync_group",
   "get_group_storage_stats", "clear_group_history", "get_sent_group_invites", "revoke_group_invite", "set_group_muted", "get_groups", "create_group", "inspect_group", "inspect_group_peer", "recover_group", "invite_group_member", "accept_group_invite", "decline_group_invite", "change_group_membership", "get_group_history", "group_draft", "mark_group_seen", "send_group_text", "cancel_group_send", "process_groups",
   "save_scheduled_message", "list_scheduled_messages", "cancel_scheduled_message", "send_scheduled_now", "process_scheduled_messages", "suspend_scheduled_messages",

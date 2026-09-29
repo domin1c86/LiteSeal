@@ -100,6 +100,46 @@ pub struct StorageView {
     database_bytes: u64,
     wal_bytes: u64,
 }
+pub async fn collaboration_view(
+    state: &AppState,
+    id: String,
+) -> Result<liteseal_core::groups::CollaborationView, String> {
+    let ctx = local_context(state).await?;
+    let view = ctx.client.collaboration_view(&id, &ctx.keys)?;
+    current(state, &ctx.saved)?;
+    Ok(view)
+}
+pub async fn collaboration_sync(state: &AppState, id: String) -> Result<bool, String> {
+    let _gate = state.groups_gate.lock().await;
+    let ctx = context(state).await?;
+    let supported = ctx.client.collaboration_sync(&id, &ctx.keys).await?;
+    current(state, &ctx.saved)?;
+    Ok(supported)
+}
+pub async fn collaboration_send(
+    state: &AppState,
+    id: String,
+    command: liteseal_core::groups::CollaborationCommand,
+) -> Result<(), String> {
+    let _gate = state.groups_gate.lock().await;
+    let ctx = context(state).await?;
+    ctx.client
+        .collaboration_send(&id, command, &ctx.keys)
+        .await?;
+    current(state, &ctx.saved)
+}
+pub async fn collaboration_retry(state: &AppState, id: String) -> Result<(), String> {
+    let _gate = state.groups_gate.lock().await;
+    let ctx = context(state).await?;
+    ctx.client.collaboration_retry(&id, &ctx.keys).await?;
+    current(state, &ctx.saved)
+}
+pub async fn collaboration_discard(state: &AppState, id: String) -> Result<(), String> {
+    let ctx = local_context(state).await?;
+    ctx.client.collaboration_discard_conflict(&id)?;
+    current(state, &ctx.saved)
+}
+
 pub async fn storage_stats(state: &AppState, id: String) -> Result<StorageView, String> {
     let ctx = local_context(state).await?;
     let stats = ctx.client.storage_stats(&id)?;
@@ -846,6 +886,11 @@ async fn process_inner(state: &AppState, ctx: &Context) -> Result<Report, String
                         report.errors.push(error);
                     }
                 }
+            }
+            if let Err(error) = ctx.client.collaboration_retry(id, &ctx.keys).await {
+                report.errors.push(error);
+            } else {
+                report.changed += 1;
             }
             if ctx.client.state(id)?.revision_hash() != before.revision_hash() {
                 report.changed += 1;
