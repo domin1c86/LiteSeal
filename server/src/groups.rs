@@ -8,7 +8,9 @@ use axum::{
 use liteseal_shared::group::*;
 use serde::Deserialize;
 use sqlx::{Postgres, Row, Transaction};
+mod collaboration;
 mod messages;
+pub const COLLABORATION_MIGRATION: &str = collaboration::MIGRATION;
 pub const MESSAGE_MIGRATION: &str = messages::MIGRATION;
 pub const CANCEL_MIGRATION: &str = messages::CANCEL_MIGRATION;
 
@@ -65,6 +67,7 @@ pub fn router() -> Router<AppState> {
         .route("/group-invites/:id", delete(cancel_invite))
         .layer(DefaultBodyLimit::max(32 * 1024))
         .merge(messages::router())
+        .merge(collaboration::router())
 }
 async fn admit(state: &AppState, headers: &HeaderMap, device: &str) -> Result<String, Failure> {
     let user = crate::message_operations::authorize(state, headers, device).await?;

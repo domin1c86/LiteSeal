@@ -90,7 +90,7 @@ async fn current_join(
     sqlx::query_scalar("SELECT m.joined_epoch FROM group_memberships m JOIN private_groups g ON g.id=m.group_id WHERE m.group_id=$1 AND m.user_id=$2 AND m.device_id=$3 AND m.removed_epoch IS NULL AND g.closed=false")
         .bind(group).bind(&actor.user_id).bind(&actor.device_id).fetch_optional(&mut **tx).await.map_err(unavailable)?.ok_or_else(missing)
 }
-async fn sending_policy(
+pub(super) async fn sending_policy(
     tx: &mut Transaction<'_, Postgres>,
     group: &GroupState,
     sender: &str,

@@ -6,3 +6,5 @@ pub mod read_receipt;
 pub mod types;
 
 pub mod message_operation;
+
+pub mod collaboration;

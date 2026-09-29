@@ -1097,3 +1097,176 @@ async fn sent_invites_are_owner_scoped_paged_and_serialized_with_acceptance() {
         reqwest::StatusCode::UNAUTHORIZED
     );
 }
+
+fn collab_event(
+    group: &GroupState,
+    actor: &Account,
+    action: liteseal_shared::collaboration::Action,
+    prior: Option<&liteseal_shared::collaboration::Object>,
+) -> liteseal_shared::collaboration::Submission {
+    use liteseal_shared::collaboration as c;
+    let id = uuid::Uuid::new_v4().to_string();
+    let mut e = c::Event {
+        version: 1,
+        id: id.clone(),
+        group: group.group_id().into(),
+        epoch: group.epoch(),
+        membership_hash: group.revision_hash().to_vec(),
+        actor: c::Member::from(group.member(&actor.identity.user_id).unwrap()),
+        object: prior.map_or(id, |p| p.id.clone()),
+        revision: prior.map_or(1, |p| p.revision + 1),
+        previous: prior.map_or(vec![], |p| p.head.clone()),
+        at: now(),
+        action,
+        audience: c::members(group),
+        slots: vec![],
+        signature: vec![],
+    };
+    let mut boxes = vec![];
+    if matches!(
+        e.action,
+        c::Action::Poll { .. } | c::Action::Mention | c::Action::Pin { .. }
+    ) {
+        for m in &e.audience {
+            let pk: [u8; 32] = group
+                .member(&m.user)
+                .unwrap()
+                .identity
+                .public_key
+                .as_slice()
+                .try_into()
+                .unwrap();
+            let cipher =
+                crypto::encrypt(b"synthetic private content", &pk, &actor.keys.secret_key).unwrap();
+            e.slots.push(c::Slot {
+                member: m.clone(),
+                hash: c::digest(&cipher),
+            });
+            boxes.push(c::Boxed {
+                member: m.clone(),
+                ciphertext: cipher,
+            });
+        }
+    }
+    e.signature = crypto::sign(&e.signing_bytes(), &actor.keys.ed25519_sk).unwrap();
+    c::Submission {
+        event: e,
+        boxes,
+        pin_target: None,
+    }
+}
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn collaboration_votes_close_and_fanout_are_atomic_and_scoped() {
+    use liteseal_shared::collaboration as c;
+    let f = Fixture::start().await;
+    let a = f.account().await;
+    let b = f.account().await;
+    let outsider = f.account().await;
+    let create = event(
+        None,
+        &a,
+        GroupAction::Create {
+            name: "collaboration".into(),
+            owner: a.identity.clone(),
+        },
+    );
+    assert!(f.change(&a, &create, true).await.status().is_success());
+    let one = pin_creation(&create, &a.identity).unwrap();
+    let g = f.add(&one, &a, &b).await;
+    let endpoint = format!("{}/groups/{}/collaboration", f.url, g.group_id());
+    let root = collab_event(
+        &g,
+        &a,
+        c::Action::Poll {
+            options: vec!["option-a".into(), "option-b".into()],
+        },
+        None,
+    );
+    let send = |actor: &Account, req: &c::Submission| {
+        f.client
+            .post(&endpoint)
+            .bearer_auth(&actor.token)
+            .json(req)
+            .send()
+    };
+    let accepted = send(&a, &root).await.unwrap();
+    assert_eq!(accepted.status(), reqwest::StatusCode::OK);
+    let seq = accepted.json::<i64>().await.unwrap();
+    assert_eq!(
+        send(&a, &root).await.unwrap().json::<i64>().await.unwrap(),
+        seq
+    );
+    assert_eq!(
+        send(&outsider, &root).await.unwrap().status(),
+        reqwest::StatusCode::UNAUTHORIZED
+    );
+    let p = c::transition(None, &g, &root.event).unwrap();
+    let vote = collab_event(
+        &g,
+        &b,
+        c::Action::Vote {
+            option: "option-a".into(),
+        },
+        Some(&p),
+    );
+    let close = collab_event(&g, &a, c::Action::Close, Some(&p));
+    let (x, y) = tokio::join!(send(&b, &vote), send(&a, &close));
+    let (x, y) = (x.unwrap().status(), y.unwrap().status());
+    assert!(x.is_success() != y.is_success());
+    assert!(x == reqwest::StatusCode::CONFLICT || y == reqwest::StatusCode::CONFLICT);
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM group_collab_events WHERE group_id=$1")
+            .bind(g.group_id())
+            .fetch_one(f.db.pool())
+            .await
+            .unwrap();
+    assert_eq!(count, 2);
+    let page = f
+        .client
+        .get(&endpoint)
+        .bearer_auth(&b.token)
+        .query(&[("device_id", &b.identity.device_id)])
+        .send()
+        .await
+        .unwrap()
+        .json::<c::Page>()
+        .await
+        .unwrap();
+    assert_eq!(page.items.len(), 2);
+    assert!(page.items[0].ciphertext.is_some());
+    let denied = f
+        .client
+        .get(&endpoint)
+        .bearer_auth(&outsider.token)
+        .query(&[("device_id", &outsider.identity.device_id)])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), reqwest::StatusCode::NOT_FOUND);
+    let mut changed = root.clone();
+    changed.boxes[0].ciphertext[0] ^= 1;
+    assert_eq!(
+        send(&a, &changed).await.unwrap().status(),
+        reqwest::StatusCode::BAD_REQUEST
+    );
+    let remove = event(
+        Some(&g),
+        &a,
+        GroupAction::Remove {
+            user_id: b.identity.user_id.clone(),
+        },
+    );
+    assert!(f.change(&a, &remove, false).await.status().is_success());
+    assert_eq!(
+        f.client
+            .get(&endpoint)
+            .bearer_auth(&b.token)
+            .query(&[("device_id", &b.identity.device_id)])
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::NOT_FOUND
+    );
+}

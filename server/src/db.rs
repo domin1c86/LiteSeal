@@ -72,6 +72,7 @@ fn migrations() -> &'static [(i64, &'static str)] {
         (9, crate::groups::MIGRATION),
         (10, crate::groups::MESSAGE_MIGRATION),
         (11, crate::groups::CANCEL_MIGRATION),
+        (12, crate::groups::COLLABORATION_MIGRATION),
     ]
 }
 
