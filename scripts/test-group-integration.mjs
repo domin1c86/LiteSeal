@@ -70,7 +70,7 @@ try {
   const account = async name => {
     const person = { name }; await start(person);
     person.identity = await person.bridge.call('prepare_identity', {});
-    const response = await fetch(origin + '/auth/register', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ invite_code: code, username: `trial-${randomUUID()}`, password: randomUUID(), device_name: name, ...person.identity }) });
+    const response = await fetch(origin + '/auth/register', { signal: AbortSignal.timeout(15000), method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ invite_code: code, username: `trial-${randomUUID()}`, password: randomUUID(), device_name: name, ...person.identity }) });
     assert.equal(response.status, 200);
     const auth = await response.json(); Object.assign(person, { id: auth.user_id, device: auth.device_id, token: auth.token, refresh: auth.refresh_token }); await save(person); return person;
   };
@@ -111,7 +111,7 @@ try {
   assert.equal((await history(bob)).length, 1); assert.ok(captured);
   await bob.bridge.stop(); await start(bob); await save(bob); dropAckFor = undefined;
   await bob.bridge.call('sync_group', { groupId }); assert.equal((await history(bob)).length, 1);
-  const pending = await fetch(`${upstream}/groups/${groupId}/messages`, { headers: { authorization: `Bearer ${bob.token}` } });
+  const pending = await fetch(`${upstream}/groups/${groupId}/messages?device_id=${encodeURIComponent(bob.device)}`, { signal: AbortSignal.timeout(15000), headers: { authorization: `Bearer ${bob.token}` } });
   assert.equal(pending.status, 200); assert.equal((await pending.json()).envelopes.length, 0);
   report.stages.push(stage);
   stage = 'mute, hidden history, replay and preserved draft across restart';
