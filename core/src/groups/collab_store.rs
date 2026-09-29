@@ -317,12 +317,24 @@ impl GroupStore {
         id: &str,
         keys: &crypto::KeyPair,
     ) -> Result<CollaborationView, String> {
+        self.collaboration_view_messages(id, None, keys)
+    }
+    pub fn collaboration_view_messages(
+        &self,
+        id: &str,
+        message_ids: Option<&[String]>,
+        keys: &crypto::KeyPair,
+    ) -> Result<CollaborationView, String> {
         check_keys(&self.identity, keys)?;
+        if message_ids.is_some_and(|ids| ids.len() > 100) {
+            return Err("一次最多读取 100 条协作详情".into());
+        }
         let group = self.state(id)?;
         let me = group.member(&self.identity.user_id).map(c::Member::from);
-        let mut q=self.conn.prepare("SELECT id,header FROM local_collab_log WHERE scope=?1 AND group_id=?2 ORDER BY seq").map_err(db)?;
+        let ids = message_ids.map(|ids| json(&ids)).transpose()?;
+        let mut q=self.conn.prepare("SELECT id,header FROM local_collab_log WHERE scope=?1 AND group_id=?2 AND (id=(SELECT id FROM local_collab_log WHERE scope=?1 AND group_id=?2 AND object_id=?2 ORDER BY seq DESC LIMIT 1) OR (?3 IS NOT NULL AND id IN (SELECT value FROM json_each(?3))) OR (?3 IS NULL AND id IN (SELECT message_id FROM local_group_messages WHERE scope=?1 AND group_id=?2 ORDER BY rowid DESC LIMIT 100))) ORDER BY seq").map_err(db)?;
         let rows = q
-            .query_map(params![self.scope, id], |r| {
+            .query_map(params![self.scope, id, ids], |r| {
                 Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
             })
             .map_err(db)?

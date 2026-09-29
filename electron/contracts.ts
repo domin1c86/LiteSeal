@@ -13,7 +13,7 @@ export interface GroupPoll { id: string; creator: string; question: string; opti
 export interface GroupCollaboration { polls: GroupPoll[]; pin: string | null; pin_unavailable: boolean; pin_revision: number; pending: boolean; conflict: boolean; pending_message: string | null }
 export type CollaborationCommand = { kind: "mention"; text: string; mentions: CollaborationMember[] } | { kind: "poll"; question: string; options: string[] } | { kind: "vote"; poll: string; option: string; revision: number } | { kind: "close"; poll: string; revision: number } | { kind: "pin"; message: string | null; revision: number };
 export interface CommandMap {
-  get_group_collaboration: { args: { groupId: string }; result: GroupCollaboration };
+  get_group_collaboration: { args: { groupId: string; messageIds?: string[] }; result: GroupCollaboration };
   sync_group_collaboration: { args: { groupId: string }; result: boolean };
   submit_group_collaboration: { args: { groupId: string; command: CollaborationCommand }; result: void };
   retry_group_collaboration: { args: { groupId: string }; result: void };

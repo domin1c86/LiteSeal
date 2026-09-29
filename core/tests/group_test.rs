@@ -1186,3 +1186,75 @@ fn collaboration_pending_and_conflict_require_explicit_resolution() {
         .messages
         .is_empty());
 }
+
+#[test]
+fn collaboration_details_are_bounded_and_old_poll_can_be_loaded_by_id() {
+    use liteseal_shared::collaboration as c;
+    let path = TempDb::new();
+    let (a, b, _, g, events) = fixture();
+    let id = g.group_id();
+    let mut store = seed(
+        &path.0,
+        "http://localhost:3000",
+        b.identity(),
+        &a.identity(),
+        &events,
+    );
+    let mut first = String::new();
+    for seq in 1..=101 {
+        let packet = collaboration_packet(
+            &g,
+            &a,
+            c::Content::Poll {
+                question: format!("poll {seq}"),
+                options: vec![
+                    c::OptionText {
+                        id: "a".into(),
+                        text: "A".into(),
+                    },
+                    c::OptionText {
+                        id: "b".into(),
+                        text: "B".into(),
+                    },
+                ],
+            },
+        );
+        if seq == 1 {
+            first = packet.event.id.clone();
+        }
+        let ciphertext = packet
+            .boxes
+            .iter()
+            .find(|x| x.member.user == b.user)
+            .unwrap()
+            .ciphertext
+            .clone();
+        store
+            .collaboration_apply(
+                id,
+                &c::Page {
+                    items: vec![c::Delivery {
+                        seq,
+                        event: packet.event,
+                        ciphertext: Some(ciphertext),
+                    }],
+                    cursor: seq,
+                    more: false,
+                },
+                &b.keys,
+            )
+            .unwrap();
+    }
+    assert_eq!(
+        store.collaboration_view(id, &b.keys).unwrap().polls.len(),
+        100
+    );
+    let old = store
+        .collaboration_view_messages(id, Some(&[first]), &b.keys)
+        .unwrap();
+    assert_eq!(old.polls.len(), 1);
+    assert_eq!(old.polls[0].question, "poll 1");
+    assert!(store
+        .collaboration_view_messages(id, Some(&vec!["x".into(); 101]), &b.keys)
+        .is_err());
+}

@@ -103,9 +103,12 @@ pub struct StorageView {
 pub async fn collaboration_view(
     state: &AppState,
     id: String,
+    message_ids: Option<Vec<String>>,
 ) -> Result<liteseal_core::groups::CollaborationView, String> {
     let ctx = local_context(state).await?;
-    let view = ctx.client.collaboration_view(&id, &ctx.keys)?;
+    let view = ctx
+        .client
+        .collaboration_view_messages(&id, message_ids.as_deref(), &ctx.keys)?;
     current(state, &ctx.saved)?;
     Ok(view)
 }

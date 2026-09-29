@@ -56,9 +56,10 @@ export default function GroupPanel({ target, onActiveChange, userId, contacts, o
   }, []);
   const history = useCallback(async (id: string, reset = false) => {
     const version = ++historyVersion.current;
-    const [page, collab] = await Promise.all([getDesktopApi().get_group_history({ groupId: id }), getDesktopApi().get_group_collaboration({ groupId: id })]);
+    const page = await getDesktopApi().get_group_history({ groupId: id });
+    const collab = await getDesktopApi().get_group_collaboration({ groupId: id, messageIds: page.messages.map(message => message.id) });
     if (!mounted.current || activeId.current !== id || version !== historyVersion.current) return;
-    setCollaboration(collab);
+    setCollaboration(previous => reset ? collab : { ...collab, polls: [...previous.polls.filter(poll => !page.messages.some(message => message.id === poll.id)), ...collab.polls] });
     if (reset) { setMessages(page.messages); setBefore(page.next_before); }
     else setMessages(previous => [...previous.filter(old => !page.messages.some(next => next.id === old.id)), ...page.messages]);
   }, []);
@@ -192,7 +193,14 @@ export default function GroupPanel({ target, onActiveChange, userId, contacts, o
   }
   async function collaborate(command: CollaborationCommand) {
     if (!selected) return;
-    await run(async () => { await flush(); await getDesktopApi().submit_group_collaboration({ groupId: selected, command }); });
+    await run(async () => {
+      await flush();
+      try { await getDesktopApi().submit_group_collaboration({ groupId: selected, command }); }
+      finally { if (command.kind === "vote" || command.kind === "close") {
+        const view = await getDesktopApi().get_group_collaboration({ groupId: selected, messageIds: [command.poll] });
+        if (mounted.current && activeId.current === selected) setCollaboration(previous => ({ ...view, polls: [...previous.polls.filter(p => p.id !== command.poll), ...view.polls] }));
+      } }
+    });
   }
   async function locatePin() {
     if (!selected || !collaboration.pin) return;
@@ -203,6 +211,9 @@ export default function GroupPanel({ target, onActiveChange, userId, contacts, o
       while (!found && cursor !== null) {
         const page = await getDesktopApi().get_group_history({ groupId: id, before: cursor });
         if (!mounted.current || activeId.current !== id) return;
+        const view = await getDesktopApi().get_group_collaboration({ groupId: id, messageIds: page.messages.map(m => m.id) });
+        if (!mounted.current || activeId.current !== id) return;
+        setCollaboration(previous => ({ ...view, polls: [...previous.polls.filter(p => !page.messages.some(m => m.id === p.id)), ...view.polls] }));
         setMessages(previous => [...page.messages.filter(m => !previous.some(p => p.id === m.id)), ...previous]);
         found = page.messages.some(m => m.id === target);
         if (page.next_before !== null && page.next_before >= cursor) throw new Error("历史游标无效");
@@ -214,7 +225,7 @@ export default function GroupPanel({ target, onActiveChange, userId, contacts, o
   }
   async function earlier() {
     if (!selected || before === null) return;
-    await run(async () => { const page = await getDesktopApi().get_group_history({ groupId: selected, before }); if (activeId.current === selected) { setMessages(previous => [...page.messages.filter(old => !previous.some(next => next.id === old.id)), ...previous]); setBefore(page.next_before); } });
+    await run(async () => { const page = await getDesktopApi().get_group_history({ groupId: selected, before }); const view = await getDesktopApi().get_group_collaboration({ groupId: selected, messageIds: page.messages.map(message => message.id) }); if (activeId.current === selected && mounted.current) { setCollaboration(previous => ({ ...view, polls: [...previous.polls.filter(p => !page.messages.some(m => m.id === p.id)), ...view.polls] })); setMessages(previous => [...page.messages.filter(old => !previous.some(next => next.id === old.id)), ...previous]); setBefore(page.next_before); } });
   }
   function closeDialog() { if (!busy) { setDialog(null); setConfirmed(false); } }
   const eligibleContacts = contacts.filter(contact => contact.user_id !== userId && contact.trust_state === "verified" && !contact.key_changed && contact.ed25519_pk?.length === 32 && !group?.members.some(member => member.user_id === contact.user_id));

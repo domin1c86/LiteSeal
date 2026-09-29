@@ -30,7 +30,7 @@ const onBusy = (value: boolean) => { busy = value; };
 const snapshot = () => ({ groups: [copy(group)], invitations: [], errors: [], next_cursor: null });
 const invitation = (id: string, status: string) => ({ id, group_id: group.id, user_id: 'target-' + id, device_id: 'device-' + id, expires_at: 2000000000000, status });
 const api = {
-  get_group_collaboration: async () => copy(collab),
+  get_group_collaboration: async ({ messageIds }: { messageIds?: string[] }) => ({ ...copy(collab), polls: copy(collab.polls.filter(poll => !messageIds || messageIds.includes(poll.id))) }),
   sync_group_collaboration: async () => collabSupported,
   retry_group_collaboration: async () => { const message=messages.find(m=>m.id===collab.pending_message);if(message)message.status='accepted';collab.pending = false;collab.pending_message=null; },
   discard_group_collaboration_conflict: async () => { collab.conflict = false; },

@@ -33,6 +33,14 @@ impl GroupClient {
     ) -> Result<CollaborationView, String> {
         self.store()?.collaboration_view(id, keys)
     }
+    pub fn collaboration_view_messages(
+        &self,
+        id: &str,
+        ids: Option<&[String]>,
+        keys: &crypto::KeyPair,
+    ) -> Result<CollaborationView, String> {
+        self.store()?.collaboration_view_messages(id, ids, keys)
+    }
     pub fn collaboration_discard_conflict(&self, id: &str) -> Result<(), String> {
         self.store()?.collaboration_discard_conflict(id)
     }

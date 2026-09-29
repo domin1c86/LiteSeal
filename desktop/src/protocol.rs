@@ -20,6 +20,8 @@ pub enum Command {
     GetGroupCollaboration {
         #[serde(rename = "groupId")]
         group_id: String,
+        #[serde(rename = "messageIds", default)]
+        message_ids: Option<Vec<String>>,
     },
     #[serde(rename = "sync_group_collaboration")]
     SyncGroupCollaboration {
@@ -618,9 +620,12 @@ impl Response {
 
 pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, String> {
     let result = match command {
-        Command::GetGroupCollaboration { group_id } => {
-            serde_json::to_value(commands::groups::collaboration_view(state, group_id).await?)
-        }
+        Command::GetGroupCollaboration {
+            group_id,
+            message_ids,
+        } => serde_json::to_value(
+            commands::groups::collaboration_view(state, group_id, message_ids).await?,
+        ),
         Command::SyncGroupCollaboration { group_id } => {
             serde_json::to_value(commands::groups::collaboration_sync(state, group_id).await?)
         }
