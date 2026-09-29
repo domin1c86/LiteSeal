@@ -22,7 +22,8 @@
     "test:groups:integration": "node scripts/test-group-integration.mjs",
     "test:groups:ui": "node scripts/test-group-ui.mjs",
     "test:ui:style": "node scripts/test-ui-style.mjs",
-    "test:backup:ui": "node scripts/test-backup-ui.mjs"
+    "test:backup:ui": "node scripts/test-backup-ui.mjs",
+    "test:groups:soak": "node scripts/test-group-soak.mjs"
   },
   "devDependencies": {
     "electron": "44.3.0",
