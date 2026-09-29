@@ -10,6 +10,8 @@ P0/P1 源码与迁移范围、当前本机验证结果见 [功能实现记录](d
 
 逐项复核结果和剩余 Windows 验收顺序见 [P0/P1 功能复核](docs/P0_P1_REVIEW_2026-09-24.md)。
 
+T22 已提供口令加密备份、可选完整下载附件及独立离线恢复窗口，规则见[加密备份](docs/ENCRYPTED_BACKUP.md)。当前实施记录见[后续计划](docs/NEXT_IMPLEMENTATION_PLAN.md)；T23 本轮只交付[可信设备设计](docs/TRUSTED_DEVICES_DESIGN.md)，没有开放第二设备登录。跨 Windows 恢复、系统交互和独立审查仍待验收。
+
 ## 项目结构
 
 | 目录 | 职责 |
