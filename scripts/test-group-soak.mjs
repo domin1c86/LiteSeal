@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { mkdir, mkdtemp, writeFile, rm, copyFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile, readFile, rm, copyFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -12,13 +12,14 @@ import { preflight, execute } from './test-database.mjs';
 import { stopTree } from './process.mjs';
 const smoke = process.argv.includes('--smoke');
 const report = { at: new Date().toISOString(), status: 'not_executed', mode: smoke ? 'smoke' : '24h', planned_seconds: smoke ? null : 86400, topology: '10 isolated accounts, 10 groups, all 10 accounts in every group', samples: [], faults: [], stage: 'preflight' };
+report.features=['text','group files','synthetic WebM/Opus','activities and RSVP','extension response loss/restart','original join phase download isolation'];
 const revision = execute('git', ['rev-parse', 'HEAD']); report.commit = revision.output.trim();
 await mkdir('target/test-results', { recursive: true });
 const evidence = path.resolve('target/test-results/group-soak-' + report.at.replace(/[:.]/g, '-') + '.json');
 const persist = () => writeFile(evidence, JSON.stringify(report, null, 2) + '\n');
 let root, server, proxy, origin, upstream, desktopExecutable;
 const people = [], bridges = [];
-let stop = false, offlineToken = null, loseResponse = false;
+let stop = false, offlineToken = null, loseResponse = false,loseExtensionResponse=false;
 process.on('SIGINT', () => { stop = true; }); process.on('SIGTERM', () => { stop = true; });
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const start = async person => {
@@ -65,6 +66,7 @@ try {
       const response = await fetch(upstream + req.url, { method: req.method, headers: { 'content-type': 'application/json', ...(req.headers.authorization ? { authorization: req.headers.authorization } : {}) }, body: body.length ? body : undefined, signal: AbortSignal.timeout(15000) });
       const data = Buffer.from(await response.arrayBuffer());
       if (loseResponse && req.method === 'POST' && req.url.endsWith('/messages') && response.ok) { loseResponse = false; res.writeHead(503); res.end(); return; }
+      if (loseExtensionResponse && req.method === 'POST' && req.url.endsWith('/extensions') && response.ok) { loseExtensionResponse = false; res.writeHead(503); res.end(); return; }
       res.writeHead(response.status, { 'content-type': 'application/json' }); res.end(data);
     } catch { res.writeHead(502); res.end(); }
   });
@@ -81,6 +83,8 @@ try {
   const groups = [];
   for (const owner of people) { const groupId = await owner.bridge.call('create_group', { name: 'synthetic soak group' }); groups.push({ id: groupId, owner }); for (const person of people) if (person !== owner) await inviteAndAccept(owner, person, groupId); }
   for (const person of people) { const all = await person.bridge.call('get_groups', { refresh: true }); assert.equal(all.groups.length, 10); for (const group of groups) await person.bridge.call('sync_group', { groupId: group.id }); }
+  const mediaPath=path.join(root,'soak-file.txt');const fileBody=Buffer.from('isolated group media 中文 🎉'.repeat(200));await writeFile(mediaPath,fileBody);
+  const voicePath=path.join(root,'voice.webm');const voiceEnv={...process.env};delete voiceEnv.ELECTRON_RUN_AS_NODE;assert.equal(execute(createRequire(import.meta.url)('electron'),['scripts/generate-test-voice.cjs',voicePath],voiceEnv).code,0);const voiceBody=await readFile(voicePath);
   report.status = 'running'; report.stage = 'message fault and memory cycles'; const began = performance.now(); let lastRefresh = began; report.started = new Date().toISOString(); await persist();
   let iteration = 0;
   while (!stop && (smoke ? iteration < 6 : performance.now() - began < 86400000)) {
@@ -101,17 +105,29 @@ try {
     }
     offlineToken = null;
     if (iteration % 3 === 0) { await disconnected.bridge.stop(); await start(disconnected); await save(disconnected); report.faults.push({ iteration, kind: 'client process restart and offline catchup' }); }
+    report.stage='group attachment, voice and activity cycle';
+    const extensionGroup=groups[(iteration-1)%groups.length],extensionOwner=extensionGroup.owner,extensionReceiver=people[(iteration+1)%people.length];
+    const voiceCycle=iteration%2===0;
+    let media=voiceCycle?await extensionOwner.bridge.call('stage_group_recorded_audio',{groupId:extensionGroup.id,encoded:voiceBody.toString('base64'),durationMs:1000}):await extensionOwner.bridge.call('select_group_attachment',{groupId:extensionGroup.id,path:mediaPath});
+    while(media.offset<media.total)media=await extensionOwner.bridge.call('group_attachment_step',{groupId:extensionGroup.id,id:media.id});
+    let originalRoot;
+    if(iteration%4===0){loseExtensionResponse=true;await assert.rejects(extensionOwner.bridge.call('publish_group_attachment',{groupId:extensionGroup.id,id:media.id}));originalRoot=(await extensionOwner.bridge.call('get_group_extensions',{groupId:extensionGroup.id,messageIds:[]})).pending_root;await extensionOwner.bridge.stop();await start(extensionOwner);await save(extensionOwner);report.faults.push({iteration,kind:'lost accepted group extension response and restart of original media task'});}
+    const mediaRoot=await extensionOwner.bridge.call('publish_group_attachment',{groupId:extensionGroup.id,id:media.id});if(originalRoot)assert.equal(mediaRoot,originalRoot);expected.push({group:extensionGroup,id:mediaRoot});
+    await extensionReceiver.bridge.call('sync_group',{groupId:extensionGroup.id});await extensionReceiver.bridge.call('sync_group_extensions',{groupId:extensionGroup.id});let downloading=await extensionReceiver.bridge.call('begin_group_attachment_download',{groupId:extensionGroup.id,messageId:mediaRoot});while(downloading.offset<downloading.total)downloading=await extensionReceiver.bridge.call('group_attachment_step',{groupId:extensionGroup.id,id:downloading.id});const verifiedPath=path.join(root,'verified-media-'+iteration);await extensionReceiver.bridge.call('export_group_attachment',{groupId:extensionGroup.id,id:media.id,path:verifiedPath});assert.deepEqual(await readFile(verifiedPath),voiceCycle?voiceBody:fileBody);await rm(verifiedPath);
+    await extensionOwner.bridge.call('submit_group_extension',{groupId:extensionGroup.id,command:{kind:'activity',title:'soak activity '+iteration,start_at:Date.now()+3600000,timezone:'UTC',location:'',description:'isolated synthetic activity'}});await extensionReceiver.bridge.call('sync_group',{groupId:extensionGroup.id});await extensionReceiver.bridge.call('sync_group_extensions',{groupId:extensionGroup.id});const recent=(await extensionReceiver.bridge.call('get_group_history',{groupId:extensionGroup.id})).messages;let activity=(await extensionReceiver.bridge.call('get_group_extensions',{groupId:extensionGroup.id,messageIds:recent.map(m=>m.id)})).activities.find(a=>a.title==='soak activity '+iteration);assert.ok(activity);expected.push({group:extensionGroup,id:activity.id});await extensionReceiver.bridge.call('submit_group_extension',{groupId:extensionGroup.id,command:{kind:'respond',activity:activity.id,answer:'maybe',revision:activity.revision}});await extensionOwner.bridge.call('sync_group_extensions',{groupId:extensionGroup.id});activity=(await extensionOwner.bridge.call('get_group_extensions',{groupId:extensionGroup.id,messageIds:[activity.id]})).activities[0];assert.equal(activity.responses[extensionReceiver.id],'maybe');await extensionOwner.bridge.call('submit_group_extension',{groupId:extensionGroup.id,command:{kind:iteration%2===0?'cancel':'close',activity:activity.id,revision:activity.revision}});
+    report.stage='message fault and memory cycles';
     for (const person of people) {
       // Exercise the actual background scheduler (at most three groups/round).
       for (let turn = 0; turn < 4; turn++) await person.bridge.call('process_groups', {});
       for (const item of expected) { const history = await person.bridge.call('get_group_history', { groupId: item.group.id }); assert.equal(history.messages.filter(m => m.id === item.id).length, 1); }
     }
     if (iteration % 5 === 0) {
-      const group = groups[iteration % groups.length], person = people.find(p => p !== group.owner);
+      const group = extensionGroup, person = extensionReceiver;
       await group.owner.bridge.call('change_group_membership', { groupId: group.id, action: 'remove', value: person.id });
       const excluded = await group.owner.bridge.call('send_group_text', { groupId: group.id, text: 'unauthorized rejoin interval' }); assert.equal(excluded.state, 'accepted');
       await inviteAndAccept(group.owner, person, group.id); await person.bridge.call('sync_group', { groupId: group.id });
       assert.ok(!(await person.bridge.call('get_group_history', { groupId: group.id })).messages.some(m => m.id === excluded.message_id)); report.faults.push({ iteration, kind: 'remove/rejoin keeps excluded history unavailable' });
+      const oldDownload=await fetch(`${origin}/groups/${group.id}/attachments/${media.id}/0?device_id=${encodeURIComponent(person.device)}`,{headers:{authorization:`Bearer ${person.token}`},signal:AbortSignal.timeout(15000)});assert.equal(oldDownload.status,404);report.faults.push({iteration,kind:'rejoin denies original group attachment remote download'});
     }
     let pendingTasks = 0;
     for (const person of people) for (const group of groups) pendingTasks += (await person.bridge.call('get_group_storage_stats', { groupId: group.id })).pending_tasks;

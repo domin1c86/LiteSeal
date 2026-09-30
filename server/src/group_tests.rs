@@ -839,6 +839,58 @@ async fn extension_pagination_retention_and_cancellation_idempotency() {
         1
     );
 }
+
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn extension_and_direct_attachment_creation_share_concurrent_byte_and_count_caps() {
+    let f = Fixture::start().await;
+    let a = f.account().await;
+    let b = f.account().await;
+    let create = event(
+        None,
+        &a,
+        GroupAction::Create {
+            name: "shared quota race".into(),
+            owner: a.identity.clone(),
+        },
+    );
+    assert!(f.change(&a, &create, true).await.status().is_success());
+    let g = f
+        .add(&pin_creation(&create, &a.identity).unwrap(), &a, &b)
+        .await;
+    let group_request = || {
+        f.client.post(format!("{}/groups/{}/attachments",f.url,g.group_id())).bearer_auth(&a.token).json(&serde_json::json!({"device_id":a.identity.device_id,"id":uuid::Uuid::new_v4().to_string(),"size":40})).send()
+    };
+    let direct_request = || {
+        f.client.post(format!("{}/attachments",f.url)).bearer_auth(&a.token).json(&serde_json::json!({"device_id":a.identity.device_id,"id":uuid::Uuid::new_v4().to_string(),"message_id":uuid::Uuid::new_v4().to_string(),"recipient":b.identity.user_id,"size":40})).send()
+    };
+    sqlx::query("INSERT INTO attachment_objects(id,owner,message_id,recipient,size,expires_at) VALUES($1,$2,$3,$4,$5,now()+interval '1 day')").bind(uuid::Uuid::new_v4().to_string()).bind(&a.identity.user_id).bind(uuid::Uuid::new_v4().to_string()).bind(&b.identity.user_id).bind(512_i64*1024*1024-40).execute(f.db.pool()).await.unwrap();
+    let (x, y) = tokio::join!(group_request(), direct_request());
+    let (x, y) = (x.unwrap().status(), y.unwrap().status());
+    assert!(x.is_success() != y.is_success());
+    assert!(
+        x == reqwest::StatusCode::PAYLOAD_TOO_LARGE || y == reqwest::StatusCode::PAYLOAD_TOO_LARGE
+    );
+    sqlx::query("DELETE FROM attachment_objects WHERE owner=$1")
+        .bind(&a.identity.user_id)
+        .execute(f.db.pool())
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM group_attachment_objects WHERE owner=$1")
+        .bind(&a.identity.user_id)
+        .execute(f.db.pool())
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO attachment_objects(id,owner,message_id,recipient,size,expires_at) SELECT md5($1||i::text)::uuid::text,$1,md5('m'||$1||i::text)::uuid::text,$2,40,now()+interval '1 day' FROM generate_series(1,1999) i").bind(&a.identity.user_id).bind(&b.identity.user_id).execute(f.db.pool()).await.unwrap();
+    let (x, y) = tokio::join!(group_request(), direct_request());
+    let (x, y) = (x.unwrap().status(), y.unwrap().status());
+    assert!(x.is_success() != y.is_success());
+    assert!(
+        x == reqwest::StatusCode::PAYLOAD_TOO_LARGE || y == reqwest::StatusCode::PAYLOAD_TOO_LARGE
+    );
+    let count:i64=sqlx::query_scalar("SELECT (SELECT COUNT(*) FROM attachment_objects WHERE owner=$1)+(SELECT COUNT(*) FROM group_attachment_objects WHERE owner=$1)").bind(&a.identity.user_id).fetch_one(f.db.pool()).await.unwrap();
+    assert_eq!(count, 2000);
+}
 async fn page(f: &Fixture, account: &Account, group: &str) -> GroupMessagePage {
     f.receive_group(account, group)
         .await
