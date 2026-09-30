@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
-import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -48,8 +48,9 @@ try {
     await new Promise(resolve => setTimeout(resolve, 100));
   }
   assert.ok(ready && server.exitCode === null && !serverError);
-  let dropAckFor, replayFor, replayEnvelope, captured, loseCollaborationResponse = false;
+  let dropAckFor, replayFor, replayEnvelope, captured, loseCollaborationResponse = false, loseExtensionResponse = false, offlineRequests = 0;
   proxy = createServer(async (req, res) => {
+    offlineRequests++;
     try {
       const chunks = []; for await (const chunk of req) chunks.push(chunk);
       const body = Buffer.concat(chunks);
@@ -62,6 +63,7 @@ try {
       const data = Buffer.from(await response.arrayBuffer());
       if (req.method === 'GET' && /\/messages(?:\?|$)/.test(req.url) && response.ok && req.headers.authorization === dropAckFor) captured = JSON.parse(data).envelopes[0] ?? captured;
       if (loseCollaborationResponse && req.method === 'POST' && req.url.endsWith('/collaboration') && response.ok) { loseCollaborationResponse = false; res.writeHead(503); res.end(); return; }
+      if (loseExtensionResponse && req.method === 'POST' && req.url.endsWith('/extensions') && response.ok) { loseExtensionResponse = false; res.writeHead(503); res.end(); return; }
       res.writeHead(response.status, { 'content-type': 'application/json' }); res.end(data);
     } catch { res.writeHead(502); res.end(); }
   });
@@ -182,7 +184,50 @@ try {
   await bob.bridge.call('clear_group_history',{groupId}); assert.equal((await bob.bridge.call('get_group_collaboration',{groupId})).polls.length,0);
   await bob.bridge.stop();await start(bob);await save(bob);await syncCollab(bob);assert.equal((await bob.bridge.call('get_group_collaboration',{groupId})).polls.length,0);
   report.stages.push(stage);
-  stage = 'T22 offline encrypted archive preserves group polls drafts and hidden history';
+  stage = 'group attachment upload, lost publication response, restart and authenticated download';
+  const fileBody = Buffer.from('isolated group file 中文 🎉\n'.repeat(50000));
+  const inputPath = path.join(root,'isolated-file.txt'); await writeFile(inputPath,fileBody);
+  let task=await carol.bridge.call('select_group_attachment',{groupId,path:inputPath}); const attachmentBlob=task.id;
+  assert.ok(!('key' in task));
+  task=await carol.bridge.call('group_attachment_step',{groupId,id:task.id});
+  await carol.bridge.stop(); await start(carol); await save(carol);
+  task=(await carol.bridge.call('group_attachment_tasks',{groupId})).find(t=>t.id===attachmentBlob);assert.ok(task.offset>0);
+  while(task.offset<task.total)task=await carol.bridge.call('group_attachment_step',{groupId,id:task.id});
+  loseExtensionResponse=true; await assert.rejects(carol.bridge.call('publish_group_attachment',{groupId,id:task.id}));
+  const beforeRetry=(await carol.bridge.call('get_group_extensions',{groupId,messageIds:[]})).pending_root;assert.ok(beforeRetry);
+  await carol.bridge.stop(); await start(carol); await save(carol);
+  const attachmentRoot=await carol.bridge.call('publish_group_attachment',{groupId,id:task.id});assert.equal(attachmentRoot,beforeRetry);
+  assert.equal((await carol.bridge.call('group_attachment_tasks',{groupId})).length,0);
+  const syncExtensions=async person=>{await person.bridge.call('sync_group',{groupId});assert.equal(await person.bridge.call('sync_group_extensions',{groupId}),true);const ids=(await history(person)).map(m=>m.id);return person.bridge.call('get_group_extensions',{groupId,messageIds:ids});};
+  for(const person of [alice,bob]) {const view=await syncExtensions(person);assert.equal(view.attachments.find(f=>f.id===attachmentRoot).name,'isolated-file.txt');assert.equal((await history(person)).filter(m=>m.id===attachmentRoot).length,1);}
+  let downloaded=await bob.bridge.call('begin_group_attachment_download',{groupId,messageId:attachmentRoot});
+  while(downloaded.offset<downloaded.total)downloaded=await bob.bridge.call('group_attachment_step',{groupId,id:downloaded.id});
+  const downloadedPath=path.join(root,'downloaded.txt');await bob.bridge.call('export_group_attachment',{groupId,id:downloaded.id,path:downloadedPath});assert.deepEqual(await readFile(downloadedPath),fileBody);
+  const cancelled=await alice.bridge.call('select_group_attachment',{groupId,path:inputPath});await alice.bridge.call('cancel_group_attachment',{groupId,id:cancelled.id});assert.equal((await alice.bridge.call('group_attachment_tasks',{groupId})).length,0);
+  report.stages.push(stage);
+  stage='activity RSVP replacement, manual close and cancel, departure and rejoin isolation';
+  const fixturePath=path.join(root,'voice.webm');const fixtureEnv={...process.env};delete fixtureEnv.ELECTRON_RUN_AS_NODE;
+  assert.equal(execute(createRequire(import.meta.url)('electron'),['scripts/generate-test-voice.cjs',fixturePath],fixtureEnv).code,0);
+  const voice=await readFile(fixturePath);let voiceTask=await alice.bridge.call('stage_group_recorded_audio',{groupId,encoded:voice.toString('base64'),durationMs:1000});while(voiceTask.offset<voiceTask.total)voiceTask=await alice.bridge.call('group_attachment_step',{groupId,id:voiceTask.id});const voiceRoot=await alice.bridge.call('publish_group_attachment',{groupId,id:voiceTask.id});
+  const voiceView=(await syncExtensions(carol)).attachments.find(f=>f.id===voiceRoot);assert.equal(voiceView.duration_ms,1000);assert.equal(voiceView.mime,'audio/webm');let voiceDownload=await carol.bridge.call('begin_group_attachment_download',{groupId,messageId:voiceRoot});while(voiceDownload.offset<voiceDownload.total)voiceDownload=await carol.bridge.call('group_attachment_step',{groupId,id:voiceDownload.id});const voiceCopy=path.join(root,'voice-downloaded.webm');await carol.bridge.call('export_group_attachment',{groupId,id:voiceDownload.id,path:voiceCopy});assert.deepEqual(await readFile(voiceCopy),voice);
+  await assert.rejects(alice.bridge.call('stage_group_recorded_audio',{groupId,encoded:voice.toString('base64'),durationMs:60001}));
+  report.stages.push('synthetic WebM/Opus generation, codec decode and encrypted group voice roundtrip');
+  const extensionSubmit=(person,command)=>person.bridge.call('submit_group_extension',{groupId,command});
+  await extensionSubmit(carol,{kind:'activity',title:'活动 中文 🎉',start_at:Date.now()-1000,timezone:'Asia/Singapore',location:'meeting room',description:'immutable details'});
+  let activity=(await syncExtensions(bob)).activities[0];assert.equal(activity.title,'活动 中文 🎉');assert.equal(Object.keys(activity.responses).length,0);
+  await extensionSubmit(bob,{kind:'respond',activity:activity.id,answer:'maybe',revision:activity.revision});activity=(await syncExtensions(bob)).activities[0];
+  await extensionSubmit(bob,{kind:'respond',activity:activity.id,answer:'yes',revision:activity.revision});activity=(await syncExtensions(alice)).activities[0];assert.equal(Object.keys(activity.responses).length,1);assert.equal(activity.responses[bob.id],'yes');
+  await assert.rejects(extensionSubmit(bob,{kind:'close',activity:activity.id,revision:activity.revision}));
+  await extensionSubmit(alice,{kind:'close',activity:activity.id,revision:activity.revision});activity=(await syncExtensions(carol)).activities[0];assert.ok(activity.closed&&!activity.cancelled);
+  await assert.rejects(extensionSubmit(bob,{kind:'respond',activity:activity.id,answer:'no',revision:activity.revision}));
+  await extensionSubmit(carol,{kind:'cancel',activity:activity.id,revision:activity.revision});activity=(await syncExtensions(bob)).activities[0];assert.ok(activity.closed&&activity.cancelled);
+  await alice.bridge.call('change_group_membership',{groupId,action:'remove',value:bob.id});await invite(bob);await accept(bob);await syncExtensions(bob);
+  const oldActivity=(await syncExtensions(bob)).activities.find(a=>a.id===activity.id);assert.ok(oldActivity&&!oldActivity.eligible&&oldActivity.departed.includes(bob.id));
+  const remote=await fetch(`${upstream}/groups/${groupId}/attachments/${attachmentBlob}/0?device_id=${encodeURIComponent(bob.device)}`,{headers:{authorization:`Bearer ${bob.token}`}});assert.equal(remote.status,404);
+  const retainedPath=path.join(root,'retained-after-rejoin.txt');await bob.bridge.call('export_group_attachment',{groupId,id:attachmentBlob,path:retainedPath});assert.deepEqual(await readFile(retainedPath),fileBody);
+  await bob.bridge.call('clear_group_history',{groupId});await syncExtensions(bob);assert.equal((await bob.bridge.call('get_group_extensions',{groupId,messageIds:[activity.id,attachmentRoot]})).activities.length,0);
+  report.stages.push(stage);
+  stage = 'T22 v2 offline archive preserves activities, group cache, polls, drafts and hidden history';
   const waitBackup = async (bridge, id) => {
     for (let attempt = 0; attempt < 600; attempt++) {
       const job = await bridge.call('get_backup_job', { id });
@@ -194,11 +239,18 @@ try {
   const secret = randomUUID();
   for (const person of [carol, bob]) {
     const file = path.join(root, person.name + '.lseal');
-    const exported = await person.bridge.call('start_backup_export', { path: file, password: secret, includeAttachments: false });
+    const exported = await person.bridge.call('start_backup_export', { path: file, password: secret, includeAttachments: person===carol });
     await waitBackup(person.bridge, exported);
+    if(person===carol&&process.env.LITESEAL_TEST_LEGACY_READER){
+      const old=new DesktopBridge();bridges.push(old);await old.start(process.env.LITESEAL_TEST_LEGACY_READER,['--db-path',path.join(root,'legacy-reader.db'),'--keystore-path',path.join(root,'legacy-reader.bin')]);
+      const immutable=await readFile(file);const job=await old.call('start_backup_restore',{path:file,parent:root,password:secret});let result;
+      for(let i=0;i<600;i++){result=await old.call('get_backup_job',{id:job});if(result.state!=='running')break;await new Promise(resolve=>setTimeout(resolve,50));}
+      assert.equal(result.state,'failed');assert.match(result.error,/版本/);assert.deepEqual(await readFile(file),immutable);report.stages.push('legacy T22 reader explicitly rejects authenticated payload v2');await old.stop();
+    }
     const viewer = new DesktopBridge(); bridges.push(viewer);
     await viewer.start(path.resolve('target/debug/liteseal-desktop.exe'), ['--db-path', path.join(root, person.name + '-offline.db'), '--keystore-path', path.join(root, person.name + '-offline.bin')]);
     const restored = await viewer.call('start_backup_restore', { path: file, parent: root, password: secret });
+    const requestsBefore=offlineRequests;
     await waitBackup(viewer, restored);
     const info = await viewer.call('open_backup_archive', { id: restored });
     assert.equal(info.user_id, person.id); assert.ok(!('token' in info) && !('secret_key' in info));
@@ -206,8 +258,11 @@ try {
     if (person === carol) {
       assert.ok(page.messages.some(m => m.text === 'synthetic @member'));
       assert.ok(page.collaboration.polls.some(p => p.question === 'Synthetic poll question' && p.closed));
+      assert.ok(page.extensions.activities.some(a=>a.title==='活动 中文 🎉'&&a.cancelled&&a.closed));
+      const offlineFile=path.join(root,'archive-group-file.txt');await viewer.call('export_backup_attachment',{id:restored,messageId:attachmentRoot,groupId,path:offlineFile});assert.deepEqual(await readFile(offlineFile),fileBody);
     } else { assert.equal(page.messages.length, 0); assert.equal(page.collaboration.polls.length, 0); }
     await viewer.call('close_backup_archive', {});
+    assert.equal(offlineRequests,requestsBefore);
     await assert.rejects(viewer.call('get_backup_archive_info', { id: restored }));
     await viewer.stop();
   }

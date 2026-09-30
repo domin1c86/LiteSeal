@@ -22,10 +22,10 @@ pub(crate) struct Runtime {
     last_refresh: Option<std::time::Instant>,
     revision: usize,
 }
-struct Context {
-    saved: KeystoreData,
-    client: Arc<GroupClient>,
-    keys: crypto::KeyPair,
+pub(super) struct Context {
+    pub(super) saved: KeystoreData,
+    pub(super) client: Arc<GroupClient>,
+    pub(super) keys: crypto::KeyPair,
     identity: GroupIdentity,
 }
 #[derive(Serialize)]
@@ -181,7 +181,7 @@ fn fingerprint(identity: &GroupIdentity) -> String {
         liteseal_core::contacts::fingerprint(&identity.signing_key)
     )
 }
-fn current(state: &AppState, saved: &KeystoreData) -> Result<(), String> {
+pub(super) fn current(state: &AppState, saved: &KeystoreData) -> Result<(), String> {
     let now = state.identity()?;
     if now.user_id != saved.user_id
         || now.device_id != saved.device_id
@@ -194,10 +194,10 @@ fn current(state: &AppState, saved: &KeystoreData) -> Result<(), String> {
     }
     Ok(())
 }
-async fn context(state: &AppState) -> Result<Context, String> {
+pub(super) async fn context(state: &AppState) -> Result<Context, String> {
     context_mode(state, true).await
 }
-async fn local_context(state: &AppState) -> Result<Context, String> {
+pub(super) async fn local_context(state: &AppState) -> Result<Context, String> {
     context_mode(state, false).await
 }
 async fn context_mode(state: &AppState, network: bool) -> Result<Context, String> {
@@ -785,7 +785,11 @@ pub async fn send(state: &AppState, id: String, text: Option<String>) -> Result<
 pub async fn cancel(state: &AppState, id: String) -> Result<(), String> {
     let _gate = state.groups_gate.lock().await;
     let ctx = context(state).await?;
-    ctx.client.cancel_unsent(&id).await?;
+    if ctx.client.extension_has_task(&id)? {
+        ctx.client.extension_cancel_task(&id, &ctx.keys).await?;
+    } else {
+        ctx.client.cancel_unsent(&id).await?;
+    }
     current(state, &ctx.saved)
 }
 pub async fn process(state: &AppState) -> Result<Report, String> {
@@ -873,7 +877,11 @@ async fn process_inner(state: &AppState, ctx: &Context) -> Result<Report, String
     for step in 0..ids.len().min(3) {
         let id = &ids[(start + step) % ids.len()];
         let before = ctx.client.state(id)?;
-        if ctx.client.pending(id)? {
+        if ctx.client.extension_has_task(id)? {
+            if let Err(error) = ctx.client.extension_retry(id, &ctx.keys).await {
+                report.errors.push(error);
+            }
+        } else if ctx.client.pending(id)? {
             match ctx.client.send_queued(id).await {
                 Ok(Some(_)) => report.changed += 1,
                 Ok(None) => {}
@@ -894,6 +902,14 @@ async fn process_inner(state: &AppState, ctx: &Context) -> Result<Report, String
                 report.errors.push(error);
             } else {
                 report.changed += 1;
+            }
+            match ctx.client.extension_supported(id).await {
+                Ok(true) => match ctx.client.extension_sync(id, &ctx.keys).await {
+                    Ok(count) => report.changed += count,
+                    Err(error) => report.errors.push(error),
+                },
+                Ok(false) => {}
+                Err(error) => report.errors.push(error),
             }
             if ctx.client.state(id)?.revision_hash() != before.revision_hash() {
                 report.changed += 1;

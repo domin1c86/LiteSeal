@@ -80,3 +80,10 @@
   .group-composer .group-actions span { flex: 1; min-width: 80px; }
   .group-dialog { padding: 20px; }
 }
+
+.group-activity { padding: 10px; border: 1px solid var(--border); border-radius: 8px; overflow-wrap: anywhere; }
+.group-activity-description { white-space: pre-wrap; }
+.group-activity-composer form { display: grid; gap: 8px; max-height: 45vh; overflow-y: auto; }
+.group-activity-composer input { width: 100%; box-sizing: border-box; }
+.group-composer > details > .attachment-composer { padding: 6px 0 !important; max-height: 35vh; overflow-y: auto; }
+.group-activity button { max-width: 100%; }

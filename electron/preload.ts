@@ -3,6 +3,7 @@ import { commandNames, type DesktopApi } from "./contracts";
 
 const api = Object.fromEntries(commandNames.map(name => [name, async (args: object) => {
   let input = args;
+  if(name==="stage_group_attachment_file") {const {groupId,file}=args as {groupId:string;file:File};const path=webUtils.getPathForFile(file);if(!path)throw new Error("文件没有本机路径，请选择文件或粘贴图片");input={groupId,path};}
   if (name === "stage_attachment_file") {
     const { peerId, file } = args as { peerId: string; file: File };
     const path = webUtils.getPathForFile(file);

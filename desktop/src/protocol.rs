@@ -16,6 +16,96 @@ pub struct Request {
 #[derive(Deserialize)]
 #[serde(tag = "name", content = "args", deny_unknown_fields)]
 pub enum Command {
+    #[serde(rename = "get_group_extensions")]
+    GetGroupExtensions {
+        #[serde(rename = "groupId")]
+        group_id: String,
+        #[serde(rename = "messageIds")]
+        message_ids: Vec<String>,
+    },
+    #[serde(rename = "sync_group_extensions")]
+    SyncGroupExtensions {
+        #[serde(rename = "groupId")]
+        group_id: String,
+    },
+    #[serde(rename = "submit_group_extension")]
+    SubmitGroupExtension {
+        #[serde(rename = "groupId")]
+        group_id: String,
+        command: liteseal_core::groups::ExtensionCommand,
+    },
+    #[serde(rename = "retry_group_extension")]
+    RetryGroupExtension {
+        #[serde(rename = "groupId")]
+        group_id: String,
+    },
+    #[serde(rename = "cancel_group_extension")]
+    CancelGroupExtension {
+        #[serde(rename = "groupId")]
+        group_id: String,
+    },
+    #[serde(rename = "select_group_attachment")]
+    SelectGroupAttachment {
+        #[serde(rename = "groupId")]
+        group_id: String,
+        path: String,
+    },
+    #[serde(rename = "stage_group_recorded_audio")]
+    StageGroupRecordedAudio {
+        #[serde(rename = "groupId")]
+        group_id: String,
+        encoded: String,
+        #[serde(rename = "durationMs")]
+        duration_ms: u32,
+    },
+    #[serde(rename = "stage_group_clipboard_image")]
+    StageGroupClipboardImage {
+        #[serde(rename = "groupId")]
+        group_id: String,
+        encoded: String,
+    },
+    #[serde(rename = "group_attachment_tasks")]
+    GroupAttachmentTasks {
+        #[serde(rename = "groupId")]
+        group_id: String,
+    },
+    #[serde(rename = "group_attachment_step")]
+    GroupAttachmentStep {
+        #[serde(rename = "groupId")]
+        group_id: String,
+        id: String,
+    },
+    #[serde(rename = "publish_group_attachment")]
+    PublishGroupAttachment {
+        #[serde(rename = "groupId")]
+        group_id: String,
+        id: String,
+    },
+    #[serde(rename = "cancel_group_attachment")]
+    CancelGroupAttachment {
+        #[serde(rename = "groupId")]
+        group_id: String,
+        id: String,
+    },
+    #[serde(rename = "begin_group_attachment_download")]
+    BeginGroupAttachmentDownload {
+        #[serde(rename = "groupId")]
+        group_id: String,
+        #[serde(rename = "messageId")]
+        message_id: String,
+    },
+    #[serde(rename = "export_group_attachment")]
+    ExportGroupAttachment {
+        #[serde(rename = "groupId")]
+        group_id: String,
+        id: String,
+        path: String,
+    },
+    #[serde(rename = "clear_group_attachment_cache")]
+    ClearGroupAttachmentCache {
+        #[serde(rename = "groupId", default)]
+        group_id: Option<String>,
+    },
     #[serde(rename = "start_backup_export")]
     StartBackupExport {
         path: String,
@@ -62,6 +152,8 @@ pub enum Command {
         #[serde(rename = "messageId")]
         message_id: String,
         path: String,
+        #[serde(rename = "groupId", default)]
+        group_id: Option<String>,
     },
     #[serde(rename = "close_backup_archive")]
     CloseBackupArchive {},
@@ -669,6 +761,96 @@ impl Response {
 
 pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, String> {
     let result = match command {
+        Command::GetGroupExtensions {
+            group_id,
+            message_ids,
+        } => serde_json::to_value(
+            commands::groups_media::extensions(state, group_id, message_ids).await?,
+        ),
+        Command::SyncGroupExtensions { group_id } => {
+            serde_json::to_value(commands::groups_media::sync(state, group_id).await?)
+        }
+        Command::SubmitGroupExtension { group_id, command } => {
+            serde_json::to_value(commands::groups_media::submit(state, group_id, command).await?)
+        }
+        Command::RetryGroupExtension { group_id } => {
+            serde_json::to_value(commands::groups_media::retry(state, group_id, false).await?)
+        }
+        Command::CancelGroupExtension { group_id } => {
+            serde_json::to_value(commands::groups_media::retry(state, group_id, true).await?)
+        }
+        Command::SelectGroupAttachment { group_id, path } => {
+            serde_json::to_value(commands::groups_media::stage(state, group_id, path).await?)
+        }
+        Command::StageGroupRecordedAudio {
+            group_id,
+            encoded,
+            duration_ms,
+        } => {
+            use base64::Engine;
+            if encoded.len() > 15 * 1024 * 1024 || !(1..=60000).contains(&duration_ms) {
+                return Err("群语音大小或时长无效".into());
+            }
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .map_err(|_| "群语音编码无效")?;
+            serde_json::to_value(
+                commands::groups_media::stage_bytes(
+                    state,
+                    group_id,
+                    bytes,
+                    "voice-message.webm".into(),
+                    Some(duration_ms),
+                )
+                .await?,
+            )
+        }
+        Command::StageGroupClipboardImage { group_id, encoded } => {
+            use base64::Engine;
+            if encoded.len() > 15 * 1024 * 1024 {
+                return Err("图片过大".into());
+            }
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .map_err(|_| "图片编码无效")?;
+            if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+                return Err("剪贴板图片格式无效".into());
+            }
+            serde_json::to_value(
+                commands::groups_media::stage_bytes(
+                    state,
+                    group_id,
+                    bytes,
+                    "clipboard.png".into(),
+                    None,
+                )
+                .await?,
+            )
+        }
+        Command::GroupAttachmentTasks { group_id } => {
+            serde_json::to_value(commands::groups_media::tasks(state, group_id).await?)
+        }
+        Command::GroupAttachmentStep { group_id, id } => {
+            serde_json::to_value(commands::groups_media::step(state, group_id, id).await?)
+        }
+        Command::PublishGroupAttachment { group_id, id } => {
+            serde_json::to_value(commands::groups_media::publish(state, group_id, id).await?)
+        }
+        Command::CancelGroupAttachment { group_id, id } => {
+            serde_json::to_value(commands::groups_media::cancel(state, group_id, id).await?)
+        }
+        Command::BeginGroupAttachmentDownload {
+            group_id,
+            message_id,
+        } => serde_json::to_value(
+            commands::groups_media::download(state, group_id, message_id).await?,
+        ),
+        Command::ExportGroupAttachment { group_id, id, path } => {
+            serde_json::to_value(commands::groups_media::export(state, group_id, id, path).await?)
+        }
+        Command::ClearGroupAttachmentCache { group_id } => {
+            serde_json::to_value(commands::groups_media::clear(state, group_id).await?)
+        }
         Command::StartBackupExport {
             path,
             password,
@@ -717,12 +899,12 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
             id,
             message_id,
             path,
-        } => serde_json::to_value(commands::backup::export_attachment(
-            state,
-            &id,
-            &message_id,
-            &path,
-        )?),
+            group_id,
+        } => serde_json::to_value(if let Some(group) = group_id {
+            commands::backup::export_group_attachment(state, &id, &group, &message_id, &path)?
+        } else {
+            commands::backup::export_attachment(state, &id, &message_id, &path)?
+        }),
         Command::CloseBackupArchive {} => serde_json::to_value(commands::backup::reset(state)?),
         Command::GetGroupCollaboration {
             group_id,

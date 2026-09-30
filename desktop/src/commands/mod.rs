@@ -5,6 +5,7 @@ pub mod backup;
 pub mod chat;
 pub mod contacts;
 pub mod groups;
+pub mod groups_media;
 pub mod keystore;
 pub mod message_operations;
 pub mod reactions;

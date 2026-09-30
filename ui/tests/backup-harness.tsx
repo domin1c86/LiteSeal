@@ -11,7 +11,11 @@ const summary = { messages: 65, groups: 1, attachments: 1, missing_attachments: 
 const info = { id: "archive-1", user_id: "synthetic-alice", device_id: "device-a", server_url: "http://offline.invalid", fingerprint: "encryption-fingerprint", signing_fingerprint: "signing-fingerprint", summary };
 const poll = { id: "poll-1", creator: "synthetic-alice", question: "离线投票", options: [{ id: "a", text: "第一项" }, { id: "b", text: "第二项" }], votes: { alice: "a", bob: "b" }, departed: [], closed: true, eligible: false, revision: 3 };
 const groupPage = { messages: [{ id: "poll-1", sender: "synthetic-alice", timestamp: 1, text: "投票记录", status: "seen" }], collaboration: { polls: [poll], pin: null, pin_unavailable: true, pending: false, conflict: false }, next_group: null, draft: "群草稿 🦭" };
+const activity={id:"activity-1",creator:"synthetic-alice",title:"恢复活动 🎉",start_at:1800000000000,timezone:"Asia/Singapore",location:"会议室",description:"固定内容",responses:{bob:"maybe" as const},participants:["synthetic-alice","bob"],departed:["bob"],closed:true,cancelled:true,eligible:false,can_manage:false,revision:3};
+const extensions={activities:[activity],attachments:[{id:"file-1",blob:"blob-1",name:"恢复群图片.png",size:128,mime:"image/png",duration_ms:null}],pending:false,conflict:false,pending_root:null};
+const extendedPage={...groupPage,messages:[...groupPage.messages,{id:"activity-1",sender:"synthetic-alice",timestamp:2,text:"[群附件或活动，请升级客户端查看]",status:"seen"},{id:"file-1",sender:"synthetic-alice",timestamp:3,text:"[群附件或活动，请升级客户端查看]",status:"seen"}],extensions};
 const api: Record<string, any> = {
+  export_backup_attachment:async(args:any)=>{calls.push({name:"group-export",args});return "saved";},
   start_backup_export: async (args: any) => { calls.push({ name: "export", args }); return newJob(); },
   start_backup_restore: async (args: any) => { calls.push({ name: "restore", args }); return newJob(); },
   get_backup_job: async ({ id }: { id: string }) => { const state = jobStates.get(id); return { id, state, completed: 1, total: 2, summary: state === "completed" ? summary : null, error: state === "failed" ? "备份口令错误或文件损坏" : null, restorable: state === "completed" }; },
@@ -21,7 +25,7 @@ const api: Record<string, any> = {
   get_backup_conversations: async () => ({ items: [{ id: "dm:alice:bob", kind: "direct", name: "联系人 Bob" }, { id: "group-1", kind: "group", name: "恢复群组" }], next: null }),
   get_backup_history: async (args: any) => {
     calls.push({ name: "history" });
-    if (args.kind === "group") return groupPage;
+    if (args.kind === "group") return extendedPage;
     if (delayHistory) return new Promise(resolve => { deferred = resolve; });
     return { messages: [{ id: args.beforeId ? "older" : "recent", sender: "bob", timestamp: 1, text: args.beforeId ? "更早中文历史" : "最新中文 🦭", status: "received" }], next: args.beforeId ? null : { id: "recent", time: 1 } };
   },
@@ -49,6 +53,7 @@ const viewer = () => { root.render(<BackupArchive key={++generation} id="archive
   status = "failed"; panel(false); await sleep(); await fill("独立备份口令", "independent backup password"); await click("选择备份并隔离恢复"); await sleep(); check(document.querySelector('[role="alert"]')?.textContent?.includes("口令错误"), "failure not shown"); results.push("wrong password recovery error");
   viewer(); await sleep(); await sleep(); await click("联系人 Bob"); check(document.body.textContent!.includes("最新中文 🦭"), "direct history absent"); await click("加载更早历史"); check(document.body.textContent!.includes("更早中文历史"), "pagination absent"); results.push("offline direct history pagination");
   delayHistory = true; await click("联系人 Bob"); await click("群 · 恢复群组"); deferred!({ messages: [{ id: "late", text: "late forbidden result" }], next: null }); await sleep(); check(!document.body.textContent!.includes("late forbidden result"), "late page replaced active conversation"); check(document.body.textContent!.includes("离线投票"), "poll absent"); check(!button("投票") && !button("发送"), "archive offers mutations"); results.push("read-only polls and stale conversation result rejection");
+  check(document.body.textContent!.includes("恢复活动 🎉")&&document.body.textContent!.includes("活动已取消"),"offline activity state missing");check(button("待定 (1)")!.disabled&&!button("取消活动"),"offline activity allows mutation");await click("保存已包含群附件");check(calls.find(c=>c.name==='group-export')?.args.groupId==='group-1',"offline group file scope absent");results.push("offline activity and group attachment remain read-only and scoped");
   await click("联系人 Bob"); root.render(<div>closed</div>); await sleep(); deferred!({ messages: [{ id: "late", text: "late forbidden result" }], next: null }); await sleep(); check(document.body.textContent === "closed", "closed viewer accepted late data"); results.push("closed archive ignores late decrypted results");
   delayHistory = false; return results;
 };

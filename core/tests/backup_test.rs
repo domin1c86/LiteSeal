@@ -12,6 +12,199 @@ use liteseal_shared::{crypto, group};
 use rusqlite::{params, Connection};
 use std::sync::atomic::AtomicBool;
 const PASSWORD: &[u8] = b"independent backup password 123";
+#[path = "../../shared/examples/group_trial/support.rs"]
+#[allow(dead_code)]
+mod support;
+#[test]
+fn version_two_round_trip_contains_group_extensions_and_only_optional_verified_cache() {
+    use liteseal_shared::{collaboration::Member, group_extension as e};
+    let dir = backup::WorkDirectory::create(&std::env::temp_dir()).unwrap();
+    let path = dir.0.join("source.db");
+    let identity = identity();
+    let keys = backup::identity_keys(&identity).unwrap();
+    let alice = support::Participant {
+        user: "alice".into(),
+        keys,
+    };
+    let bob = support::Participant::new("bob");
+    drop(MessageRepository::new(path.to_str().unwrap()).unwrap());
+    let mut create = support::change(
+        None,
+        &alice,
+        group::GroupAction::Create {
+            name: "archive extensions".into(),
+            owner: alice.identity(),
+        },
+        1000,
+    );
+    create.group_id = uuid::Uuid::new_v4().to_string();
+    create.signature = crypto::sign(&create.signing_bytes(), &alice.keys.ed25519_sk).unwrap();
+    let g = group::pin_creation(&create, &alice.identity()).unwrap();
+    let join = support::join(&g, &alice, &bob, 1001);
+    let g = group::apply_change(Some(&g), &join).unwrap();
+    let id = g.group_id();
+    let mut store = GroupStore::open(
+        path.to_str().unwrap(),
+        &identity.server_url,
+        alice.identity(),
+    )
+    .unwrap();
+    store.pin(&create, &alice.identity()).unwrap();
+    store.apply(id, &[join]).unwrap();
+    let client = liteseal_core::groups::GroupClient::new(
+        path.to_str().unwrap(),
+        &identity.server_url,
+        "test-only".into(),
+        alice.identity(),
+    )
+    .unwrap();
+    let body = b"offline group attachment contents";
+    let task = client
+        .media_stage(
+            id,
+            body,
+            "中文.txt".into(),
+            "application/octet-stream".into(),
+            None,
+            &alice.keys,
+        )
+        .unwrap();
+    let conn = Connection::open(&path).unwrap();
+    let metadata: Vec<u8> = conn
+        .query_row("SELECT metadata FROM group_attachment_cache", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    let (_, _, _, _, descriptor): (String, String, String, String, e::Attachment) =
+        serde_json::from_slice(
+            &crypto::decrypt(&metadata, &alice.keys.public_key, &alice.keys.secret_key).unwrap(),
+        )
+        .unwrap();
+    let message = store
+        .seal_extension(id, &e::Content::Attachment(descriptor), &alice.keys)
+        .unwrap();
+    let sub = store.extension_pending(id).unwrap().unwrap();
+    let receipt = |s: &e::Submission, seq| e::Receipt {
+        event_id: s.event.id.clone(),
+        hash: s.event.hash(),
+        seq,
+        root: if s.roots.is_empty() {
+            None
+        } else {
+            Some(group::GroupMessageReceipt {
+                group_id: id.into(),
+                message_id: s.event.object.clone(),
+                recipients: s
+                    .roots
+                    .iter()
+                    .map(|r| group::GroupDeliveryStatus {
+                        recipient_user_id: r.recipient_user_id.clone(),
+                        recipient_device_id: r.recipient_device_id.clone(),
+                        recipient_join_epoch: r.recipient_join_epoch,
+                        status: "pending".into(),
+                    })
+                    .collect(),
+            })
+        },
+    };
+    store
+        .extension_accepted(id, &sub, &receipt(&sub, 1), &alice.keys)
+        .unwrap();
+    conn.execute(
+        "UPDATE group_attachment_cache SET root=?1,direction='download',offset=length(ciphertext)",
+        [&message],
+    )
+    .unwrap();
+    let activity = store
+        .seal_extension(
+            id,
+            &e::Content::Activity(e::Activity {
+                title: "活动 🎉".into(),
+                start_at: 2000,
+                timezone: "Asia/Singapore".into(),
+                location: "会议室".into(),
+                description: "说明".into(),
+            }),
+            &alice.keys,
+        )
+        .unwrap();
+    let sub = store.extension_pending(id).unwrap().unwrap();
+    store
+        .extension_accepted(id, &sub, &receipt(&sub, 2), &alice.keys)
+        .unwrap();
+    let object = store.extension_object(id, &activity).unwrap().unwrap();
+    let close = e::make(
+        &g,
+        &Member::from(g.member("alice").unwrap()),
+        activity.clone(),
+        uuid::Uuid::new_v4().to_string(),
+        Some(&object),
+        e::Action::Cancel,
+        None,
+        vec![],
+        &alice.keys,
+        3000,
+    )
+    .unwrap();
+    store.extension_queue(&close).unwrap();
+    store
+        .extension_accepted(id, &close, &receipt(&close, 3), &alice.keys)
+        .unwrap();
+    for include in [false, true] {
+        let archive = dir.0.join(if include {
+            "with.lseal"
+        } else {
+            "without.lseal"
+        });
+        let cancel = AtomicBool::new(false);
+        let summary = backup::export(
+            &path,
+            identity.clone(),
+            PASSWORD,
+            include,
+            &archive,
+            &cancel,
+            |_, _| {},
+        )
+        .unwrap();
+        assert_eq!(summary.attachments, if include { 1 } else { 0 });
+        assert_eq!(summary.missing_attachments, if include { 0 } else { 1 });
+        let restored = backup::restore(&archive, PASSWORD, &dir.0, &cancel, |_, _| {}).unwrap();
+        let store = GroupStore::open(
+            restored.directory.0.join("history.db").to_str().unwrap(),
+            &identity.server_url,
+            alice.identity(),
+        )
+        .unwrap();
+        let view = store
+            .extension_view(id, std::slice::from_ref(&activity), &alice.keys)
+            .unwrap();
+        assert!(view.activities[0].closed && view.activities[0].cancelled);
+        assert_eq!(view.activities[0].title, "活动 🎉");
+        let read = store.media_archive_read(id, &message, &alice.keys);
+        if include {
+            assert_eq!(read.unwrap().1, body);
+        } else {
+            assert!(read.is_err());
+        }
+        let conn = Connection::open(restored.directory.0.join("history.db")).unwrap();
+        assert_eq!(
+            conn.query_row::<i64, _, _>("SELECT COUNT(*) FROM local_extension_outbox", [], |r| r
+                .get(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            conn.query_row::<i64, _, _>(
+                "SELECT COUNT(*) FROM group_attachment_cache WHERE id=?1",
+                [&task.id],
+                |r| r.get(0)
+            )
+            .unwrap(),
+            if include { 1 } else { 0 }
+        );
+    }
+}
 fn identity() -> KeystoreData {
     let k = crypto::generate_keypair().unwrap();
     KeystoreData {
@@ -24,6 +217,53 @@ fn identity() -> KeystoreData {
         secret_key: k.secret_key.to_vec(),
         ed25519_pk: k.ed25519_pk.to_vec(),
         ed25519_sk: k.ed25519_sk.to_vec(),
+    }
+}
+#[test]
+fn reader_accepts_legacy_payload_one_and_rejects_unknown_authenticated_payload() {
+    use liteseal_shared::backup_crypto::{Decryptor, Encryptor};
+    use std::fs::File;
+    let dir = backup::WorkDirectory::create(&std::env::temp_dir()).unwrap();
+    let source = dir.0.join("source.db");
+    drop(MessageRepository::new(source.to_str().unwrap()).unwrap());
+    let current = dir.0.join("current.lseal");
+    let cancel = AtomicBool::new(false);
+    backup::export(
+        &source,
+        identity(),
+        PASSWORD,
+        false,
+        &current,
+        &cancel,
+        |_, _| {},
+    )
+    .unwrap();
+    for version in [1, 999] {
+        let mut decoder = Decryptor::new(File::open(&current).unwrap(), PASSWORD).unwrap();
+        let header = decoder.next_chunk().unwrap().unwrap();
+        let mut manifest: serde_json::Value = serde_json::from_slice(&header).unwrap();
+        assert_eq!(manifest["version"], 2);
+        manifest["version"] = version.into();
+        let converted = dir.0.join(format!("payload-{version}.lseal"));
+        let mut file = File::create(&converted).unwrap();
+        let mut encoder = Encryptor::new(&mut file, PASSWORD).unwrap();
+        encoder
+            .push(&serde_json::to_vec(&manifest).unwrap(), false)
+            .unwrap();
+        while let Some(bytes) = decoder.next_chunk().unwrap() {
+            encoder.push(&bytes, decoder.ended()).unwrap();
+            if decoder.ended() {
+                break;
+            }
+        }
+        drop(encoder);
+        file.sync_all().unwrap();
+        let result = backup::restore(&converted, PASSWORD, &dir.0, &cancel, |_, _| {});
+        if version == 1 {
+            assert_eq!(result.unwrap().summary.attachments, 0);
+        } else {
+            assert!(result.is_err());
+        }
     }
 }
 #[test]

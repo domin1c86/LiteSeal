@@ -162,6 +162,27 @@ else {
           }
           if (locked) throw new Error("应用已锁定，请先验证 Windows 身份");
           const generation = lockGeneration;
+          if(name==="stage_group_recorded_audio"){
+            const input=args as {groupId:string;encoded:string;durationMs:number};if(Object.keys(args).some(k=>!["groupId","encoded","durationMs"].includes(k))||typeof input.groupId!=="string"||input.groupId.length>128||typeof input.encoded!=="string"||input.encoded.length>15*1024*1024||!Number.isInteger(input.durationMs)||input.durationMs<1||input.durationMs>60000)throw new Error("群语音长度、大小或参数无效");const bytes=Buffer.from(input.encoded,"base64");if(bytes.length>11*1024*1024||!bytes.subarray(0,4).equals(Buffer.from([0x1a,0x45,0xdf,0xa3])))throw new Error("群语音格式无效");const result=await bridge.call(name,input);if(locked||generation!==lockGeneration)throw new Error("应用已锁定");return{ok:true,result};
+          }
+          if(name==="select_group_attachment"||name==="stage_group_attachment_file"){
+            const input=args as {groupId:string;path?:string};if(typeof input.groupId!=="string"||input.groupId.length>128||Object.keys(args).some(key=>!(name==="select_group_attachment"?["groupId"]:["groupId","path"]).includes(key)))throw new Error("无效群附件参数");
+            let selected=input.path;if(name==="select_group_attachment"){const result=await dialog.showOpenDialog(mainWindow!,{title:"选择群文件（最大 20 MiB）",properties:["openFile"]});if(result.canceled)return{ok:true,result:null};selected=result.filePaths[0];}
+            if(locked||generation!==lockGeneration)throw new Error("应用已锁定");if(typeof selected!=="string"||!path.isAbsolute(selected))throw new Error("无效文件路径");
+            const result=await bridge.call("select_group_attachment",{groupId:input.groupId,path:selected} as never);if(locked||generation!==lockGeneration)throw new Error("应用已锁定");return{ok:true,result};
+          }
+          if(name==="stage_group_clipboard_image"){
+            const {groupId}=args as {groupId:string};if(typeof groupId!=="string"||groupId.length>128||Object.keys(args).some(k=>k!=="groupId"))throw new Error("无效群编号");
+            const items=await clipboard.read();const image=items.flatMap(item=>item.types.filter(type=>type.startsWith("image/")).map(type=>({item,type})))[0];if(!image)throw new Error("剪贴板没有图片");const clip=await image.item.getType(image.type);if(!(clip instanceof Blob))throw new Error("剪贴板图片格式无效");const source=Buffer.from(await clip.arrayBuffer());if(source.length>11*1024*1024)throw new Error("图片过大");const picture=image.type==="image/png"?null:nativeImage.createFromBuffer(source);if(picture?.isEmpty())throw new Error("剪贴板图片损坏");const bytes=picture?picture.toPNG():source;if(bytes.length>11*1024*1024)throw new Error("图片过大");
+            const result=await bridge.call("stage_group_clipboard_image",{groupId,encoded:bytes.toString("base64")} as never);if(locked||generation!==lockGeneration)throw new Error("应用已锁定");return{ok:true,result};
+          }
+          if(name==="export_group_attachment"){
+            const input=args as {groupId:string;id:string;preview?:boolean;media?:"image"|"audio"};if(typeof input.groupId!=="string"||typeof input.id!=="string"||input.groupId.length>128||input.id.length>128||Object.keys(args).some(k=>!["groupId","id","preview","media"].includes(k)))throw new Error("无效群附件导出参数");
+            let destination:string|undefined;if(!input.preview){const result=await dialog.showSaveDialog(mainWindow!,{title:"保存认证后的群附件"});if(result.canceled)return{ok:true,result:null};destination=result.filePath;}
+            if(locked||generation!==lockGeneration)throw new Error("应用已锁定");
+            const directory=await fs.mkdtemp(path.join(input.preview?app.getPath("temp"):path.dirname(destination!),".liteseal-group-export-"));const temporary=path.join(directory,"verified");
+            try{await bridge.call("export_group_attachment",{groupId:input.groupId,id:input.id,path:temporary} as never);if(locked||generation!==lockGeneration)throw new Error("应用已锁定");if(input.preview){const info=await fs.stat(temporary);if(info.size>20*1024*1024)throw new Error("群附件过大");const bytes=await fs.readFile(temporary);let mime=bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]))?"image/png":bytes[0]===255&&bytes[1]===216&&bytes[2]===255?"image/jpeg":bytes.subarray(0,4).toString()==="RIFF"&&bytes.subarray(8,12).toString()==="WEBP"?"image/webp":null;if(input.media==="audio"){if(!bytes.subarray(0,4).equals(Buffer.from([0x1a,0x45,0xdf,0xa3]))||!bytes.subarray(0,4096).includes(Buffer.from("A_OPUS")))throw new Error("群语音格式无效");mime="audio/webm";}if(!mime)throw new Error("附件格式不能预览，请另存为");return{ok:true,result:`data:${mime};base64,${bytes.toString("base64")}`};}await fs.rename(temporary,destination!);return{ok:true,result:"已保存"};}finally{await fs.rm(directory,{recursive:true,force:true});}
+          }
           const backupEpoch = backupGeneration;
           if (name === "start_backup_export" || name === "start_backup_restore") {
             const input = args as { password: string; includeAttachments?: boolean };
@@ -206,14 +227,14 @@ else {
           }
           if (name === "close_backup_archive") { invalidateBackups(); return { ok: true, result: null }; }
           if (name === "export_backup_attachment") {
-            const input = args as { id: string; messageId: string; preview?: boolean };
-            if (typeof input.id !== "string" || typeof input.messageId !== "string" || Object.keys(args).some(key => !["id", "messageId", "preview"].includes(key)) || input.preview !== undefined && typeof input.preview !== "boolean" || readingArchive && input.id !== archiveHandle) throw new Error("恢复附件参数无效");
+            const input = args as { id: string; messageId: string; groupId?:string; preview?: boolean };
+            if (typeof input.id !== "string" || typeof input.messageId !== "string" || Object.keys(args).some(key => !["id", "messageId", "groupId", "preview"].includes(key)) || input.preview !== undefined && typeof input.preview !== "boolean" || readingArchive && input.id !== archiveHandle) throw new Error("恢复附件参数无效");
             let destination: string | undefined;
             if (!input.preview) { const choice = await dialog.showSaveDialog(senderWindow, { title: "从离线档案保存附件（新文件）", defaultPath: "attachment" }); if (choice.canceled || !choice.filePath) return { ok: true, result: null }; destination = choice.filePath; }
             const directory = await fs.mkdtemp(path.join(destination ? path.dirname(destination) : app.getPath("temp"), ".liteseal-archive-media-"));
             try {
               const temporary = path.join(directory, "verified");
-              const mime = await bridge.call(name, { id: input.id, messageId: input.messageId, path: temporary } as never);
+              const mime = await bridge.call(name, { id: input.id, messageId: input.messageId, groupId:input.groupId, path: temporary } as never);
               if (locked || generation !== lockGeneration || backupEpoch !== backupGeneration) throw new Error("应用锁定或恢复档案已关闭");
               await bridge.call("get_backup_archive_info", { id: input.id });
               if (locked || generation !== lockGeneration || backupEpoch !== backupGeneration) throw new Error("应用锁定或恢复档案已关闭");

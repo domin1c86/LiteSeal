@@ -172,6 +172,8 @@ const GROUP_TABLES: &[&str] = &[
     "local_group_drafts",
     "local_collab_log",
     "local_collab_cursor",
+    "local_extension_log",
+    "local_extension_cursor",
 ];
 fn copy_table(
     source: &Connection,
@@ -361,6 +363,7 @@ fn rebuild(
     identity: &KeystoreData,
     include_attachments: bool,
     cancel: &AtomicBool,
+    restoring: bool,
 ) -> Result<Summary> {
     validate_identity(identity)?;
     let scope = clean_schema(path, identity)?;
@@ -508,6 +511,67 @@ fn rebuild(
     drop(rows);
     drop(q);
     target.execute_batch("COMMIT;").map_err(db)?;
+    let groups = GroupStore::open(
+        path.to_str().ok_or("备份路径无效")?,
+        &identity.server_url,
+        group_identity(identity),
+    )?;
+    let mut q = target
+        .prepare("SELECT group_id FROM local_group_roots WHERE scope=?1")
+        .map_err(db)?;
+    for id in q
+        .query_map([&scope], |r| r.get::<_, String>(0))
+        .map_err(db)?
+    {
+        groups.extension_validate(&id.map_err(db)?, &keys)?;
+    }
+    let count:u64=target.query_row("SELECT COUNT(*) FROM local_extension_log WHERE scope=?1 AND content IS NOT NULL AND json_extract(header,'$.action.kind')='attachment'",[&scope],|r|r.get(0)).map_err(db)?;
+    let mut included = 0;
+    if exists(source, "group_attachment_cache")? {
+        let mut q=source.prepare("SELECT scope,user_id,group_id,id,joined,metadata,ciphertext,offset,direction,root FROM group_attachment_cache WHERE scope=?1 AND user_id=?2").map_err(db)?;
+        let mut rows = q.query(params![scope, identity.user_id]).map_err(db)?;
+        while let Some(row) = rows.next().map_err(db)? {
+            check_cancel(cancel)?;
+            let group: String = row.get(2).map_err(db)?;
+            let blob: String = row.get(3).map_err(db)?;
+            let root: String = row.get(9).map_err(db)?;
+            let known:bool=target.query_row("SELECT EXISTS(SELECT 1 FROM local_group_messages WHERE scope=?1 AND group_id=?2 AND message_id=?3)",params![scope,group,root],|r|r.get(0)).map_err(db)?;
+            if !include_attachments
+                || !known
+                || row.get::<_, String>(8).map_err(db)? != "download"
+                || groups
+                    .media_cache_verify_row(
+                        &group,
+                        &root,
+                        &blob,
+                        &row.get::<_, Vec<u8>>(5).map_err(db)?,
+                        &row.get::<_, Vec<u8>>(6).map_err(db)?,
+                        row.get(7).map_err(db)?,
+                        &keys,
+                    )
+                    .is_err()
+            {
+                if restoring {
+                    return Err("恢复群附件缓存范围、完整性或认证无效".into());
+                }
+                summary.skipped_attachments += 1;
+                continue;
+            }
+            let values = (0..10)
+                .map(|i| row.get::<_, Value>(i))
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(db)?;
+            target
+                .execute(
+                    "INSERT INTO group_attachment_cache VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    rusqlite::params_from_iter(values),
+                )
+                .map_err(db)?;
+            included += 1;
+        }
+    }
+    summary.attachments += included;
+    summary.missing_attachments += count.saturating_sub(included);
     Ok(summary)
 }
 
@@ -566,14 +630,21 @@ pub fn export_guarded(
         }
     }
     let clean = work.0.join("history.db");
-    let summary = rebuild(&snapshot, &clean, &identity, include_attachments, cancel)?;
+    let summary = rebuild(
+        &snapshot,
+        &clean,
+        &identity,
+        include_attachments,
+        cancel,
+        false,
+    )?;
     drop(snapshot);
     let total = fs::metadata(&clean).map_err(io)?.len();
     if !(512..=8 * 1024 * 1024 * 1024).contains(&total) {
         return Err("备份数据库大小不支持（上限 8 GiB）".into());
     }
     let metadata = Zeroizing::new(Manifest {
-        version: 1,
+        version: 2,
         identity: (*identity).clone(),
         summary: summary.clone(),
         database_bytes: total,
@@ -634,7 +705,7 @@ pub fn restore(
         Zeroizing::new(serde_json::from_slice(&header).map_err(|_| "备份清单无效")?);
     let identity = Zeroizing::new(manifest.identity.clone());
     validate_identity(&identity)?;
-    if manifest.version != 1
+    if !matches!(manifest.version, 1 | 2)
         || manifest.database_bytes > 8 * 1024 * 1024 * 1024
         || manifest.database_bytes < 512
     {
@@ -685,6 +756,7 @@ pub fn restore(
         &identity,
         true,
         cancel,
+        true,
     )?;
     if summary.messages != manifest.summary.messages
         || summary.groups != manifest.summary.groups

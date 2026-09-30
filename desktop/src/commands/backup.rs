@@ -354,9 +354,10 @@ fn page_inner(
             .map(|m| m.id.clone())
             .collect::<Vec<_>>();
         let collaboration = groups.collaboration_view_messages(conversation, Some(&ids), &keys)?;
+        let extensions = groups.extension_view(conversation, &ids, &keys)?;
         let draft = groups.draft(conversation, &keys)?;
         return Ok(
-            json!({"messages":page.messages.into_iter().map(|m|json!({"id":m.id,"sender":m.sender_user_id,"timestamp":m.sent_at,"text":m.text,"status":m.status})).collect::<Vec<_>>(),"next_group":page.next_before,"collaboration":collaboration,"draft":draft}),
+            json!({"messages":page.messages.into_iter().map(|m|json!({"id":m.id,"sender":m.sender_user_id,"timestamp":m.sent_at,"text":m.text,"status":m.status})).collect::<Vec<_>>(),"next_group":page.next_before,"collaboration":collaboration,"extensions":extensions,"draft":draft}),
         );
     }
     if kind != "direct" || before_time.is_some() != before_id.is_some() {
@@ -484,6 +485,7 @@ fn validate_archive(archive: &Archive, cancel: &AtomicBool) -> Result<()> {
         backup::check_cancel(cancel)?;
         let id = id.map_err(|_| "恢复群目录无效")?;
         groups.state(&id)?;
+        groups.extension_validate(&id, &keys)?;
         groups.draft(&id, &keys)?;
         let mut before = None;
         loop {
@@ -525,6 +527,27 @@ pub fn export_attachment(state: &AppState, id: &str, message: &str, path: &str) 
         return Err("附件原消息已撤回".into());
     }
     let (descriptor, bytes) = backup::attachment_plain(&conn, saved, message)?;
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(path)
+        .map_err(|_| "附件目标已存在或不可写")?;
+    file.write_all(&bytes)
+        .and_then(|_| file.sync_all())
+        .map_err(|_| "附件保存失败")?;
+    Ok(descriptor.mime)
+}
+pub fn export_group_attachment(
+    state: &AppState,
+    id: &str,
+    group: &str,
+    message: &str,
+    path: &str,
+) -> Result<String> {
+    let archive = archive(state, id)?;
+    let keys = backup::identity_keys(&archive.restored.identity)?;
+    let (descriptor, bytes) = store(&archive)?.media_archive_read(group, message, &keys)?;
     use std::io::Write;
     let mut file = std::fs::OpenOptions::new()
         .create_new(true)

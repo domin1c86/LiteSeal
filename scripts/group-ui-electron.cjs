@@ -1,4 +1,4 @@
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow,nativeTheme } = require('electron');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const directory = process.argv[2];
@@ -28,6 +28,16 @@ app.whenReady().then(async () => {
   const overflow = await window.webContents.executeJavaScript('document.documentElement.scrollWidth > window.innerWidth');
   if (overflow) throw new Error('narrow viewport horizontal overflow');
   await fs.writeFile(path.join(directory, 'narrow.png'), (await window.webContents.capturePage()).toPNG());
+  for(const theme of ['light','dark']){
+    nativeTheme.themeSource=theme;
+    for(const [label,width,height] of [['wide',1280,900],['narrow',390,844]]){
+      window.setContentSize(width,height);await window.webContents.executeJavaScript('window.showExtensions()');
+      if(!await window.webContents.executeJavaScript('document.querySelector(".group-activity")?.textContent.includes("周末讨论活动")'))throw new Error('extension card missing at capture');
+      window.setContentSize(width+1,height);await new Promise(resolve=>setTimeout(resolve,100));window.setContentSize(width,height);await new Promise(resolve=>setTimeout(resolve,300));
+      if(await window.webContents.executeJavaScript('document.documentElement.scrollWidth > window.innerWidth'))throw new Error('extension viewport horizontal overflow');
+      await fs.writeFile(path.join(directory,`extensions-${theme}-${label}.png`),(await window.webContents.capturePage()).toPNG());
+    }
+  }
   if (report.errors.length) throw new Error('renderer console errors');
   report.status = 'passed';
 }).catch(error => { report.errors.push(String(error)); }).finally(async () => {

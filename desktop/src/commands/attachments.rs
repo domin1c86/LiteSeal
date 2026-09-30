@@ -84,7 +84,7 @@ fn save(state: &AppState, item: &AttachmentTransfer) -> Result<(), String> {
         .save_attachment_transfer(item)
         .map_err(|e| e.to_string())
 }
-fn media(bytes: &[u8]) -> &'static str {
+pub(super) fn media(bytes: &[u8]) -> &'static str {
     if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         "image/png"
     } else if bytes.starts_with(&[255, 216, 255]) {
@@ -106,7 +106,7 @@ fn voice_format(bytes: &[u8]) -> bool {
         && header.windows(6).any(|part| part == b"A_OPUS")
         && header.windows(8).any(|part| part == b"OpusHead")
 }
-fn safe_name(path: &std::path::Path) -> String {
+pub(super) fn safe_name(path: &std::path::Path) -> String {
     path.file_name()
         .unwrap_or_default()
         .to_string_lossy()

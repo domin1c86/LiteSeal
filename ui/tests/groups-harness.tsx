@@ -2,7 +2,8 @@ import { checkIndicator, checkNoSelectionShift } from "./indicator-checks";
 import { createRoot } from 'react-dom/client';
 import '../src/theme.css';
 import GroupPanel from '../src/components/GroupPanel';
-import type { DesktopApi, GroupView, GroupMessage, GroupCollaboration, CollaborationCommand } from '../../electron/contracts';
+import { VoiceRecorder } from '../src/components/VoiceRecorder';
+import type { DesktopApi, GroupView, GroupMessage, GroupCollaboration, CollaborationCommand,GroupExtensions,GroupExtensionCommand,AttachmentTask } from '../../electron/contracts';
 
 const root = createRoot(document.getElementById('root')!);
 const copy = <T,>(value: T): T => structuredClone(value);
@@ -22,6 +23,11 @@ let delaySnapshot: null | { started: boolean; resolve?: (value: unknown) => void
 let delayInvites: null | { started: boolean; resolve?: (value: unknown) => void } = null;
 let collab: GroupCollaboration = { polls: [], pin: null, pin_unavailable: false, pin_revision: 0, pending: false, conflict: false, pending_message: null };
 let collabSupported = true;
+let extSupported=false;
+let extensions:GroupExtensions={attachments:[],activities:[],pending:false,conflict:false,pending_root:null};
+let mediaTasks:AttachmentTask[]=[];
+let mediaCalls:string[]=[];
+let recorded:{groupId:string;durationMs:number;encoded:string}[]=[];
 let failCollab = false;
 let submitted: CollaborationCommand[] = [];
 let active: string | null = null;
@@ -32,6 +38,22 @@ let extraGroups: GroupView[] = [];
 const snapshot = () => ({ groups: [copy(group), ...copy(extraGroups)], invitations: [], errors: [], next_cursor: null });
 const invitation = (id: string, status: string) => ({ id, group_id: group.id, user_id: 'target-' + id, device_id: 'device-' + id, expires_at: 2000000000000, status });
 const api = {
+  get_group_extensions:async({messageIds}:{messageIds:string[]})=>({...copy(extensions),attachments:copy(extensions.attachments.filter(f=>messageIds.includes(f.id)&&messages.some(m=>m.id===f.id))),activities:copy(extensions.activities.filter(a=>messageIds.includes(a.id)&&messages.some(m=>m.id===a.id)))}),
+  sync_group_extensions:async()=>extSupported,
+  retry_group_extension:async()=>{extensions.pending=false;},
+  cancel_group_extension:async()=>{extensions.pending=false;extensions.conflict=false;},
+  submit_group_extension:async({command}:{command:GroupExtensionCommand})=>{
+    if(command.kind==='activity'){extensions.activities.push({id:'activity',creator:'owner',title:command.title,start_at:command.start_at,timezone:command.timezone,location:command.location,description:command.description,responses:{},participants:['owner','member'],departed:[],closed:false,cancelled:false,eligible:true,can_manage:true,revision:1});messages.push({id:'activity',sender_user_id:'owner',sender_device_id:'device-owner',sent_at:Date.now(),text:'[群附件或活动，请升级客户端查看]',status:'accepted'});return;}
+    const a=extensions.activities.find(a=>a.id===command.activity)!;if(a.revision!==command.revision)throw new Error('activity conflict');if(command.kind==='respond'){if(a.closed)throw new Error('closed activity');a.responses.owner=command.answer;}else{a.closed=true;if(command.kind==='cancel')a.cancelled=true;}a.revision++;
+  },
+  group_attachment_tasks:async()=>copy(mediaTasks),
+  stage_group_recorded_audio:async(input:{groupId:string;durationMs:number;encoded:string})=>{recorded.push(input);return{};},
+  select_group_attachment:async({groupId}:{groupId:string})=>{check(groupId===group.id,'wrong group media scope');mediaCalls.push('group select');const task={id:'group-media',peer_id:groupId,message_id:'',name:'群图片.png',size:128,mime:'image/png',offset:0,total:168,direction:'upload'};mediaTasks=[task];return copy(task);},
+  group_attachment_step:async()=>{mediaCalls.push('group step');mediaTasks[0].offset=mediaTasks[0].total;return copy(mediaTasks[0]);},
+  publish_group_attachment:async()=>{mediaCalls.push('group publish');mediaTasks=[];return 'file-root';},
+  cancel_group_attachment:async()=>{mediaCalls.push('group cancel');mediaTasks=[];},
+  export_group_attachment:async()=>{mediaCalls.push('group preview');return 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a5S8AAAAASUVORK5CYII=';},
+  clear_group_attachment_cache:async()=>0,
   get_group_collaboration: async ({ messageIds }: { messageIds?: string[] }) => ({ ...copy(collab), polls: copy(collab.polls.filter(poll => !messageIds || messageIds.includes(poll.id))) }),
   sync_group_collaboration: async () => collabSupported,
   retry_group_collaboration: async () => { const message=messages.find(m=>m.id===collab.pending_message);if(message)message.status='accepted';collab.pending = false;collab.pending_message=null; },
@@ -72,9 +94,10 @@ async function select() {
   await wait(() => !!document.querySelector('nav[aria-label="群会话"] button'), 'group list');
   (document.querySelector('nav[aria-label="群会话"] button') as HTMLButtonElement).click();
   await wait(() => !!button('群数据管理') && !busy, 'selected group');
-  await wait(() => document.querySelector('textarea')?.getAttribute('placeholder')?.startsWith('输入群消息'), 'composer');
+  await wait(() => document.querySelector('[aria-label="群消息正文"]')?.getAttribute('placeholder')?.startsWith('输入群消息'), 'composer');
 }
 function reset() {
+  extSupported=false;extensions={attachments:[],activities:[],pending:false,conflict:false,pending_root:null};mediaTasks=[];mediaCalls=[];
   extraGroups = [];
   group = { id: 'group-one', name: 'Trial group', owner: 'owner', epoch: 3, closed: false, active: true, trusted: true, members: [member('owner'), member('member')], unread: 1, pending: false, muted: false };
   messages = [{ id: 'old', sender_user_id: 'member', sender_device_id: 'device-member', sent_at: 1000000000000, text: 'Synthetic old message', status: 'received' }];
@@ -167,6 +190,27 @@ async function input(text: string) {
   await click('群数据管理'); check(active === null, 'dialog suppresses active conversation');
   await closeDialog(); check(active === group.id, 'active conversation restored');
   passed.push('notification active target tracks modal visibility');
+  reset();extSupported=true;await mount();await select();await wait(()=>!!button('发布活动'),'activity composer');
+  await fill('活动标题','活动 UI 🎉');await fill('活动开始时间','2027-01-02T18:00');await click('发布活动');await wait(()=>body().includes('你尚未回应'),'activity card');
+  const count=messages.length;await click('待定 (0)');await click('参加 (0)');check(messages.length===count&&extensions.activities[0].responses.owner==='yes','RSVP creates no roots and replaces answer');check(body().includes('member：未回应'),'unset differs from maybe');
+  await click('关闭报名');check(!extensions.activities[0].closed,'close requires confirmation');await click('确认关闭报名');check(body().includes('报名已关闭，活动仍有效')&&button('参加 (1)')!.disabled,'manual closed state');
+  await click('取消活动');await click('确认取消活动');check(body().includes('活动已取消'),'cancel after close');passed.push('activity validation, named replacement, unset distinction and irreversible close/cancel');
+  await click('选择文件或图片（20 MiB）');await click('发送前预览');await wait(()=>!!document.querySelector('img[alt="待发图片预览"]'),'group image preview');await click('关闭预览');await click('确认发送 / 继续原任务');check(mediaCalls.includes('group step')&&mediaCalls.includes('group publish'),'group target sends group media');
+  await click('选择文件或图片（20 MiB）');await click('取消任务');check(mediaCalls.includes('group cancel')&&mediaTasks.length===0,'group cancellation target');passed.push('group file selection, preview, upload and cancellation use scoped business API');
+  extensions.conflict=true;window.dispatchEvent(new Event('liteseal-groups-changed'));await wait(()=>!!button('取消原扩展任务'),'extension conflict');check(button('重试原扩展')!.disabled,'conflict prevents automatic resign');await click('取消原扩展任务');check(!extensions.conflict,'explicit cancellation');
+  await click('群数据管理');(document.querySelector('input[type="checkbox"]') as HTMLInputElement).click();await click('确认清空本机历史');await closeDialog();check(!document.querySelector('[role="log"]')!.textContent!.includes('活动 UI'),'hidden activity stays absent');passed.push('extension conflict cancellation and hidden activity visibility');
+  const savedRecorder=window.MediaRecorder,savedMedia=Object.getOwnPropertyDescriptor(navigator,'mediaDevices'),savedNow=Date.now;
+  let microphoneMode='denied',released=0,clockOffset=0;recorded=[];
+  class FakeRecorder{static isTypeSupported(){return true;}state='inactive';ondataavailable:((event:{data:Blob})=>void)|null=null;onstop:(()=>void)|null=null;start(){this.state='recording';}stop(){if(this.state!=='recording')return;this.state='inactive';this.ondataavailable?.({data:new Blob([new Uint8Array([26,69,223,163]),'webm A_OPUS OpusHead isolated voice'],{type:'audio/webm'})});this.onstop?.();}}
+  try{
+    (window as any).MediaRecorder=FakeRecorder;Date.now=()=>savedNow()+clockOffset;
+    Object.defineProperty(navigator,'mediaDevices',{configurable:true,value:{getUserMedia:async()=>{if(microphoneMode==='denied')throw new DOMException('mock denied','NotAllowedError');if(microphoneMode==='missing')throw new DOMException('mock absent','NotFoundError');let stopped=false;return{getTracks:()=>[{stop(){if(!stopped){stopped=true;released++;}}}]};}}});
+    const recorderPanel=async()=>{root.render(<VoiceRecorder key={++generation} target={{kind:'group',id:'voice-group'}} onStaged={async()=>{}}/>);await pause();};
+    await recorderPanel();await click('录制语音（最多 60 秒）');check(body().includes('mock denied'),'microphone denial shown');microphoneMode='missing';await click('录制语音（最多 60 秒）');check(body().includes('mock absent'),'missing device shown');
+    microphoneMode='ok';await click('录制语音（最多 60 秒）');clockOffset=61000;await wait(()=>!!button('加入待发附件'),'60s automatic stop');check(released===1&&!!document.querySelector('audio'),'stopped device and local preview');await click('加入待发附件');check(recorded[0].groupId==='voice-group'&&recorded[0].durationMs===60000,'recording uses group target and 60s clamp');
+    clockOffset=0;await click('录制语音（最多 60 秒）');window.dispatchEvent(new Event('liteseal-app-locked'));await pause();check(released===2&&!document.querySelector('audio'),'lock discards clip and releases device');
+    await click('录制语音（最多 60 秒）');root.render(<p>Recorder closed</p>);await pause();check(released===3,'unmount releases device');passed.push('mock microphone denial, missing device, 60s stop, preview, group target, lock and device release');
+  }finally{Date.now=savedNow;window.MediaRecorder=savedRecorder;if(savedMedia)Object.defineProperty(navigator,'mediaDevices',savedMedia);else delete (navigator as any).mediaDevices;}
   return passed;
 };
 (window as any).showStorage = async () => { await click('群数据管理'); };
@@ -178,6 +222,7 @@ async function input(text: string) {
   collab.polls[0].votes = { member:'option-0' }; collab.pin='intro'; collab.pin_revision=1;
   await mount();await select();
 };
+(window as any).showExtensions=async()=>{reset();extSupported=true;extensions.activities=[{id:'activity',creator:'owner',title:'周末讨论活动 🎉',start_at:1800000000000,timezone:'Asia/Singapore',location:'会议室与线上会话',description:'创建后内容固定。实名报名可选择参加、不参加或待定。',responses:{member:'maybe'},participants:['owner','member'],departed:[],closed:false,cancelled:false,eligible:true,can_manage:true,revision:2}];messages.push({id:'activity',sender_user_id:'owner',sender_device_id:'device-owner',sent_at:1000000000011,text:'[群附件或活动，请升级客户端查看]',status:'accepted'});await mount();await select();await wait(()=>body().includes('周末讨论活动'),'extension screenshot');};
 
 (window as any).showGroupIndicators = async () => {
   reset(); group.name = '很长的群会话名称，用于检查多行布局与指示条';

@@ -13,6 +13,22 @@ export interface GroupPoll { id: string; creator: string; question: string; opti
 export interface GroupCollaboration { polls: GroupPoll[]; pin: string | null; pin_unavailable: boolean; pin_revision: number; pending: boolean; conflict: boolean; pending_message: string | null }
 export type CollaborationCommand = { kind: "mention"; text: string; mentions: CollaborationMember[] } | { kind: "poll"; question: string; options: string[] } | { kind: "vote"; poll: string; option: string; revision: number } | { kind: "close"; poll: string; revision: number } | { kind: "pin"; message: string | null; revision: number };
 export interface CommandMap {
+  get_group_extensions: { args: {groupId:string;messageIds:string[]}; result:GroupExtensions };
+  sync_group_extensions: { args: {groupId:string}; result:boolean };
+  submit_group_extension: { args: {groupId:string;command:GroupExtensionCommand}; result:null };
+  retry_group_extension: { args: {groupId:string}; result:null };
+  cancel_group_extension: { args: {groupId:string}; result:null };
+  select_group_attachment: { args: {groupId:string}; result:AttachmentTask|null };
+  stage_group_attachment_file: { args: {groupId:string;file:File}; result:AttachmentTask };
+  stage_group_recorded_audio: { args: {groupId:string;encoded:string;durationMs:number}; result:AttachmentTask };
+  stage_group_clipboard_image: { args: {groupId:string}; result:AttachmentTask };
+  group_attachment_tasks: { args: {groupId:string}; result:AttachmentTask[] };
+  group_attachment_step: { args: {groupId:string;id:string}; result:AttachmentTask };
+  publish_group_attachment: { args: {groupId:string;id:string}; result:string };
+  cancel_group_attachment: { args: {groupId:string;id:string}; result:null };
+  begin_group_attachment_download: { args: {groupId:string;messageId:string}; result:AttachmentTask };
+  export_group_attachment: { args: {groupId:string;id:string;preview?:boolean;media?:"image"|"audio"}; result:string|null };
+  clear_group_attachment_cache: { args: {groupId?:string}; result:number };
   start_backup_export: { args: { password: string; includeAttachments: boolean }; result: string | null };
   start_backup_restore: { args: { password: string }; result: string | null };
   get_backup_job: { args: { id: string }; result: BackupJob };
@@ -21,7 +37,7 @@ export interface CommandMap {
   get_backup_archive_info: { args: { id: string }; result: BackupArchiveInfo };
   get_backup_conversations: { args: { id: string; after?: string }; result: { items: BackupConversation[]; next: string | null } };
   get_backup_history: { args: { id: string; kind: "direct" | "group"; conversationId: string; beforeTime?: number; beforeId?: string; beforeGroup?: number }; result: BackupHistory };
-  export_backup_attachment: { args: { id: string; messageId: string; preview?: boolean }; result: string | null };
+  export_backup_attachment: { args: { id: string; messageId: string; groupId?:string; preview?: boolean }; result: string | null };
   close_backup_archive: { args: {}; result: void };
   get_group_collaboration: { args: { groupId: string; messageIds?: string[] }; result: GroupCollaboration };
   sync_group_collaboration: { args: { groupId: string }; result: boolean };
@@ -145,7 +161,7 @@ export interface BackupSummary { messages: number; groups: number; attachments: 
 export interface BackupJob { id: string; state: "running" | "completed" | "failed" | "cancelled"; completed: number; total: number; summary: BackupSummary | null; error: string | null; restorable: boolean }
 export interface BackupArchiveInfo { id: string; user_id: string; device_id: string; server_url: string; fingerprint: string; signing_fingerprint: string; summary: BackupSummary }
 export interface BackupConversation { id: string; kind: "direct" | "group"; name: string }
-export interface BackupHistory { messages: { id: string; sender: string; timestamp: number; text: string; status: string }[]; next?: { time: number; id: string } | null; next_group?: number | null; collaboration?: GroupCollaboration; draft?: string; reactions?: { target_id: string; actor: string; emoji: string }[] }
+export interface BackupHistory { messages: { id: string; sender: string; timestamp: number; text: string; status: string }[]; next?: { time: number; id: string } | null; next_group?: number | null; collaboration?: GroupCollaboration; extensions?:GroupExtensions; draft?: string; reactions?: { target_id: string; actor: string; emoji: string }[] }
 export interface GroupMember { user_id: string; device_id: string; name: string; fingerprint: string; joined_epoch: number }
 export interface GroupView { id: string; name: string; owner: string; epoch: number; closed: boolean; active: boolean; trusted: boolean; members: GroupMember[]; unread: number; pending: boolean; muted: boolean }
 export interface GroupMessage { id: string; sender_user_id: string; sender_device_id: string; sent_at: number; text: string; status: string }
@@ -154,9 +170,15 @@ export interface GroupSnapshot { groups: GroupView[]; invitations: { id: string;
 export interface ScheduledTask { id: string; peer_id: string; due_at: number; text: string; state: string; error: string; sealed: boolean }
 export interface AttachmentTask { id: string; peer_id: string; message_id: string; name: string; size: number; mime: string; duration_ms?: number; offset: number; total: number; direction: string }
 export type DesktopApi = {
+  // The mapped business API never exposes private attachment descriptors.
   [K in CommandName]: (args: CommandMap[K]["args"]) => Promise<CommandMap[K]["result"]>;
 };
+export type GroupAnswer="yes"|"no"|"maybe";
+export interface GroupActivity { id:string;creator:string;title:string;start_at:number;timezone:string;location:string;description:string;responses:Record<string,GroupAnswer>;participants:string[];departed:string[];closed:boolean;cancelled:boolean;eligible:boolean;can_manage:boolean;revision:number }
+export interface GroupExtensions { attachments:{id:string;blob:string;name:string;size:number;mime:string;duration_ms:number|null}[];activities:GroupActivity[];pending:boolean;conflict:boolean;pending_root:string|null }
+export type GroupExtensionCommand={kind:"activity";title:string;start_at:number;timezone:string;location:string;description:string}|{kind:"respond";activity:string;answer:GroupAnswer;revision:number}|{kind:"close"|"cancel";activity:string;revision:number};
 export const commandNames = [
+  "get_group_extensions", "sync_group_extensions", "submit_group_extension", "retry_group_extension", "cancel_group_extension", "select_group_attachment", "stage_group_attachment_file", "stage_group_recorded_audio", "stage_group_clipboard_image", "group_attachment_tasks", "group_attachment_step", "publish_group_attachment", "cancel_group_attachment", "begin_group_attachment_download", "export_group_attachment", "clear_group_attachment_cache",
   "start_backup_export", "start_backup_restore", "get_backup_job", "cancel_backup_job", "open_backup_archive", "get_backup_archive_info", "get_backup_conversations", "get_backup_history", "export_backup_attachment", "close_backup_archive",
   "get_group_collaboration", "sync_group_collaboration", "submit_group_collaboration", "retry_group_collaboration", "discard_group_collaboration_conflict",
   "sync_group",

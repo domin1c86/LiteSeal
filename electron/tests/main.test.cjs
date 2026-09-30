@@ -145,7 +145,7 @@ test('main process restricts IPC origins, navigation and packaged assets without
   intervals[1](); await new Promise(resolve=>setTimeout(resolve,0));
   assert.equal(commands.filter(name=>name==='process_groups').length,previousGroupCalls+1);
   assert.equal(rendererEvents.length,previousEvents);
-  for(const name of ['get_group_collaboration','sync_group_collaboration','submit_group_collaboration','retry_group_collaboration','discard_group_collaboration_conflict','get_group_storage_stats','clear_group_history','get_sent_group_invites','revoke_group_invite','set_group_muted','get_groups','get_group_history','group_draft','send_group_text','accept_group_invite','change_group_membership','process_groups']) {
+  for(const name of ['get_group_extensions','sync_group_extensions','submit_group_extension','retry_group_extension','cancel_group_extension','select_group_attachment','stage_group_attachment_file','stage_group_recorded_audio','group_attachment_step','publish_group_attachment','cancel_group_attachment','export_group_attachment','get_group_collaboration','sync_group_collaboration','submit_group_collaboration','retry_group_collaboration','discard_group_collaboration_conflict','get_group_storage_stats','clear_group_history','get_sent_group_invites','revoke_group_invite','set_group_muted','get_groups','get_group_history','group_draft','send_group_text','accept_group_invite','change_group_membership','process_groups']) {
     assert.equal((await handlers.get(`liteseal:${name}`)(valid,{})).ok,false,name);
   }
   assert.equal(await permission('media', { requestingUrl: 'liteseal://app/index.html', mediaTypes: ['audio'] }), false);

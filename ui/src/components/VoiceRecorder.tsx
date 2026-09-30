@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { getDesktopApi } from "../lib/desktopApi";
+import { attachmentApi,type AttachmentTarget } from "../lib/attachmentTarget";
 
 const MAX_BYTES = 11 * 1024 * 1024;
 
@@ -12,7 +12,8 @@ function encode(blob: Blob): Promise<string> {
   });
 }
 
-export function VoiceRecorder({ peerId, onStaged }: { peerId: string; onStaged: () => Promise<void> }) {
+export function VoiceRecorder({ peerId="", target:chosen, onStaged }: { peerId?: string;target?:AttachmentTarget; onStaged: () => Promise<void> }) {
+  const target:AttachmentTarget=chosen??{kind:"direct",id:peerId};
   const [recording, setRecording] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [clip, setClip] = useState<{ blob: Blob; url: string; durationMs: number } | null>(null);
@@ -109,7 +110,7 @@ export function VoiceRecorder({ peerId, onStaged }: { peerId: string; onStaged: 
     try {
       const encoded = await encode(clip.blob);
       if (!mounted.current) return;
-      await getDesktopApi().stage_recorded_audio({ peerId, encoded, durationMs: clip.durationMs });
+      await attachmentApi(target).voice(encoded,clip.durationMs);
       if (mounted.current) clearClip();
       await onStaged();
     } catch (failure) { if (mounted.current) setError(String(failure)); }
