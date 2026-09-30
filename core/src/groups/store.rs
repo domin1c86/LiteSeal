@@ -1,7 +1,12 @@
 use super::*;
 #[path = "collab_store.rs"]
 mod collaboration;
+#[path = "extension_store.rs"]
+mod extensions;
+#[path = "media_store.rs"]
+mod media;
 pub use collaboration::{CollaborationView, PollView};
+pub use extensions::{ActivityView, ExtensionAttachmentView, ExtensionView};
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 
 pub struct GroupStore {
@@ -164,6 +169,9 @@ impl GroupStore {
             .map_err(db)?;
         conn.execute_batch(SCHEMA).map_err(db)?;
         conn.execute_batch(collaboration::SCHEMA).map_err(db)?;
+        conn.execute_batch(extensions::SCHEMA).map_err(db)?;
+        conn.execute_batch(crate::attachment_cache::GROUP_SCHEMA)
+            .map_err(db)?;
         Ok(Self {
             conn,
             scope,
@@ -274,6 +282,31 @@ impl GroupStore {
         text: &str,
         keys: &crypto::KeyPair,
     ) -> Result<String, String> {
+        self.seal_message(id, text, keys, None)
+    }
+    pub fn seal_extension(
+        &mut self,
+        id: &str,
+        content: &liteseal_shared::group_extension::Content,
+        keys: &crypto::KeyPair,
+    ) -> Result<String, String> {
+        if self.extension_pending(id)?.is_some() || self.extension_conflicted(id)? {
+            return Err("请先处理原群扩展任务".into());
+        }
+        self.seal_message(
+            id,
+            liteseal_shared::group_extension::PLACEHOLDER,
+            keys,
+            Some(content),
+        )
+    }
+    fn seal_message(
+        &mut self,
+        id: &str,
+        text: &str,
+        keys: &crypto::KeyPair,
+        extension: Option<&liteseal_shared::group_extension::Content>,
+    ) -> Result<String, String> {
         check_keys(&self.identity, keys)?;
         if text.trim().is_empty() || text.len() > MAX_GROUP_TEXT_BYTES {
             return Err("群文字不能为空或超过 4096 UTF-8 字节".into());
@@ -360,11 +393,37 @@ impl GroupStore {
         };
         tx.execute("INSERT INTO local_group_outbox(scope,group_id,message_id,batch,status) VALUES(?1,?2,?3,?4,'queued')",params![self.scope,id,message,json(&batch)?]).map_err(db)?;
         tx.execute("INSERT INTO local_group_messages(scope,group_id,message_id,body,status,sent_at,envelope) VALUES(?1,?2,?3,?4,'queued',?5,NULL)",params![self.scope,id,message,seal_local(&self.scope,id,&local,keys)?,sent_at]).map_err(db)?;
-        tx.execute(
-            "DELETE FROM local_group_drafts WHERE scope=?1 AND group_id=?2",
-            params![self.scope, id],
-        )
-        .map_err(db)?;
+        if let Some(content) = extension {
+            use liteseal_shared::{collaboration::Member, group_extension as e};
+            let action = match content {
+                e::Content::Activity(_) => e::Action::Activity,
+                e::Content::Attachment(a) => e::Action::Attachment {
+                    blob: a.blob.clone(),
+                    size: a.size,
+                    hash: a.hash.clone(),
+                },
+            };
+            let submission = e::make(
+                &current,
+                &Member::from(sender),
+                message.clone(),
+                uuid::Uuid::new_v4().to_string(),
+                None,
+                action,
+                Some(content),
+                batch,
+                keys,
+                sent_at,
+            )
+            .map_err(|_| invalid())?;
+            tx.execute("INSERT INTO local_extension_outbox(scope,group_id,id,body,status) VALUES(?1,?2,?3,?4,'queued')",params![self.scope,id,submission.event.id,json(&submission)?]).map_err(db)?;
+        } else {
+            tx.execute(
+                "DELETE FROM local_group_drafts WHERE scope=?1 AND group_id=?2",
+                params![self.scope, id],
+            )
+            .map_err(db)?;
+        }
         tx.commit().map_err(db)?;
         Ok(message)
     }
@@ -373,42 +432,54 @@ impl GroupStore {
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(db)?;
-        let batch = queued(&tx, &self.scope, id, &self.identity)?.ok_or_else(invalid)?;
-        if receipt.group_id != id
-            || receipt.message_id != batch[0].message_id
-            || receipt.recipients.len() != batch.len()
+        accepted_into(&tx, &self.scope, id, &self.identity, receipt)?;
+        tx.commit().map_err(db)
+    }
+}
+fn accepted_into(
+    tx: &Transaction<'_>,
+    scope: &str,
+    id: &str,
+    identity: &GroupIdentity,
+    receipt: &GroupMessageReceipt,
+) -> Result<(), String> {
+    let batch = queued(tx, scope, id, identity)?.ok_or_else(invalid)?;
+    if receipt.group_id != id
+        || receipt.message_id != batch[0].message_id
+        || receipt.recipients.len() != batch.len()
+    {
+        return Err(invalid());
+    }
+    let mut seen = std::collections::HashSet::new();
+    for recipient in &receipt.recipients {
+        if !["pending", "delivered", "removed"].contains(&recipient.status.as_str())
+            || !seen.insert(&recipient.recipient_device_id)
+            || !batch.iter().any(|e| {
+                e.recipient_user_id == recipient.recipient_user_id
+                    && e.recipient_device_id == recipient.recipient_device_id
+                    && e.recipient_join_epoch == recipient.recipient_join_epoch
+            })
         {
             return Err(invalid());
         }
-        let mut seen = std::collections::HashSet::new();
-        for recipient in &receipt.recipients {
-            if !["pending", "delivered", "removed"].contains(&recipient.status.as_str())
-                || !seen.insert(&recipient.recipient_device_id)
-                || !batch.iter().any(|e| {
-                    e.recipient_user_id == recipient.recipient_user_id
-                        && e.recipient_device_id == recipient.recipient_device_id
-                        && e.recipient_join_epoch == recipient.recipient_join_epoch
-                })
-            {
-                return Err(invalid());
-            }
-        }
-        for envelope in &batch {
-            let previous = head(
-                &tx,
-                &self.scope,
-                id,
-                "send",
-                (&envelope.sender_device_id, envelope.sender_join_epoch),
-                (&envelope.recipient_device_id, envelope.recipient_join_epoch),
-            )?;
-            validate_chain_head(envelope, previous.as_ref()).map_err(|_| invalid())?;
-            save_head(&tx, &self.scope, "send", envelope)?;
-        }
-        tx.execute("UPDATE local_group_outbox SET status='accepted' WHERE scope=?1 AND group_id=?2 AND message_id=?3",params![self.scope,id,receipt.message_id]).map_err(db)?;
-        tx.execute("UPDATE local_group_messages SET status='accepted' WHERE scope=?1 AND group_id=?2 AND message_id=?3",params![self.scope,id,receipt.message_id]).map_err(db)?;
-        tx.commit().map_err(db)
     }
+    for envelope in &batch {
+        let previous = head(
+            tx,
+            scope,
+            id,
+            "send",
+            (&envelope.sender_device_id, envelope.sender_join_epoch),
+            (&envelope.recipient_device_id, envelope.recipient_join_epoch),
+        )?;
+        validate_chain_head(envelope, previous.as_ref()).map_err(|_| invalid())?;
+        save_head(tx, scope, "send", envelope)?;
+    }
+    tx.execute("UPDATE local_group_outbox SET status='accepted' WHERE scope=?1 AND group_id=?2 AND message_id=?3",params![scope,id,receipt.message_id]).map_err(db)?;
+    tx.execute("UPDATE local_group_messages SET status='accepted' WHERE scope=?1 AND group_id=?2 AND message_id=?3",params![scope,id,receipt.message_id]).map_err(db)?;
+    Ok(())
+}
+impl GroupStore {
     /// Call only after an authenticated atomic server cancellation result.
     pub(super) fn cancel_unaccepted(&mut self, id: &str, expected: &str) -> Result<(), String> {
         let tx = self.conn.transaction().map_err(db)?;
@@ -428,6 +499,7 @@ impl GroupStore {
         keys: &crypto::KeyPair,
     ) -> Result<bool, String> {
         check_keys(&self.identity, keys)?;
+        self.extension_root_check(envelope)?;
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -547,7 +619,7 @@ impl GroupStore {
         // One read transaction keeps counts and byte totals consistent with concurrent connections.
         let tx = self.conn.unchecked_transaction().map_err(db)?;
         let (visible,hidden,unread) = tx.query_row("SELECT COALESCE(SUM(CASE WHEN h.message_id IS NULL THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN h.message_id IS NOT NULL THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN h.message_id IS NULL AND m.status='received' THEN 1 ELSE 0 END),0) FROM local_group_messages m LEFT JOIN local_group_hidden h ON h.scope=m.scope AND h.group_id=m.group_id AND h.message_id=m.message_id WHERE m.scope=?1 AND m.group_id=?2 AND m.status!='cancelled'",params![self.scope,id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(db)?;
-        let pending = tx.query_row("SELECT (SELECT COUNT(*) FROM local_group_outbox WHERE scope=?1 AND group_id=?2 AND status='queued')+(SELECT COUNT(*) FROM local_collab_outbox WHERE scope=?1 AND group_id=?2 AND status IN ('queued','conflict'))",params![self.scope,id],|r|r.get(0)).map_err(db)?;
+        let pending = tx.query_row("SELECT (SELECT COUNT(*) FROM local_group_outbox WHERE scope=?1 AND group_id=?2 AND status='queued')+(SELECT COUNT(*) FROM local_collab_outbox WHERE scope=?1 AND group_id=?2 AND status IN ('queued','conflict'))+(SELECT COUNT(*) FROM local_extension_outbox WHERE scope=?1 AND group_id=?2 AND status IN ('queued','conflict') AND json_extract(body,'$.event.action.kind') NOT IN ('activity','attachment'))+(SELECT COUNT(*) FROM group_attachment_cache c WHERE scope=?1 AND group_id=?2 AND direction='upload' AND NOT EXISTS(SELECT 1 FROM local_extension_outbox e WHERE e.scope=c.scope AND e.group_id=c.group_id AND e.status IN ('queued','conflict') AND json_extract(e.body,'$.event.action.blob')=c.id))",params![self.scope,id],|r|r.get(0)).map_err(db)?;
         // Logical payload bytes only: not SQLite page allocation or filesystem space.
         let mut logical_bytes = 0_i64;
         for (table, expression) in [
@@ -568,6 +640,15 @@ impl GroupStore {
             ),
             ("local_collab_outbox", "length(CAST(body AS BLOB))"),
             ("local_collab_ack", "length(CAST(id AS BLOB))"),
+            (
+                "local_extension_log",
+                "length(CAST(header AS BLOB))+COALESCE(length(content),0)",
+            ),
+            ("local_extension_outbox", "length(CAST(body AS BLOB))"),
+            (
+                "group_attachment_cache",
+                "length(metadata)+length(ciphertext)",
+            ),
         ] {
             logical_bytes += tx.query_row(&format!("SELECT COALESCE(SUM({expression}),0) FROM {table} WHERE scope=?1 AND group_id=?2"),params![self.scope,id],|r|r.get::<_,i64>(0)).map_err(db)?;
         }

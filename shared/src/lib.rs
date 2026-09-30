@@ -1,6 +1,7 @@
 pub mod backup_crypto;
 pub mod crypto;
 pub mod group;
+pub mod group_extension;
 pub mod protocol;
 pub mod reaction;
 pub mod read_receipt;

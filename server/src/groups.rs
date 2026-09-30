@@ -8,8 +8,12 @@ use axum::{
 use liteseal_shared::group::*;
 use serde::Deserialize;
 use sqlx::{Postgres, Row, Transaction};
+pub(crate) mod attachments;
 mod collaboration;
+mod extensions;
 mod messages;
+pub const EXTENSION_MIGRATION: &str = extensions::MIGRATION;
+pub const ATTACHMENT_MIGRATION: &str = attachments::MIGRATION;
 pub const COLLABORATION_MIGRATION: &str = collaboration::MIGRATION;
 pub const MESSAGE_MIGRATION: &str = messages::MIGRATION;
 pub const CANCEL_MIGRATION: &str = messages::CANCEL_MIGRATION;
@@ -68,6 +72,8 @@ pub fn router() -> Router<AppState> {
         .layer(DefaultBodyLimit::max(32 * 1024))
         .merge(messages::router())
         .merge(collaboration::router())
+        .merge(extensions::router())
+        .merge(attachments::router())
 }
 async fn admit(state: &AppState, headers: &HeaderMap, device: &str) -> Result<String, Failure> {
     let user = crate::message_operations::authorize(state, headers, device).await?;

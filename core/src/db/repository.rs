@@ -68,6 +68,7 @@ pub struct AttachmentTransfer {
 impl MessageRepository {
     pub fn new(db_path: &str) -> Result<Self, DbError> {
         let conn = Connection::open(db_path)?;
+        conn.execute_batch(crate::attachment_cache::GROUP_SCHEMA)?;
 
         conn.execute_batch(
             "
@@ -473,9 +474,21 @@ impl MessageRepository {
         }))?)
     }
     pub fn save_attachment_transfer(&self, item: &AttachmentTransfer) -> Result<(), DbError> {
-        self.conn.execute("INSERT INTO attachment_transfers(id,user_id,peer_id,message_id,metadata,ciphertext,offset,direction) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        let previous:i64=tx.query_row("SELECT COALESCE((SELECT length(ciphertext) FROM attachment_transfers WHERE user_id=?1 AND id=?2),0)",params![item.user_id,item.id],|r|r.get(0))?;
+        if crate::attachment_cache::bytes(&tx, &item.user_id)? - previous
+            + item.ciphertext.len() as i64
+            > 256 * 1024 * 1024
+        {
+            return Err(DbError::Invalid("附件共享缓存上限 256 MiB".into()));
+        }
+        tx.execute("INSERT INTO attachment_transfers(id,user_id,peer_id,message_id,metadata,ciphertext,offset,direction) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
             ON CONFLICT(user_id,id) DO UPDATE SET metadata=excluded.metadata,ciphertext=excluded.ciphertext,offset=excluded.offset,direction=excluded.direction",
             params![item.id,item.user_id,item.peer_id,item.message_id,item.metadata,item.ciphertext,item.offset,item.direction])?;
+        tx.commit()?;
         Ok(())
     }
     pub fn attachment_transfer_ids(&self, user: &str) -> Result<Vec<String>, DbError> {
@@ -488,14 +501,22 @@ impl MessageRepository {
         Ok(rows)
     }
     pub fn attachment_cache_bytes(&self, user: &str) -> Result<i64, DbError> {
-        Ok(self.conn.query_row(
-            "SELECT COALESCE(SUM(length(ciphertext)),0) FROM attachment_transfers WHERE user_id=?1",
-            [user],
-            |r| r.get(0),
-        )?)
+        Ok(crate::attachment_cache::bytes(&self.conn, user)?)
     }
     pub fn clear_attachment_cache(&self, user: &str, peer: Option<&str>) -> Result<usize, DbError> {
-        Ok(self.conn.execute("DELETE FROM attachment_transfers WHERE user_id=?1 AND direction='download' AND (?2 IS NULL OR peer_id=?2)",params![user,peer])?)
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        let mut count=tx.execute("DELETE FROM attachment_transfers WHERE user_id=?1 AND direction='download' AND (?2 IS NULL OR peer_id=?2)",params![user,peer])?;
+        if peer.is_none() {
+            count += tx.execute(
+                "DELETE FROM group_attachment_cache WHERE user_id=?1 AND direction='download'",
+                [user],
+            )?;
+        }
+        tx.commit()?;
+        Ok(count)
     }
     pub fn forget_attachment_transfer(&self, user: &str, id: &str) -> Result<(), DbError> {
         self.conn.execute(

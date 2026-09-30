@@ -7,7 +7,203 @@ use std::sync::{Arc, Mutex};
 use support::{change, envelope, join, Participant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+#[test]
+fn extensions_commit_receipt_atomically_and_rollback_bad_pages() {
+    use liteseal_shared::group_extension as e;
+    let a_path = TempDb::new();
+    let b_path = TempDb::new();
+    let (alice, bob, _, group, events) = fixture();
+    let id = group.group_id();
+    let mut a = seed(
+        &a_path.0,
+        "http://localhost:3000",
+        alice.identity(),
+        &alice.identity(),
+        &events,
+    );
+    let mut b = seed(
+        &b_path.0,
+        "http://localhost:3000",
+        bob.identity(),
+        &alice.identity(),
+        &events,
+    );
+    let secret = "活动机密 emoji 🎉";
+    let object = a
+        .seal_extension(
+            id,
+            &e::Content::Activity(e::Activity {
+                title: secret.into(),
+                start_at: 2000,
+                timezone: "Asia/Singapore".into(),
+                location: "会议室".into(),
+                description: "".into(),
+            }),
+            &alice.keys,
+        )
+        .unwrap();
+    let task = a.extension_pending(id).unwrap().unwrap();
+    drop(a);
+    let mut a = GroupStore::open(&a_path.0, "http://localhost:3000", alice.identity()).unwrap();
+    assert_eq!(
+        serde_json::to_vec(&a.extension_pending(id).unwrap().unwrap()).unwrap(),
+        serde_json::to_vec(&task).unwrap()
+    );
+    assert!(!std::fs::read(&a_path.0)
+        .unwrap()
+        .windows(secret.len())
+        .any(|w| w == secret.as_bytes()));
+    let mut r = e::Receipt {
+        event_id: task.event.id.clone(),
+        hash: task.event.hash(),
+        seq: 1,
+        root: Some(receipt(&task.roots)),
+    };
+    r.hash[0] ^= 1;
+    assert!(a.extension_accepted(id, &task, &r, &alice.keys).is_err());
+    assert!(a.queued(id).unwrap().is_some());
+    assert!(a.extension_pending(id).unwrap().is_some());
+    r.hash = task.event.hash();
+    a.extension_accepted(id, &task, &r, &alice.keys).unwrap();
+    assert!(a.queued(id).unwrap().is_none());
+    assert_eq!(
+        a.extension_view(id, std::slice::from_ref(&object), &alice.keys)
+            .unwrap()
+            .activities[0]
+            .title,
+        secret
+    );
+    let cipher = task
+        .boxes
+        .iter()
+        .find(|x| x.member.user == bob.user)
+        .unwrap()
+        .ciphertext
+        .clone();
+    let delivery = e::Delivery {
+        seq: 1,
+        event: task.event.clone(),
+        ciphertext: Some(cipher),
+    };
+    let mut page = e::Page {
+        items: vec![delivery],
+        cursor: 1,
+        more: false,
+    };
+    page.items[0].ciphertext.as_mut().unwrap()[0] ^= 1;
+    assert!(b.extension_apply(id, &page, &bob.keys).is_err());
+    assert_eq!(b.extension_cursor(id).unwrap(), 0);
+    page.items[0].ciphertext.as_mut().unwrap()[0] ^= 1;
+    b.extension_apply(id, &page, &bob.keys).unwrap();
+    assert!(b
+        .extension_view(id, std::slice::from_ref(&object), &bob.keys)
+        .unwrap()
+        .activities
+        .is_empty());
+    let root = task
+        .roots
+        .iter()
+        .find(|r| r.recipient_user_id == bob.user)
+        .unwrap();
+    b.receive(root, &bob.keys).unwrap();
+    assert_eq!(
+        b.extension_view(id, std::slice::from_ref(&object), &bob.keys)
+            .unwrap()
+            .activities[0]
+            .title,
+        secret
+    );
+    b.clear_history(id).unwrap();
+    assert!(b
+        .extension_view(id, &[object], &bob.keys)
+        .unwrap()
+        .activities
+        .is_empty());
+}
+
 struct TempDb(String);
+#[test]
+fn group_media_is_scope_bound_encrypted_and_tamper_checked() {
+    let path = TempDb::new();
+    let (alice, bob, _, g, events) = fixture();
+    drop(seed(
+        &path.0,
+        "http://localhost:3000",
+        alice.identity(),
+        &alice.identity(),
+        &events,
+    ));
+    let client = GroupClient::new(
+        &path.0,
+        "http://localhost:3000",
+        "test-token".into(),
+        alice.identity(),
+    )
+    .unwrap();
+    let bytes = b"private group attachment body";
+    let task = client
+        .media_stage(
+            g.group_id(),
+            bytes,
+            "中文.txt".into(),
+            "application/octet-stream".into(),
+            None,
+            &alice.keys,
+        )
+        .unwrap();
+    assert_eq!(
+        client
+            .media_plain(g.group_id(), &task.id, &alice.keys)
+            .unwrap(),
+        bytes
+    );
+    assert!(client
+        .media_plain("another-group", &task.id, &alice.keys)
+        .is_err());
+    assert!(client
+        .media_plain(g.group_id(), &task.id, &bob.keys)
+        .is_err());
+    assert!(client
+        .media_stage(
+            g.group_id(),
+            bytes,
+            "voice.webm".into(),
+            "audio/webm".into(),
+            Some(60001),
+            &alice.keys
+        )
+        .is_err());
+    assert!(client
+        .media_stage(
+            g.group_id(),
+            &vec![1; 20 * 1024 * 1024 + 1],
+            "large.bin".into(),
+            "application/octet-stream".into(),
+            None,
+            &alice.keys
+        )
+        .is_err());
+    let json = serde_json::to_value(&task).unwrap();
+    assert!(json.get("key").is_none());
+    let conn = Connection::open(&path.0).unwrap();
+    let mut cipher: Vec<u8> = conn
+        .query_row("SELECT ciphertext FROM group_attachment_cache", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert!(!cipher.windows(bytes.len()).any(|w| w == bytes));
+    cipher[30] ^= 1;
+    conn.execute("UPDATE group_attachment_cache SET ciphertext=?1", [cipher])
+        .unwrap();
+    assert!(client
+        .media_plain(g.group_id(), &task.id, &alice.keys)
+        .is_err());
+    assert_eq!(client.media_clear(Some(g.group_id())).unwrap(), 0);
+    assert_eq!(
+        client.media_tasks(g.group_id(), &alice.keys).unwrap().len(),
+        1
+    );
+}
 impl TempDb {
     fn new() -> Self {
         Self(

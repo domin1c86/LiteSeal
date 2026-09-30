@@ -52,7 +52,7 @@ fn fits_quota(count: i64, bytes: i64, extra: usize) -> bool {
             .checked_add(extra as i64)
             .is_some_and(|total| total <= MAX_PENDING_BYTES)
 }
-async fn receipt_in(
+pub(super) async fn receipt_in(
     tx: &mut Transaction<'_, Postgres>,
     group: &str,
     message: &str,
@@ -125,11 +125,6 @@ async fn send(
 ) -> Result<Json<GroupMessageReceipt>, Failure> {
     let user = crate::message_operations::authorize(&state, &headers, &request.device_id).await?;
     group_id(&id)?;
-    let digest = prepare(&id, &mut request.envelopes)?;
-    let first = &request.envelopes[0];
-    if first.sender_user_id != user || first.sender_device_id != request.device_id {
-        return Err(conflict());
-    }
     if !state
         .db
         .hit_rate_limit(&format!("group-messages:{user}"), 120, 60)
@@ -141,53 +136,70 @@ async fn send(
     let mut tx = state.db.pool().begin().await.map_err(unavailable)?;
     lock_group(&mut tx, &id).await?;
     let actor = authorize_tx(&mut tx, &headers, &request.device_id).await?;
-    if let Some(stored) = stored_batch(&mut tx, &id, &first.message_id).await? {
+    let result = store_batch(&mut tx, &id, &actor, &mut request.envelopes).await?;
+    tx.commit().await.map_err(unavailable)?;
+    Ok(result)
+}
+/// Caller holds the group lock; extension admission shares this transaction.
+pub(super) async fn store_batch(
+    tx: &mut Transaction<'_, Postgres>,
+    id: &str,
+    actor: &GroupIdentity,
+    envelopes: &mut [GroupEnvelope],
+) -> Result<Json<GroupMessageReceipt>, Failure> {
+    let user = actor.user_id.clone();
+    let digest = prepare(id, envelopes)?;
+    let first = &envelopes[0];
+    if first.sender_user_id != user || first.sender_device_id != actor.device_id {
+        return Err(conflict());
+    }
+    if let Some(stored) = stored_batch(tx, id, &first.message_id).await? {
         if stored.get::<String, _>("sender_user_id") != actor.user_id
             || stored.get::<String, _>("sender_device_id") != actor.device_id
             || stored.get::<Vec<u8>, _>("batch_hash") != digest
         {
             return Err(conflict());
         }
-        return receipt_in(&mut tx, &id, &first.message_id).await;
+        return receipt_in(tx, id, &first.message_id).await;
     }
     let collab_exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM group_collab_events WHERE group_id=$1 AND id=$2)",
+        "SELECT EXISTS(SELECT 1 FROM group_collab_events WHERE group_id=$1 AND id=$2) OR EXISTS(SELECT 1 FROM group_extension_events WHERE group_id=$1 AND id=$2) OR EXISTS(SELECT 1 FROM group_extension_cancellations WHERE group_id=$1 AND id=$2)",
     )
-    .bind(&id)
+    .bind(id)
     .bind(&first.message_id)
-    .fetch_one(&mut *tx)
+    .fetch_one(&mut **tx)
     .await
     .map_err(unavailable)?;
     if collab_exists {
         return Err(conflict());
     }
-    let meta = metadata(&mut tx, &id, true).await?;
+    let meta = metadata(tx, id, true).await?;
     let cancelled:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM group_message_cancellations WHERE group_id=$1 AND message_id=$2 AND sender_device_id=$3)")
-        .bind(&id).bind(&first.message_id).bind(&actor.device_id).fetch_one(&mut *tx).await.map_err(unavailable)?;
+        .bind(id).bind(&first.message_id).bind(&actor.device_id).fetch_one(&mut **tx).await.map_err(unavailable)?;
     if cancelled {
         return Err(conflict());
     }
-    let group = replay(&mut tx, &id, &meta).await?;
+    let group = replay(tx, id, &meta).await?;
     if group
         .member(&user)
-        .is_none_or(|member| member.identity != actor)
+        .is_none_or(|member| member.identity != *actor)
     {
         return Err(conflict());
     }
-    validate_batch(&group, &request.envelopes).map_err(|_| conflict())?;
+    validate_batch(&group, envelopes).map_err(|_| conflict())?;
     if !timely(first.sent_at, timestamp()) {
         return Err(conflict());
     }
     let mut members: Vec<_> = group.members().iter().collect();
     members.sort_by(|a, b| a.identity.device_id.cmp(&b.identity.device_id));
     for member in members {
-        bind_device(&mut tx, &member.identity).await?;
+        bind_device(tx, &member.identity).await?;
     }
-    sending_policy(&mut tx, &group, &user).await?;
+    sending_policy(tx, &group, &user).await?;
     let retained: i64 =
         sqlx::query_scalar("SELECT (SELECT COUNT(*) FROM group_message_batches WHERE group_id=$1)+(SELECT COUNT(*) FROM group_message_cancellations WHERE group_id=$1)")
-            .bind(&id)
-            .fetch_one(&mut *tx)
+            .bind(id)
+            .fetch_one(&mut **tx)
             .await
             .map_err(unavailable)?;
     if retained >= MAX_RETAINED_BATCHES {
@@ -197,9 +209,9 @@ async fn send(
         ));
     }
     let mut bodies = Vec::new();
-    for envelope in &request.envelopes {
+    for envelope in envelopes.iter() {
         let previous: Option<String> = sqlx::query_scalar("SELECT chain_head FROM group_message_receipts WHERE group_id=$1 AND sender_device_id=$2 AND sender_join_epoch=$3 AND recipient_device_id=$4 AND recipient_join_epoch=$5 ORDER BY sender_seq DESC LIMIT 1")
-            .bind(&id).bind(&envelope.sender_device_id).bind(epoch(envelope.sender_join_epoch)?).bind(&envelope.recipient_device_id).bind(epoch(envelope.recipient_join_epoch)?).fetch_optional(&mut *tx).await.map_err(unavailable)?;
+            .bind(id).bind(&envelope.sender_device_id).bind(epoch(envelope.sender_join_epoch)?).bind(&envelope.recipient_device_id).bind(epoch(envelope.recipient_join_epoch)?).fetch_optional(&mut **tx).await.map_err(unavailable)?;
         let head: Option<GroupChainHead> = previous
             .map(|body| serde_json::from_str(&body).map_err(|_| corrupt()))
             .transpose()?;
@@ -209,11 +221,11 @@ async fn send(
         // only decrease usage, so they need no extra quota lock.
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,5))")
             .bind(&envelope.recipient_device_id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await
             .map_err(unavailable)?;
         let usage = sqlx::query("SELECT COUNT(*) AS count,COALESCE(SUM(octet_length(p.body)),0)::bigint AS bytes FROM group_message_payloads p WHERE p.recipient_device_id=$1")
-            .bind(&envelope.recipient_device_id).fetch_one(&mut *tx).await.map_err(unavailable)?;
+            .bind(&envelope.recipient_device_id).fetch_one(&mut **tx).await.map_err(unavailable)?;
         if !fits_quota(usage.get("count"), usage.get("bytes"), body.len()) {
             return Err((
                 StatusCode::INSUFFICIENT_STORAGE,
@@ -223,17 +235,15 @@ async fn send(
         bodies.push(body);
     }
     sqlx::query("INSERT INTO group_message_batches(group_id,message_id,sender_user_id,sender_device_id,sender_join_epoch,epoch,batch_hash) VALUES($1,$2,$3,$4,$5,$6,$7)")
-        .bind(&id).bind(&first.message_id).bind(&user).bind(&actor.device_id).bind(epoch(first.sender_join_epoch)?).bind(epoch(first.epoch)?).bind(digest).execute(&mut *tx).await.map_err(unavailable)?;
-    for (envelope, body) in request.envelopes.iter().zip(bodies) {
+        .bind(id).bind(&first.message_id).bind(&user).bind(&actor.device_id).bind(epoch(first.sender_join_epoch)?).bind(epoch(first.epoch)?).bind(digest).execute(&mut **tx).await.map_err(unavailable)?;
+    for (envelope, body) in envelopes.iter().zip(bodies) {
         let head = GroupChainHead::from_verified(envelope);
         sqlx::query("INSERT INTO group_message_receipts(group_id,message_id,sender_device_id,sender_join_epoch,recipient_user_id,recipient_device_id,recipient_join_epoch,sender_seq,chain_head,signature,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending')")
-            .bind(&id).bind(&envelope.message_id).bind(&actor.device_id).bind(epoch(envelope.sender_join_epoch)?).bind(&envelope.recipient_user_id).bind(&envelope.recipient_device_id).bind(epoch(envelope.recipient_join_epoch)?).bind(envelope.sender_seq).bind(serde_json::to_string(&head).map_err(|_|bad())?).bind(&envelope.signature).execute(&mut *tx).await.map_err(unavailable)?;
+            .bind(id).bind(&envelope.message_id).bind(&actor.device_id).bind(epoch(envelope.sender_join_epoch)?).bind(&envelope.recipient_user_id).bind(&envelope.recipient_device_id).bind(epoch(envelope.recipient_join_epoch)?).bind(envelope.sender_seq).bind(serde_json::to_string(&head).map_err(|_|bad())?).bind(&envelope.signature).execute(&mut **tx).await.map_err(unavailable)?;
         sqlx::query("INSERT INTO group_message_payloads(group_id,message_id,recipient_device_id,body) VALUES($1,$2,$3,$4)")
-            .bind(&id).bind(&envelope.message_id).bind(&envelope.recipient_device_id).bind(body).execute(&mut *tx).await.map_err(unavailable)?;
+            .bind(id).bind(&envelope.message_id).bind(&envelope.recipient_device_id).bind(body).execute(&mut **tx).await.map_err(unavailable)?;
     }
-    let result = receipt_in(&mut tx, &id, &first.message_id).await?;
-    tx.commit().await.map_err(unavailable)?;
-    Ok(result)
+    receipt_in(tx, id, &first.message_id).await
 }
 
 #[derive(Deserialize)]

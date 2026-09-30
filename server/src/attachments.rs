@@ -11,14 +11,14 @@ type Failure = (StatusCode, String);
 fn db(_: sqlx::Error) -> Failure {
     (StatusCode::SERVICE_UNAVAILABLE, "附件存储暂不可用".into())
 }
-fn days() -> i32 {
+pub(crate) fn days() -> i32 {
     std::env::var("LITESEAL_ATTACHMENT_DAYS")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(30)
         .clamp(1, 365)
 }
-fn orphan_hours() -> i32 {
+pub(crate) fn orphan_hours() -> i32 {
     std::env::var("LITESEAL_ATTACHMENT_ORPHAN_HOURS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -26,6 +26,7 @@ fn orphan_hours() -> i32 {
         .clamp(1, 168)
 }
 pub async fn cleanup(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
+    crate::groups::attachments::cleanup(pool).await?;
     sqlx::query("DELETE FROM attachment_objects a WHERE expires_at < now() OR (created_at < now() - make_interval(hours => $1) AND NOT EXISTS (SELECT 1 FROM beta_receipts r WHERE r.message_id = a.message_id AND r.sender_user_id = a.owner))").bind(orphan_hours()).execute(pool).await?;
     Ok(())
 }
@@ -80,14 +81,14 @@ pub async fn create(
         }
     } else {
         let used: i64 = sqlx::query_scalar(
-            "SELECT COALESCE(SUM(size),0)::BIGINT FROM attachment_objects WHERE owner=$1",
+            "SELECT COALESCE(SUM(size),0)::BIGINT FROM (SELECT size FROM attachment_objects WHERE owner=$1 UNION ALL SELECT size FROM group_attachment_objects WHERE owner=$1) a",
         )
         .bind(&user)
         .fetch_one(&mut *tx)
         .await
         .map_err(db)?;
         let count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM attachment_objects WHERE owner=$1")
+            sqlx::query_scalar("SELECT COUNT(*) FROM (SELECT id FROM attachment_objects WHERE owner=$1 UNION ALL SELECT id FROM group_attachment_objects WHERE owner=$1) a")
                 .bind(&user)
                 .fetch_one(&mut *tx)
                 .await

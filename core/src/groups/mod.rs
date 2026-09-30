@@ -1,6 +1,10 @@
 //! Private group business logic. Secrets stay in the calling Rust key owner.
 pub mod api;
 mod collaboration;
+mod extensions;
+mod media;
+pub use extensions::ExtensionCommand;
+pub use media::GroupAttachmentTask;
 mod store;
 pub use collaboration::CollaborationCommand;
 use liteseal_shared::{crypto, group::*};
@@ -8,8 +12,8 @@ use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use std::sync::{Mutex, MutexGuard};
 pub use store::{
-    CollaborationView, GroupHistoryPage, GroupLocalMessage, GroupNotification, GroupStorageStats,
-    GroupStore, PollView,
+    ActivityView, CollaborationView, ExtensionAttachmentView, ExtensionView, GroupHistoryPage,
+    GroupLocalMessage, GroupNotification, GroupStorageStats, GroupStore, PollView,
 };
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -48,6 +52,7 @@ pub struct GroupClient {
     identity: GroupIdentity,
     store: Mutex<GroupStore>,
     gate: AsyncMutex<()>,
+    media_gate: AsyncMutex<()>,
 }
 impl GroupClient {
     pub fn new(
@@ -63,6 +68,7 @@ impl GroupClient {
             identity,
             store: Mutex::new(store),
             gate: AsyncMutex::new(()),
+            media_gate: AsyncMutex::new(()),
         })
     }
     fn store(&self) -> Result<MutexGuard<'_, GroupStore>, String> {
@@ -447,6 +453,13 @@ impl GroupClient {
     }
     pub async fn send_queued(&self, id: &str) -> Result<Option<GroupMessageReceipt>, String> {
         let _gate = self.gate.lock().await;
+        if self
+            .store()?
+            .extension_task(id)?
+            .is_some_and(|s| s.event.action.creates())
+        {
+            return Err("请通过原群扩展任务重试，不能单独提交占位消息".into());
+        }
         let batch = self.store()?.queued(id)?;
         let Some(batch) = batch else { return Ok(None) };
         let receipt = self.api.send(id, &batch).await.map_err(|e| e.to_string())?;
@@ -457,6 +470,13 @@ impl GroupClient {
     /// an unsent message merely because the user asked to cancel it.
     pub async fn cancel_unsent(&self, id: &str) -> Result<(), String> {
         let _gate = self.gate.lock().await;
+        if self
+            .store()?
+            .extension_task(id)?
+            .is_some_and(|s| s.event.action.creates())
+        {
+            return Err("请通过原群扩展任务取消".into());
+        }
         let Some(batch) = self.store()?.queued(id)? else {
             return Ok(());
         };

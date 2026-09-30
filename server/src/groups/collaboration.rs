@@ -100,7 +100,7 @@ async fn submit(
         }
         return Ok(Json(row.get("seq")));
     }
-    let collision:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM group_message_batches WHERE group_id=$1 AND message_id=$2) OR EXISTS(SELECT 1 FROM group_message_cancellations WHERE group_id=$1 AND message_id=$2)").bind(&id).bind(&event.id).fetch_one(&mut *tx).await.map_err(unavailable)?;
+    let collision:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM group_message_batches WHERE group_id=$1 AND message_id=$2) OR EXISTS(SELECT 1 FROM group_message_cancellations WHERE group_id=$1 AND message_id=$2) OR EXISTS(SELECT 1 FROM group_extension_events WHERE group_id=$1 AND id=$2) OR EXISTS(SELECT 1 FROM group_extension_cancellations WHERE group_id=$1 AND id=$2)").bind(&id).bind(&event.id).fetch_one(&mut *tx).await.map_err(unavailable)?;
     if collision {
         return Err(conflict());
     }

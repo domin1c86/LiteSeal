@@ -49,6 +49,137 @@ pub struct GroupApi {
     client: reqwest::Client,
 }
 impl GroupApi {
+    pub async fn media_create(
+        &self,
+        id: &str,
+        blob: &str,
+        size: usize,
+    ) -> Result<String, ApiError> {
+        valid_id(id)?;
+        valid_id(blob)?;
+        self.post(
+            &format!("/groups/{id}/attachments"),
+            &serde_json::json!({"device_id":self.device,"id":blob,"size":size}),
+        )
+        .await
+    }
+    pub async fn media_upload(
+        &self,
+        id: &str,
+        blob: &str,
+        part: usize,
+        bytes: Vec<u8>,
+    ) -> Result<(), ApiError> {
+        valid_id(id)?;
+        valid_id(blob)?;
+        let response = self
+            .request(
+                reqwest::Method::PUT,
+                &format!("/groups/{id}/attachments/{blob}/{part}"),
+            )
+            .query(&[("device_id", &self.device)])
+            .body(bytes)
+            .send()
+            .await
+            .map_err(|_| network())?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(ApiError {
+                status: Some(response.status().as_u16()),
+                message: "群附件上传失败，保留原任务".into(),
+            })
+        }
+    }
+    pub async fn media_download(
+        &self,
+        id: &str,
+        blob: &str,
+        part: usize,
+    ) -> Result<Vec<u8>, ApiError> {
+        valid_id(id)?;
+        valid_id(blob)?;
+        let mut response = self
+            .request(
+                reqwest::Method::GET,
+                &format!("/groups/{id}/attachments/{blob}/{part}"),
+            )
+            .query(&[("device_id", &self.device)])
+            .send()
+            .await
+            .map_err(|_| network())?;
+        if !response.status().is_success() {
+            return Err(ApiError {
+                status: Some(response.status().as_u16()),
+                message: "群附件不可下载，可能过期或权限已变化".into(),
+            });
+        }
+        let mut bytes = vec![];
+        while let Some(chunk) = response.chunk().await.map_err(|_| network())? {
+            if bytes.len() + chunk.len() > 1024 * 1024 {
+                return Err(network());
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok(bytes)
+    }
+    pub async fn extension_capability(&self, id: &str) -> Result<u8, ApiError> {
+        valid_id(id)?;
+        Self::decode(
+            self.request(
+                reqwest::Method::GET,
+                &format!("/groups/{id}/extensions/capabilities"),
+            )
+            .query(&[("device_id", &self.device)])
+            .send()
+            .await
+            .map_err(|_| network())?,
+        )
+        .await
+    }
+    pub async fn extension_submit(
+        &self,
+        id: &str,
+        submission: &liteseal_shared::group_extension::Submission,
+    ) -> Result<liteseal_shared::group_extension::Receipt, ApiError> {
+        valid_id(id)?;
+        self.post(
+            &format!("/groups/{id}/extensions"),
+            &serde_json::json!({"device_id":self.device,"submission":submission}),
+        )
+        .await
+    }
+    pub async fn extension_page(
+        &self,
+        id: &str,
+        after: i64,
+    ) -> Result<liteseal_shared::group_extension::Page, ApiError> {
+        valid_id(id)?;
+        let mut response = self
+            .request(reqwest::Method::GET, &format!("/groups/{id}/extensions"))
+            .query(&[
+                ("device_id", self.device.clone()),
+                ("after", after.to_string()),
+            ])
+            .send()
+            .await
+            .map_err(|_| network())?;
+        Self::decode_bounded(&mut response, 512 * 1024).await
+    }
+    pub async fn extension_cancel(
+        &self,
+        id: &str,
+        event: &str,
+        root: Option<&str>,
+    ) -> Result<liteseal_shared::group_extension::CancelResult, ApiError> {
+        valid_id(id)?;
+        valid_id(event)?;
+        self.post(
+            &format!("/groups/{id}/extensions/{event}/cancel"),
+            &serde_json::json!({"device_id":self.device,"root":root}),
+        )
+        .await
+    }
     pub fn new(server: &str, token: String, device: String) -> Result<Self, String> {
         let origin = canonical_origin(server)?;
         if device.is_empty() || token.is_empty() {
@@ -94,6 +225,12 @@ impl GroupApi {
         }
     }
     async fn decode<T: DeserializeOwned>(mut response: reqwest::Response) -> Result<T, ApiError> {
+        Self::decode_bounded(&mut response, 4 * 1024 * 1024).await
+    }
+    async fn decode_bounded<T: DeserializeOwned>(
+        response: &mut reqwest::Response,
+        limit: usize,
+    ) -> Result<T, ApiError> {
         let status = response.status();
         if !status.is_success() {
             return Err(ApiError {
@@ -106,7 +243,7 @@ impl GroupApi {
         }
         let mut bytes = Vec::new();
         while let Some(chunk) = response.chunk().await.map_err(|_| network())? {
-            if bytes.len() + chunk.len() > 4 * 1024 * 1024 {
+            if bytes.len() + chunk.len() > limit {
                 return Err(ApiError {
                     status: None,
                     message: "群响应超出大小限制".into(),

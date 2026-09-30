@@ -312,6 +312,533 @@ fn batch(
         })
         .collect()
 }
+
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn extension_roots_are_atomic_idempotent_cancelled_and_phase_scoped() {
+    use liteseal_shared::{collaboration::Member, group_extension as e};
+    let f = Fixture::start().await;
+    let a = f.account().await;
+    let b = f.account().await;
+    let create = event(
+        None,
+        &a,
+        GroupAction::Create {
+            name: "extensions".into(),
+            owner: a.identity.clone(),
+        },
+    );
+    assert!(f.change(&a, &create, true).await.status().is_success());
+    let g = f
+        .add(&pin_creation(&create, &a.identity).unwrap(), &a, &b)
+        .await;
+    let endpoint = format!("{}/groups/{}/extensions", f.url, g.group_id());
+    let content = e::Content::Activity(e::Activity {
+        title: "private activity".into(),
+        start_at: now(),
+        timezone: "UTC".into(),
+        location: "".into(),
+        description: "".into(),
+    });
+    let build = || {
+        let mut roots = batch(&g, &a, &[(&b, None)]);
+        roots[0].ciphertext = crypto::encrypt(
+            e::PLACEHOLDER.as_bytes(),
+            &b.keys.public_key,
+            &a.keys.secret_key,
+        )
+        .unwrap();
+        roots[0].signature = crypto::sign(&roots[0].signing_bytes(), &a.keys.ed25519_sk).unwrap();
+        e::make(
+            &g,
+            &Member::from(g.member(&a.identity.user_id).unwrap()),
+            roots[0].message_id.clone(),
+            uuid::Uuid::new_v4().to_string(),
+            None,
+            e::Action::Activity,
+            Some(&content),
+            roots.clone(),
+            &a.keys,
+            roots[0].sent_at,
+        )
+        .unwrap()
+    };
+    let send = |actor: &Account, sub: &e::Submission| {
+        f.client
+            .post(&endpoint)
+            .bearer_auth(&actor.token)
+            .json(&serde_json::json!({"device_id":actor.identity.device_id,"submission":sub}))
+            .send()
+    };
+    let task = build();
+    let mut invalid = task.clone();
+    invalid.boxes[0].ciphertext[0] ^= 1;
+    assert_eq!(
+        send(&a, &invalid).await.unwrap().status(),
+        reqwest::StatusCode::CONFLICT
+    );
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM group_message_batches WHERE group_id=$1")
+        .bind(g.group_id())
+        .fetch_one(f.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(n, 0);
+    let receipt = send(&a, &task)
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json::<e::Receipt>()
+        .await
+        .unwrap();
+    let again = send(&a, &task)
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json::<e::Receipt>()
+        .await
+        .unwrap();
+    assert_eq!(receipt.seq, again.seq);
+    assert_eq!(receipt.hash, again.hash);
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM group_message_batches WHERE group_id=$1")
+        .bind(g.group_id())
+        .fetch_one(f.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(n, 1);
+    let page = f
+        .client
+        .get(&endpoint)
+        .bearer_auth(&b.token)
+        .query(&[("device_id", &b.identity.device_id)])
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json::<e::Page>()
+        .await
+        .unwrap();
+    assert_eq!(page.items.len(), 1);
+    assert!(page.items[0].ciphertext.is_some());
+    let old = e::transition(None, &g, &task.event).unwrap();
+    let close = e::make(
+        &g,
+        &Member::from(g.member(&a.identity.user_id).unwrap()),
+        task.event.object.clone(),
+        uuid::Uuid::new_v4().to_string(),
+        Some(&old),
+        e::Action::Close,
+        None,
+        vec![],
+        &a.keys,
+        now(),
+    )
+    .unwrap();
+    let answer = e::make(
+        &g,
+        &Member::from(g.member(&b.identity.user_id).unwrap()),
+        task.event.object.clone(),
+        uuid::Uuid::new_v4().to_string(),
+        Some(&old),
+        e::Action::Respond {
+            answer: e::Answer::Maybe,
+        },
+        None,
+        vec![],
+        &b.keys,
+        now(),
+    )
+    .unwrap();
+    let (x, y) = tokio::join!(send(&a, &close), send(&b, &answer));
+    let (x, y) = (x.unwrap().status(), y.unwrap().status());
+    assert!(x.is_success() != y.is_success());
+    let abandoned = build();
+    let cancelled = f
+        .client
+        .post(format!("{}/{}/cancel", endpoint, abandoned.event.id))
+        .bearer_auth(&a.token)
+        .json(&serde_json::json!({"device_id":a.identity.device_id,"root":abandoned.event.object}))
+        .send()
+        .await
+        .unwrap();
+    assert!(cancelled.status().is_success());
+    assert_eq!(
+        send(&a, &abandoned).await.unwrap().status(),
+        reqwest::StatusCode::CONFLICT
+    );
+    let remove = event(
+        Some(&g),
+        &a,
+        GroupAction::Remove {
+            user_id: b.identity.user_id.clone(),
+        },
+    );
+    assert!(f.change(&a, &remove, false).await.status().is_success());
+    let left = apply_change(Some(&g), &remove).unwrap();
+    let _joined = f.add(&left, &a, &b).await;
+    let page = f
+        .client
+        .get(&endpoint)
+        .bearer_auth(&b.token)
+        .query(&[("device_id", &b.identity.device_id)])
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json::<e::Page>()
+        .await
+        .unwrap();
+    assert!(page.items.iter().all(|x| x.ciphertext.is_none()));
+    assert_eq!(
+        send(&b, &answer).await.unwrap().status(),
+        if y.is_success() {
+            reqwest::StatusCode::OK
+        } else {
+            reqwest::StatusCode::CONFLICT
+        }
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn extension_attachment_chunks_publication_rejoin_and_shared_quota() {
+    use liteseal_shared::{collaboration as c, group_extension as e};
+    let f = Fixture::start().await;
+    let a = f.account().await;
+    let b = f.account().await;
+    let create = event(
+        None,
+        &a,
+        GroupAction::Create {
+            name: "group media".into(),
+            owner: a.identity.clone(),
+        },
+    );
+    assert!(f.change(&a, &create, true).await.status().is_success());
+    let g = f
+        .add(&pin_creation(&create, &a.identity).unwrap(), &a, &b)
+        .await;
+    let blob = uuid::Uuid::new_v4().to_string();
+    let plain = vec![17; 1024 * 1024 + 9];
+    let (cipher, key) = crypto::encrypt_attachment(&plain).unwrap();
+    let media = format!("{}/groups/{}/attachments", f.url, g.group_id());
+    let result = f
+        .client
+        .post(&media)
+        .bearer_auth(&a.token)
+        .json(&serde_json::json!({"device_id":a.identity.device_id,"id":blob,"size":cipher.len()}))
+        .send()
+        .await
+        .unwrap();
+    assert!(result.status().is_success());
+    let mut roots = batch(&g, &a, &[(&b, None)]);
+    roots[0].ciphertext = crypto::encrypt(
+        e::PLACEHOLDER.as_bytes(),
+        &b.keys.public_key,
+        &a.keys.secret_key,
+    )
+    .unwrap();
+    roots[0].signature = crypto::sign(&roots[0].signing_bytes(), &a.keys.ed25519_sk).unwrap();
+    let content = e::Content::Attachment(e::Attachment {
+        version: 1,
+        blob: blob.clone(),
+        name: "中文.png".into(),
+        size: plain.len() as u64,
+        mime: "application/octet-stream".into(),
+        duration_ms: None,
+        key,
+        hash: c::digest(&cipher),
+    });
+    let sub = e::make(
+        &g,
+        &c::Member::from(g.member(&a.identity.user_id).unwrap()),
+        roots[0].message_id.clone(),
+        uuid::Uuid::new_v4().to_string(),
+        None,
+        e::Action::Attachment {
+            blob: blob.clone(),
+            size: plain.len() as u64,
+            hash: c::digest(&cipher),
+        },
+        Some(&content),
+        roots.clone(),
+        &a.keys,
+        roots[0].sent_at,
+    )
+    .unwrap();
+    let send = || {
+        f.client
+            .post(format!("{}/groups/{}/extensions", f.url, g.group_id()))
+            .bearer_auth(&a.token)
+            .json(&serde_json::json!({"device_id":a.identity.device_id,"submission":sub}))
+            .send()
+    };
+    assert_eq!(
+        send().await.unwrap().status(),
+        reqwest::StatusCode::CONFLICT
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM group_message_batches WHERE group_id=$1"
+        )
+        .bind(g.group_id())
+        .fetch_one(f.db.pool())
+        .await
+        .unwrap(),
+        0
+    );
+    for (part, bytes) in cipher.chunks(1024 * 1024).enumerate() {
+        assert!(f
+            .client
+            .put(format!("{media}/{blob}/{part}"))
+            .bearer_auth(&a.token)
+            .query(&[("device_id", &a.identity.device_id)])
+            .body(bytes.to_vec())
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_success());
+    }
+    assert_eq!(
+        f.client
+            .put(format!("{media}/{blob}/0"))
+            .bearer_auth(&a.token)
+            .query(&[("device_id", &a.identity.device_id)])
+            .body(vec![0; 1024 * 1024])
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::CONFLICT
+    );
+    assert!(send().await.unwrap().status().is_success());
+    assert!(send().await.unwrap().status().is_success());
+    let download = || {
+        f.client
+            .get(format!("{media}/{blob}/0"))
+            .bearer_auth(&b.token)
+            .query(&[("device_id", &b.identity.device_id)])
+            .send()
+    };
+    assert_eq!(
+        download()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap()
+            .as_ref(),
+        &cipher[..1024 * 1024]
+    );
+    let remove = event(
+        Some(&g),
+        &a,
+        GroupAction::Remove {
+            user_id: b.identity.user_id.clone(),
+        },
+    );
+    assert!(f.change(&a, &remove, false).await.status().is_success());
+    assert_eq!(
+        download().await.unwrap().status(),
+        reqwest::StatusCode::NOT_FOUND
+    );
+    let left = apply_change(Some(&g), &remove).unwrap();
+    let _next = f.add(&left, &a, &b).await;
+    assert_eq!(
+        download().await.unwrap().status(),
+        reqwest::StatusCode::NOT_FOUND
+    );
+    // Synthetic retained direct quota; no allocating hundreds of MiB of ciphertext.
+    sqlx::query("INSERT INTO attachment_objects(id,owner,message_id,recipient,size,expires_at) VALUES($1,$2,$3,$4,$5,now()+interval '1 day')").bind(uuid::Uuid::new_v4().to_string()).bind(&a.identity.user_id).bind(uuid::Uuid::new_v4().to_string()).bind(&b.identity.user_id).bind(512_i64*1024*1024-cipher.len() as i64).execute(f.db.pool()).await.unwrap();
+    assert_eq!(f.client.post(&media).bearer_auth(&a.token).json(&serde_json::json!({"device_id":a.identity.device_id,"id":uuid::Uuid::new_v4().to_string(),"size":40})).send().await.unwrap().status(),reqwest::StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(f.client.post(format!("{}/attachments",f.url)).bearer_auth(&a.token).json(&serde_json::json!({"device_id":a.identity.device_id,"id":uuid::Uuid::new_v4().to_string(),"message_id":uuid::Uuid::new_v4().to_string(),"recipient":b.identity.user_id,"size":40})).send().await.unwrap().status(),reqwest::StatusCode::PAYLOAD_TOO_LARGE);
+    sqlx::query(
+        "UPDATE group_attachment_objects SET expires_at=now()-interval '1 second' WHERE id=$1",
+    )
+    .bind(&blob)
+    .execute(f.db.pool())
+    .await
+    .unwrap();
+    crate::attachments::cleanup(f.db.pool()).await.unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM group_attachment_chunks WHERE object_id=$1"
+        )
+        .bind(&blob)
+        .fetch_one(f.db.pool())
+        .await
+        .unwrap(),
+        0
+    );
+    // A retired publication cannot recycle its blob ID into a later membership phase.
+    assert_eq!(
+        f.client
+            .post(&media)
+            .bearer_auth(&a.token)
+            .json(
+                &serde_json::json!({"device_id":a.identity.device_id,"id":blob,"size":cipher.len()})
+            )
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::CONFLICT
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn extension_pagination_retention_and_cancellation_idempotency() {
+    use liteseal_shared::{collaboration as c, group_extension as e};
+    let f = Fixture::start().await;
+    let a = f.account().await;
+    let b = f.account().await;
+    let create = event(
+        None,
+        &a,
+        GroupAction::Create {
+            name: "extension bounds".into(),
+            owner: a.identity.clone(),
+        },
+    );
+    assert!(f.change(&a, &create, true).await.status().is_success());
+    let g = f
+        .add(&pin_creation(&create, &a.identity).unwrap(), &a, &b)
+        .await;
+    let endpoint = format!("{}/groups/{}/extensions", f.url, g.group_id());
+    let mut roots = batch(&g, &a, &[(&b, None)]);
+    roots[0].ciphertext = crypto::encrypt(
+        e::PLACEHOLDER.as_bytes(),
+        &b.keys.public_key,
+        &a.keys.secret_key,
+    )
+    .unwrap();
+    roots[0].signature = crypto::sign(&roots[0].signing_bytes(), &a.keys.ed25519_sk).unwrap();
+    let content = e::Content::Activity(e::Activity {
+        title: "bounds".into(),
+        start_at: now(),
+        timezone: "UTC".into(),
+        location: "".into(),
+        description: "".into(),
+    });
+    let original = e::make(
+        &g,
+        &c::Member::from(g.member(&a.identity.user_id).unwrap()),
+        roots[0].message_id.clone(),
+        uuid::Uuid::new_v4().to_string(),
+        None,
+        e::Action::Activity,
+        Some(&content),
+        roots.clone(),
+        &a.keys,
+        roots[0].sent_at,
+    )
+    .unwrap();
+    assert!(f
+        .client
+        .post(&endpoint)
+        .bearer_auth(&a.token)
+        .json(&serde_json::json!({"device_id":a.identity.device_id,"submission":original}))
+        .send()
+        .await
+        .unwrap()
+        .status()
+        .is_success());
+    // Seed valid signed responses to exercise pages without defeating HTTP rate limits.
+    let mut object = e::transition(None, &g, &original.event).unwrap();
+    for _ in 0..104 {
+        let sub = e::make(
+            &g,
+            &c::Member::from(g.member(&b.identity.user_id).unwrap()),
+            object.id.clone(),
+            uuid::Uuid::new_v4().to_string(),
+            Some(&object),
+            e::Action::Respond {
+                answer: e::Answer::Maybe,
+            },
+            None,
+            vec![],
+            &b.keys,
+            now(),
+        )
+        .unwrap();
+        object = e::transition(Some(&object), &g, &sub.event).unwrap();
+        sqlx::query("INSERT INTO group_extension_events(group_id,id,object_id,revision,header,submission_hash) VALUES($1,$2,$3,$4,$5,$6)").bind(g.group_id()).bind(&sub.event.id).bind(&sub.event.object).bind(sub.event.revision as i64).bind(serde_json::to_string(&sub.event).unwrap()).bind(c::digest(&serde_json::to_vec(&sub).unwrap())).execute(f.db.pool()).await.unwrap();
+    }
+    let response = f
+        .client
+        .get(&endpoint)
+        .bearer_auth(&b.token)
+        .query(&[("device_id", &b.identity.device_id)])
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let bytes = response.bytes().await.unwrap();
+    assert!(bytes.len() <= 512 * 1024);
+    let page: e::Page = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(page.items.len(), 100);
+    assert!(page.more);
+    let next = f
+        .client
+        .get(&endpoint)
+        .bearer_auth(&b.token)
+        .query(&[
+            ("device_id", b.identity.device_id.clone()),
+            ("after", page.cursor.to_string()),
+        ])
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json::<e::Page>()
+        .await
+        .unwrap();
+    assert_eq!(next.items.len(), 5);
+    assert!(!next.more);
+    assert!(next.items[0].seq > page.cursor);
+    let cancel_id = uuid::Uuid::new_v4().to_string();
+    let root_id = uuid::Uuid::new_v4().to_string();
+    let cancel = || {
+        f.client
+            .post(format!("{endpoint}/{cancel_id}/cancel"))
+            .bearer_auth(&a.token)
+            .json(&serde_json::json!({"device_id":a.identity.device_id,"root":root_id}))
+            .send()
+    };
+    assert!(cancel().await.unwrap().status().is_success());
+    sqlx::query("INSERT INTO group_extension_cancellations(group_id,id,device_id) SELECT $1,md5(i::text)::uuid::text,$2 FROM generate_series(1,9894) i").bind(g.group_id()).bind(&a.identity.device_id).execute(f.db.pool()).await.unwrap();
+    assert!(cancel().await.unwrap().status().is_success());
+    let changed=f.client.post(format!("{endpoint}/{cancel_id}/cancel")).bearer_auth(&a.token).json(&serde_json::json!({"device_id":a.identity.device_id,"root":uuid::Uuid::new_v4().to_string()})).send().await.unwrap();
+    assert_eq!(changed.status(), reqwest::StatusCode::CONFLICT);
+    let extra = f
+        .client
+        .post(format!("{endpoint}/{}/cancel", uuid::Uuid::new_v4()))
+        .bearer_auth(&a.token)
+        .json(&serde_json::json!({"device_id":a.identity.device_id,"root":null}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(extra.status(), reqwest::StatusCode::INSUFFICIENT_STORAGE);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM group_message_payloads WHERE group_id=$1"
+        )
+        .bind(g.group_id())
+        .fetch_one(f.db.pool())
+        .await
+        .unwrap(),
+        1
+    );
+}
 async fn page(f: &Fixture, account: &Account, group: &str) -> GroupMessagePage {
     f.receive_group(account, group)
         .await

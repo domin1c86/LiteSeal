@@ -4,6 +4,7 @@
 //! platform shells only adapt it to their IPC mechanism.
 
 pub mod api;
+pub mod attachment_cache;
 pub mod backup;
 pub mod beta;
 pub mod chat;
