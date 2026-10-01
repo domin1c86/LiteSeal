@@ -5,10 +5,14 @@ import fs from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { DesktopBridge } from "./bridge";
 import { commandNames } from "./contracts";
+import { deviceCommands, DeviceControlGate } from "./device-control";
 
 protocol.registerSchemesAsPrivileged([{ scheme: "liteseal", privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
 const devUrl = "http://127.0.0.1:1420";
 const bridge = new DesktopBridge();
+const deviceControl = new DeviceControlGate(bridge);
+let screenLocked = false;
+let systemSuspended = false;
 let mainWindow: BrowserWindow | undefined;
 let archiveWindow: BrowserWindow | undefined;
 let archiveHandle: string | null = null;
@@ -36,6 +40,7 @@ let releaseUrl: string | null = null;
 function lockApp() {
   invalidateBackups();
   if (!lockEnabled || locked) return;
+  deviceControl.suspend();
   locked = true; lockGeneration++;
   notifications.lock(true);
   // Unmount decrypted renderer state, including message and image previews.
@@ -52,6 +57,7 @@ else {
   app.on("window-all-closed", () => app.quit());
   app.on("before-quit", event => {
     invalidateBackups();
+    deviceControl.suspend();
     if (cleanedUp) return;
     exitRequested = true;
     event.preventDefault();
@@ -102,11 +108,13 @@ else {
       if (typeof configuration.enabled !== "boolean") throw new Error("应用锁配置损坏");
       lockEnabled = configuration.enabled; locked = lockEnabled; notifications.lock(locked);
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    if (locked) deviceControl.suspend();
     if (quitting) return;
     app.setAppUserModelId("com.liteseal.app");
-    powerMonitor.on("lock-screen", () => { notifications.lock(true); lockApp(); });
-    powerMonitor.on("suspend", () => { invalidateBackups(); void bridge.call("suspend_scheduled_messages", {}).catch(() => {}); });
-    powerMonitor.on("unlock-screen", () => { if (!locked) notifications.lock(false); });
+    powerMonitor.on("lock-screen", () => { screenLocked = true; deviceControl.suspend(); notifications.lock(true); lockApp(); });
+    powerMonitor.on("suspend", () => { systemSuspended = true; deviceControl.suspend(); invalidateBackups(); void bridge.call("suspend_scheduled_messages", {}).catch(() => {}); });
+    powerMonitor.on("unlock-screen", () => { screenLocked = false; if (!locked) { notifications.lock(false); if (!systemSuspended) void deviceControl.resume().catch(() => {}); } });
+    powerMonitor.on("resume", () => { systemSuspended = false; if (!locked && !screenLocked) void deviceControl.resume().catch(() => {}); });
     setInterval(() => { if (powerMonitor.getSystemIdleTime() >= 300) lockApp(); }, 1000).unref();
     const csp = `default-src 'self'; script-src 'self'${app.isPackaged ? "" : " 'unsafe-inline'"}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' data: blob:; connect-src 'self'${app.isPackaged ? "" : " ws://127.0.0.1:1420"}; object-src 'none'; base-uri 'none'; frame-src 'none'`;
     protocol.handle("liteseal", async request => {
@@ -156,12 +164,13 @@ else {
             const password = (args as { password: string }).password;
             if (typeof password !== "string" || password.length > 1024) throw new Error("无效密码");
             unlockBusy = true; unlockAfter = Date.now() + 5000;
-            try { await bridge.call("unlock_app", { password }); locked = false; notifications.lock(false); }
+            try { await bridge.call("unlock_app", { password }); locked = false; notifications.lock(screenLocked); if (!screenLocked && !systemSuspended) await deviceControl.resume(); }
             finally { unlockBusy = false; }
             return { ok: true, result: null };
           }
           if (locked) throw new Error("应用已锁定，请先验证 Windows 身份");
           const generation = lockGeneration;
+          const deviceEpoch = deviceCommands.has(name) ? deviceControl.capture() : null;
           if(name==="stage_group_recorded_audio"){
             const input=args as {groupId:string;encoded:string;durationMs:number};if(Object.keys(args).some(k=>!["groupId","encoded","durationMs"].includes(k))||typeof input.groupId!=="string"||input.groupId.length>128||typeof input.encoded!=="string"||input.encoded.length>15*1024*1024||!Number.isInteger(input.durationMs)||input.durationMs<1||input.durationMs>60000)throw new Error("群语音长度、大小或参数无效");const bytes=Buffer.from(input.encoded,"base64");if(bytes.length>11*1024*1024||!bytes.subarray(0,4).equals(Buffer.from([0x1a,0x45,0xdf,0xa3])))throw new Error("群语音格式无效");const result=await bridge.call(name,input);if(locked||generation!==lockGeneration)throw new Error("应用已锁定");return{ok:true,result};
           }
@@ -408,8 +417,10 @@ else {
             return { ok: true, result: null };
           }
           if (name === "save_session" || name === "sign_out" || name === "clear_keypair" || name === "logout_all_sessions" || name === "change_password") notifications.context(null, null);
+          if (["save_session", "sign_out", "clear_keypair", "logout_all_sessions", "change_password"].includes(name)) deviceControl.invalidate();
           const result = await bridge.call(name, args as never);
           if (locked || generation !== lockGeneration) throw new Error("应用已锁定");
+          if (deviceEpoch !== null) deviceControl.check(deviceEpoch);
           if (name === "poll_messages") {
             // A failed notification must never consume or fail a persisted relay batch.
             await notifications.receive(result as import("../ui/src/types").PollMessagesResult).catch(() => {});
@@ -460,7 +471,7 @@ else {
       mainWindow?.hide();
     });
     mainWindow.on("closed", () => { mainWindow = undefined; });
-    mainWindow.webContents.on("will-prevent-unload", () => { exitRequested = false; });
+    mainWindow.webContents.on("will-prevent-unload", () => { exitRequested = false; if (!locked && !screenLocked && !systemSuspended) void deviceControl.resume().catch(() => {}); });
     mainWindow.webContents.on("render-process-gone", () => notifications.context(null, null));
     mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     mainWindow.webContents.on("will-navigate", event => event.preventDefault());

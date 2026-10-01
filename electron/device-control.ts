@@ -1,0 +1,36 @@
+import type { CommandName } from "./contracts";
+import type { DesktopBridge } from "./bridge";
+
+export const deviceCommands = new Set<CommandName>([
+  "get_device_control", "inspect_device_request", "prepare_device_challenge", "prepare_device_grant",
+  "prepare_device_revoke", "device_task_step", "cancel_device_task", "discard_device_task",
+]);
+
+/** Main owns suspension. Serialized transitions cannot unlock a later lock event. */
+export class DeviceControlGate {
+  private epoch = 0;
+  private suspended = false;
+  private transitions: Promise<unknown> = Promise.resolve();
+  constructor(private bridge: Pick<DesktopBridge, "call">) {}
+  capture(): number {
+    if (this.suspended) throw new Error("设备授权已暂停，请解锁后重试");
+    return this.epoch;
+  }
+  check(epoch: number): void {
+    if (this.suspended || epoch !== this.epoch) throw new Error("设备授权结果已失效，请重新查询");
+  }
+  suspend(): void {
+    this.suspended = true;
+    this.epoch++;
+    this.transitions = this.transitions.catch(() => {}).then(() => this.bridge.call("suspend_device_control", {}));
+    void this.transitions.catch(() => {});
+  }
+  async resume(): Promise<void> {
+    const epoch = ++this.epoch;
+    this.suspended = true;
+    this.transitions = this.transitions.catch(() => {}).then(() => this.bridge.call("resume_device_control", {}));
+    await this.transitions;
+    if (epoch === this.epoch) this.suspended = false;
+  }
+  invalidate(): void { this.epoch++; }
+}

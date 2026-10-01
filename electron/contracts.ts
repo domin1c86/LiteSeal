@@ -13,6 +13,16 @@ export interface GroupPoll { id: string; creator: string; question: string; opti
 export interface GroupCollaboration { polls: GroupPoll[]; pin: string | null; pin_unavailable: boolean; pin_revision: number; pending: boolean; conflict: boolean; pending_message: string | null }
 export type CollaborationCommand = { kind: "mention"; text: string; mentions: CollaborationMember[] } | { kind: "poll"; question: string; options: string[] } | { kind: "vote"; poll: string; option: string; revision: number } | { kind: "close"; poll: string; revision: number } | { kind: "pin"; message: string | null; revision: number };
 export interface CommandMap {
+  get_device_control: { args: {}; result: DeviceControlSnapshot };
+  inspect_device_request: { args: { requestId: string }; result: DeviceRequest };
+  prepare_device_challenge: { args: { requestId: string; confirmedFingerprint: string }; result: DeviceTask | null };
+  prepare_device_grant: { args: { requestId: string; confirmedFingerprint: string }; result: DeviceTask | null };
+  prepare_device_revoke: { args: { confirmedFingerprint: string }; result: DeviceTask | null };
+  device_task_step: { args: { id: string }; result: DeviceProgress };
+  cancel_device_task: { args: { id: string }; result: DeviceTask };
+  discard_device_task: { args: { id: string }; result: void };
+  suspend_device_control: { args: {}; result: void };
+  resume_device_control: { args: {}; result: void };
   get_group_extensions: { args: {groupId:string;messageIds:string[]}; result:GroupExtensions };
   sync_group_extensions: { args: {groupId:string}; result:boolean };
   submit_group_extension: { args: {groupId:string;command:GroupExtensionCommand}; result:null };
@@ -157,6 +167,11 @@ export interface CommandMap {
   clear_downloaded_attachments: { args: {  }; result: number };
 }
 export type CommandName = keyof CommandMap;
+export type DeviceTaskPhase = "draft" | "awaiting_root_confirmation" | "awaiting_challenge" | "awaiting_authorization" | "prepared" | "cancelling" | "conflict" | "complete" | "cancelled" | "expired" | "revoked";
+export interface DeviceTask { id: string; kind: "join" | "challenge" | "grant" | "revoke"; phase: DeviceTaskPhase; revision: number; request_id: string | null; event_id: string | null; root_fingerprint: string | null }
+export interface DeviceRequest { request_id: string; device_id: string; device_name: string; encryption_fingerprint: string; signing_fingerprint: string; combined_fingerprint: string; phase: "begun" | "ready" | "challenged" | "proved" | "authorized" | "cancelled" | "expired" | "revoked" }
+export interface DeviceControlSnapshot { root_fingerprint: string; supported: boolean; syncing: boolean; messaging_enabled: boolean; requests: DeviceRequest[]; tasks: DeviceTask[]; authorized: { device_id: string; combined_fingerprint: string; encryption_fingerprint: string; signing_fingerprint: string } | null }
+export interface DeviceProgress { task: DeviceTask; condition: "advanced" | "waiting" | "needs_password" | "needs_confirmation" | "syncing" | "retry" | "session_required" | "unsupported" | "conflict" | "terminal"; http_status: number | null }
 export interface BackupSummary { messages: number; groups: number; attachments: number; missing_attachments: number; skipped_attachments: number }
 export interface BackupJob { id: string; state: "running" | "completed" | "failed" | "cancelled"; completed: number; total: number; summary: BackupSummary | null; error: string | null; restorable: boolean }
 export interface BackupArchiveInfo { id: string; user_id: string; device_id: string; server_url: string; fingerprint: string; signing_fingerprint: string; summary: BackupSummary }
@@ -171,13 +186,14 @@ export interface ScheduledTask { id: string; peer_id: string; due_at: number; te
 export interface AttachmentTask { id: string; peer_id: string; message_id: string; name: string; size: number; mime: string; duration_ms?: number; offset: number; total: number; direction: string }
 export type DesktopApi = {
   // The mapped business API never exposes private attachment descriptors.
-  [K in CommandName]: (args: CommandMap[K]["args"]) => Promise<CommandMap[K]["result"]>;
+  [K in Exclude<CommandName, "suspend_device_control" | "resume_device_control">]: (args: CommandMap[K]["args"]) => Promise<CommandMap[K]["result"]>;
 };
 export type GroupAnswer="yes"|"no"|"maybe";
 export interface GroupActivity { id:string;creator:string;title:string;start_at:number;timezone:string;location:string;description:string;responses:Record<string,GroupAnswer>;participants:string[];departed:string[];closed:boolean;cancelled:boolean;eligible:boolean;can_manage:boolean;revision:number }
 export interface GroupExtensions { attachments:{id:string;blob:string;name:string;size:number;mime:string;duration_ms:number|null}[];activities:GroupActivity[];pending:boolean;conflict:boolean;pending_root:string|null }
 export type GroupExtensionCommand={kind:"activity";title:string;start_at:number;timezone:string;location:string;description:string}|{kind:"respond";activity:string;answer:GroupAnswer;revision:number}|{kind:"close"|"cancel";activity:string;revision:number};
 export const commandNames = [
+  "get_device_control", "inspect_device_request", "prepare_device_challenge", "prepare_device_grant", "prepare_device_revoke", "device_task_step", "cancel_device_task", "discard_device_task",
   "get_group_extensions", "sync_group_extensions", "submit_group_extension", "retry_group_extension", "cancel_group_extension", "select_group_attachment", "stage_group_attachment_file", "stage_group_recorded_audio", "stage_group_clipboard_image", "group_attachment_tasks", "group_attachment_step", "publish_group_attachment", "cancel_group_attachment", "begin_group_attachment_download", "export_group_attachment", "clear_group_attachment_cache",
   "start_backup_export", "start_backup_restore", "get_backup_job", "cancel_backup_job", "open_backup_archive", "get_backup_archive_info", "get_backup_conversations", "get_backup_history", "export_backup_attachment", "close_backup_archive",
   "get_group_collaboration", "sync_group_collaboration", "submit_group_collaboration", "retry_group_collaboration", "discard_group_collaboration_conflict",

@@ -1,5 +1,6 @@
 import PanelDialog from "./PanelDialog";
 import BackupPanel from "./BackupPanel";
+import DeviceControlPanel from "./DeviceControlPanel";
 import { getDesktopApi } from "../lib/desktopApi";
 import { useEffect, useState } from "react";
 import type { Contact } from "../types";
@@ -10,6 +11,7 @@ export default function AccountPanel({ userId, contacts, typingEnabled, onTyping
 }) {
   const [requests, setRequests] = useState<CommandMap["list_contact_requests"]["result"]>([]);
   const [showBackup, setShowBackup] = useState(false);
+  const [showDevices, setShowDevices] = useState(false);
   const [sessions, setSessions] = useState<CommandMap["list_account_sessions"]["result"]>([]);
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
   const [update, setUpdate] = useState<CommandMap["check_app_update"]["result"] | null>(null);
@@ -37,6 +39,9 @@ export default function AccountPanel({ userId, contacts, typingEnabled, onTyping
   }
   const peers = [...requests, ...contacts.filter(peer => !requests.some(row => row.peer_id === peer.user_id)).map(peer => ({ peer_id: peer.user_id, username: peer.username, status: "未设置" }))];
   return <PanelDialog label="账号与消息请求" wide busy={busy} onClose={onClose}>
+    <h2>可信设备</h2>
+    <button disabled={busy} onClick={() => setShowDevices(true)}>管理设备授权</button>
+    {showDevices && <DeviceControlPanel onClose={() => setShowDevices(false)} />}
     <h2>备份与恢复</h2>
     <button disabled={busy} onClick={() => setShowBackup(true)}>备份与隔离恢复</button>
     {showBackup && <BackupPanel onClose={() => setShowBackup(false)} />}

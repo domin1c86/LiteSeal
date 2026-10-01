@@ -24,7 +24,8 @@
     "test:ui:style": "node scripts/test-ui-style.mjs",
     "test:backup:ui": "node scripts/test-backup-ui.mjs",
     "test:groups:soak": "node scripts/test-group-soak.mjs",
-    "test:devices:trial": "node scripts/test-trusted-devices.mjs"
+    "test:devices:trial": "node scripts/test-trusted-devices.mjs",
+    "test:devices:ui": "node scripts/test-devices-ui.mjs"
   },
   "devDependencies": {
     "electron": "44.3.0",

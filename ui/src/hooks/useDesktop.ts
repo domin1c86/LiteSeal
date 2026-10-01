@@ -1,4 +1,4 @@
-import type { CommandMap, CommandName } from "../../../electron/contracts";
+import type { CommandMap, DesktopApi } from "../../../electron/contracts";
 import { getDesktopApi } from "../lib/desktopApi";
 
 import type {
@@ -15,7 +15,7 @@ import type {
   RemoteDevice,
 } from "../types";
 
-async function invoke<K extends CommandName>(name: K, args: CommandMap[K]["args"]): Promise<CommandMap[K]["result"]> {
+async function invoke<K extends keyof DesktopApi>(name: K, args: CommandMap[K]["args"]): Promise<CommandMap[K]["result"]> {
   const method = getDesktopApi()[name] as (value: CommandMap[K]["args"]) => Promise<CommandMap[K]["result"]>;
   return method(args);
 }

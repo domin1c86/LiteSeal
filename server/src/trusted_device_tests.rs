@@ -1550,3 +1550,201 @@ async fn coordinator_drives_join_retry_verified_acceptance_and_cancel_without_re
     let _ = std::fs::remove_file(path);
     let _ = std::fs::remove_file(root_path);
 }
+
+#[cfg(windows)]
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn desktop_original_device_commands_confirm_grant_retry_revoke_and_disabled_server() {
+    use liteseal_core::{
+        backup::WorkDirectory, keystore::KeystoreData, trusted_devices::api::DeviceControlApi,
+    };
+    use liteseal_desktop::{
+        protocol::{dispatch, Command},
+        AppState as DesktopState,
+    };
+    async fn call(
+        state: &DesktopState,
+        name: &str,
+        args: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let command: Command =
+            serde_json::from_value(serde_json::json!({"name":name,"args":args})).unwrap();
+        dispatch(command, state).await
+    }
+    fn saved(root: &Account, url: &str) -> KeystoreData {
+        KeystoreData {
+            user_id: root.id.clone(),
+            device_id: root.device.clone(),
+            server_url: url.into(),
+            token: root.token.clone(),
+            refresh_token: "synthetic-unused".into(),
+            public_key: root.keys.public_key.to_vec(),
+            secret_key: root.keys.secret_key.to_vec(),
+            ed25519_pk: root.keys.ed25519_pk.to_vec(),
+            ed25519_sk: root.keys.ed25519_sk.to_vec(),
+        }
+    }
+    let (f, lose) = Fixture::start_with_loss().await;
+    let root = f.account().await;
+    let join = f.join(&root).await;
+    f.ready(&join).await;
+    let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
+    let db = work.0.join("original.db");
+    let keyfile = work.0.join("original.bin");
+    let state = DesktopState::with_keystore(db.to_str().unwrap(), Some(keyfile.clone())).unwrap();
+    state.save_identity(saved(&root, &f.url)).unwrap();
+    let snapshot = call(&state, "get_device_control", serde_json::json!({}))
+        .await
+        .unwrap();
+    assert_eq!(snapshot["supported"], true);
+    assert_eq!(snapshot["messaging_enabled"], false);
+    assert_eq!(snapshot["requests"][0]["request_id"], join.status.ticket.id);
+    let serialized = snapshot.to_string();
+    for field in ["token", "secret_key", "ed25519_sk", "request_token"] {
+        assert!(!serialized.contains(field));
+    }
+    let inspection = call(
+        &state,
+        "inspect_device_request",
+        serde_json::json!({"requestId":join.status.ticket.id}),
+    )
+    .await
+    .unwrap();
+    let fingerprint = inspection["combined_fingerprint"].as_str().unwrap();
+    assert!(call(
+        &state,
+        "prepare_device_challenge",
+        serde_json::json!({"requestId":join.status.ticket.id,"confirmedFingerprint":"wrong"})
+    )
+    .await
+    .is_err());
+    let challenge = call(
+        &state,
+        "prepare_device_challenge",
+        serde_json::json!({"requestId":join.status.ticket.id,"confirmedFingerprint":fingerprint}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        call(
+            &state,
+            "device_task_step",
+            serde_json::json!({"id":challenge["id"]})
+        )
+        .await
+        .unwrap()["task"]["phase"],
+        "complete"
+    );
+    let api = DeviceControlApi::new(&f.url).unwrap();
+    let remote = api
+        .status(&join.token, &join.status.ticket.id, None)
+        .await
+        .unwrap();
+    let initial = DeviceState::pin(join.status.ticket.anchor.clone()).unwrap();
+    let proof = answer_challenge(
+        &initial,
+        remote.intent.as_ref().unwrap(),
+        remote.challenge.as_ref().unwrap(),
+        now(),
+        &join.keys,
+    )
+    .unwrap();
+    api.proof(&join.token, &join.status.ticket.id, &proof)
+        .await
+        .unwrap();
+    let grant = call(
+        &state,
+        "prepare_device_grant",
+        serde_json::json!({"requestId":join.status.ticket.id,"confirmedFingerprint":fingerprint}),
+    )
+    .await
+    .unwrap();
+    *lose.lock().unwrap() = Some("/devices/grants".into());
+    assert_eq!(
+        call(
+            &state,
+            "device_task_step",
+            serde_json::json!({"id":grant["id"]})
+        )
+        .await
+        .unwrap()["condition"],
+        "retry"
+    );
+    drop(state);
+    let state = DesktopState::with_keystore(db.to_str().unwrap(), Some(keyfile)).unwrap();
+    assert_eq!(
+        call(
+            &state,
+            "device_task_step",
+            serde_json::json!({"id":grant["id"]})
+        )
+        .await
+        .unwrap()["task"]["phase"],
+        "complete"
+    );
+    let snapshot = call(&state, "get_device_control", serde_json::json!({}))
+        .await
+        .unwrap();
+    assert_eq!(
+        snapshot["authorized"]["device_id"],
+        join.status.ticket.device.device_id
+    );
+    assert_eq!(snapshot["authorized"]["combined_fingerprint"], fingerprint);
+    assert!(call(
+        &state,
+        "prepare_device_revoke",
+        serde_json::json!({"confirmedFingerprint":"wrong-target"})
+    )
+    .await
+    .is_err());
+    let args = serde_json::json!({"confirmedFingerprint":fingerprint});
+    let revoke = call(&state, "prepare_device_revoke", args.clone())
+        .await
+        .unwrap();
+    call(
+        &state,
+        "cancel_device_task",
+        serde_json::json!({"id":revoke["id"]}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        call(
+            &state,
+            "device_task_step",
+            serde_json::json!({"id":revoke["id"]})
+        )
+        .await
+        .unwrap()["task"]["phase"],
+        "cancelled"
+    );
+    call(
+        &state,
+        "discard_device_task",
+        serde_json::json!({"id":revoke["id"]}),
+    )
+    .await
+    .unwrap();
+    let revoke = call(&state, "prepare_device_revoke", args).await.unwrap();
+    call(
+        &state,
+        "device_task_step",
+        serde_json::json!({"id":revoke["id"]}),
+    )
+    .await
+    .unwrap();
+    assert!(call(&state, "get_device_control", serde_json::json!({}))
+        .await
+        .unwrap()["authorized"]
+        .is_null());
+    assert_eq!(f.db.list_user_devices(&root.id).await.unwrap().len(), 1);
+    let disabled = Fixture::start(false).await;
+    let another = disabled.account().await;
+    state.save_identity(saved(&another, &disabled.url)).unwrap();
+    let snapshot = call(&state, "get_device_control", serde_json::json!({}))
+        .await
+        .unwrap();
+    assert_eq!(snapshot["supported"], false);
+    assert_eq!(snapshot["tasks"], serde_json::json!([]));
+    assert!(snapshot["authorized"].is_null());
+}

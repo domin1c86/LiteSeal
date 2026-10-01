@@ -51,6 +51,12 @@ Windows 数据路径和格式保持兼容：
 
 ## 构建、验证与边界
 
+### 可信设备原设备管理（2026-10-02）
+
+页面新增 `get_device_control`、`inspect_device_request`、`prepare_device_challenge`、`prepare_device_grant`、`prepare_device_revoke`、`device_task_step`、`cancel_device_task`、`discard_device_task`。仅传请求/任务编号和已确认的公开指纹，Rust 读取原身份及密钥后签名，返回无凭据视图。暂停/恢复两个命令仅存在于私有 sidecar 允许列表，不注册页面 IPC 或 preload 方法，离线档案也不能调用设备管理。
+
+主进程门禁拒绝系统锁屏/休眠/应用锁/退出期间的新操作与旧结果，Rust 上下文同时失效租约。启动锁定亦暂停，解锁/恢复按代次串行；新锁发生后旧恢复不能解除暂停。身份变更失效旧上下文，令牌更新不能绕过锁定。账号管理页使用完整双指纹确认和原任务推进，当前不开放第二设备聊天。协议及剩余边界见[可信设备设计](TRUSTED_DEVICES_DESIGN.md)。
+
 根 npm workspace 管理 Electron 和 UI，移动端保留独立 package-lock。Cargo.lock 和根 package-lock 一并提交，确保依赖可重现。
 
 `npm run dev` 构建 Rust 与 Electron，启动 Vite，再启动 Electron；React 热更新，Rust 或主进程改动后需重启。`npm run build` 生成全部正式代码。`npm run dist:win` 只允许 Windows x64，构建 NSIS 并检查包含前端、preload 和 Rust exe。生成安装包不代表发布；没有新增自动更新或代码签名。

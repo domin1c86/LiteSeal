@@ -16,6 +16,42 @@ pub struct Request {
 #[derive(Deserialize)]
 #[serde(tag = "name", content = "args", deny_unknown_fields)]
 pub enum Command {
+    #[serde(rename = "get_device_control")]
+    GetDeviceControl {},
+    #[serde(rename = "inspect_device_request")]
+    InspectDeviceRequest {
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
+    #[serde(rename = "prepare_device_challenge")]
+    PrepareDeviceChallenge {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(rename = "confirmedFingerprint")]
+        confirmed_fingerprint: String,
+    },
+    #[serde(rename = "prepare_device_grant")]
+    PrepareDeviceGrant {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(rename = "confirmedFingerprint")]
+        confirmed_fingerprint: String,
+    },
+    #[serde(rename = "prepare_device_revoke")]
+    PrepareDeviceRevoke {
+        #[serde(rename = "confirmedFingerprint")]
+        confirmed_fingerprint: String,
+    },
+    #[serde(rename = "device_task_step")]
+    DeviceTaskStep { id: String },
+    #[serde(rename = "cancel_device_task")]
+    CancelDeviceTask { id: String },
+    #[serde(rename = "discard_device_task")]
+    DiscardDeviceTask { id: String },
+    #[serde(rename = "suspend_device_control")]
+    SuspendDeviceControl {},
+    #[serde(rename = "resume_device_control")]
+    ResumeDeviceControl {},
     #[serde(rename = "get_group_extensions")]
     GetGroupExtensions {
         #[serde(rename = "groupId")]
@@ -761,6 +797,46 @@ impl Response {
 
 pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, String> {
     let result = match command {
+        Command::GetDeviceControl {} => {
+            serde_json::to_value(commands::device_control::snapshot(state).await?)
+        }
+        Command::InspectDeviceRequest { request_id } => {
+            serde_json::to_value(commands::device_control::inspect(state, request_id).await?)
+        }
+        Command::PrepareDeviceChallenge {
+            request_id,
+            confirmed_fingerprint,
+        } => serde_json::to_value(
+            commands::device_control::prepare(state, request_id, confirmed_fingerprint, false)
+                .await?,
+        ),
+        Command::PrepareDeviceGrant {
+            request_id,
+            confirmed_fingerprint,
+        } => serde_json::to_value(
+            commands::device_control::prepare(state, request_id, confirmed_fingerprint, true)
+                .await?,
+        ),
+        Command::PrepareDeviceRevoke {
+            confirmed_fingerprint,
+        } => serde_json::to_value(
+            commands::device_control::revoke(state, confirmed_fingerprint).await?,
+        ),
+        Command::DeviceTaskStep { id } => {
+            serde_json::to_value(commands::device_control::step(state, id).await?)
+        }
+        Command::CancelDeviceTask { id } => {
+            serde_json::to_value(commands::device_control::cancel(state, id)?)
+        }
+        Command::DiscardDeviceTask { id } => {
+            serde_json::to_value(commands::device_control::discard(state, id)?)
+        }
+        Command::SuspendDeviceControl {} => {
+            serde_json::to_value(commands::device_control::suspend(state)?)
+        }
+        Command::ResumeDeviceControl {} => {
+            serde_json::to_value(commands::device_control::resume(state)?)
+        }
         Command::GetGroupExtensions {
             group_id,
             message_ids,

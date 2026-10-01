@@ -1,5 +1,13 @@
 # P0/P1 源码交付记录
 
+## 2026-10-02 T23 原设备桌面授权管理
+
+账号面板新增可信设备管理：双指纹确认、准备挑战/授权、绑定目标的撤销、原任务推进/取消/清理及未启用服务器状态。八个页面业务接口、两个私有生命周期接口已接通；Rust 使用既有 DPAPI 身份，页面只收到公开视图。启动锁定、系统锁屏/休眠、应用锁、身份/令牌变化和退出使旧结果失效；恢复不能覆盖新锁，离线档案不开放这些接口。加入端 Windows 档案/界面尚未接通，第二设备普通登录/聊天仍关闭。
+
+最终 `npm test`：16 项 Node/Electron、175 项普通 Rust、0 失败；默认 ignored 的 35 项专用 PostgreSQL 已全部实际执行通过。专项入口扩展为 31 项及离线示例通过，生产构建、格式、全 workspace/all-targets Clippy（-D warnings）和核心 FFI 通过，保留 LNK4098/LNK4099。真实三客户端原群附件/合成语音/活动/T22 v2 回归通过；设备 UI 深浅/宽窄各 8 项（14 秒）、群 UI 各 16 项、备份 UI 各 8 项及 72 张风格截图通过，已核对设备确认截图。
+
+证据：`database-2026-10-01T21-07-14-183Z.json`、`trusted-devices-2026-10-01T21-14-39-575Z.json`、`group-integration-2026-10-01T21-12-55-103Z.json`、`devices-ui-XDCZdD/result.json`、`group-ui-OVri8E/result.json`、`backup-ui-4mZs26/result.json`、`ui-style-w0x703/result.json`；工程日志 `device-desktop-regression-2026-10-02.txt`、`device-desktop-final-test-2026-10-02.txt`、`device-desktop-final-build-2026-10-02.txt` 均在 `target/test-results/`。初跑私有命令允许列表遗漏、测试 UUID/截图断言/重绘问题已纠正并复跑，早期报告保留。本轮只做短测；真实双 Windows/系统/强制终止和独立审查未关闭，原数据及未跟踪文件保留，本地提交不推送。
+
 ## 2026-10-02 T23 自动任务协调
 
 核心协调器已串接原任务查询、单页验链、原内容重试、指纹确认、证明与取消，普通令牌仅内存且轮换不会解锁，明确冲突不重签，过期挑战保持原内容后结束。3 项协调器测试通过；专项 29 项及离线示例、实际 PostgreSQL 34/34、完整 15 Node/173 Rust、构建/格式/Clippy/FFI 通过。证据 `trusted-devices-2026-10-01T20-52-21-904Z.json`、`database-2026-10-01T20-46-40-814Z.json`、`device-coordinator-regression-2026-10-02.txt`。仅短测，无新长期；桌面接线、激活/新信封、历史、高水位与独立审查仍未完成。

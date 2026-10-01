@@ -13,6 +13,7 @@ pub struct AppState {
     pub(crate) scheduled_tick: Mutex<Option<(String, i64)>>,
     pub(crate) groups_runtime: Mutex<commands::groups::Runtime>,
     pub(crate) groups_gate: tokio::sync::Mutex<()>,
+    pub(crate) device_control_runtime: Mutex<commands::device_control::Runtime>,
     pub(crate) backup_runtime: std::sync::Arc<Mutex<commands::backup::Runtime>>,
     pub(crate) backup_commit: std::sync::Arc<Mutex<()>>,
 }
@@ -33,6 +34,7 @@ impl AppState {
             scheduled_tick: Mutex::new(None),
             groups_runtime: Mutex::new(commands::groups::Runtime::default()),
             groups_gate: tokio::sync::Mutex::new(()),
+            device_control_runtime: Default::default(),
             backup_runtime: Default::default(),
             backup_commit: Default::default(),
         })
@@ -83,6 +85,7 @@ impl AppState {
         *cached = Some(data);
         drop(cached);
         if changed {
+            commands::device_control::invalidate(self)?;
             if let Some(previous) = previous {
                 commands::groups::invalidate(self, &previous)?;
             }
@@ -93,6 +96,7 @@ impl AppState {
     pub fn clear_identity(&self) -> Result<(), String> {
         let _commit = self.backup_commit.lock().map_err(|_| "备份提交锁不可用")?;
         commands::backup::invalidate(&self.backup_runtime)?;
+        commands::device_control::invalidate(self)?;
         let mut cached = self.identity.lock().map_err(|e| e.to_string())?;
         let previous = cached.clone();
         match &self.keystore_path {

@@ -7,11 +7,13 @@ const path = require('node:path');
 const os = require('node:os');
 const vm = require('node:vm');
 
-test('main process restricts IPC origins, navigation and packaged assets without opening a GUI', { timeout: 10000 }, async t => {
+for (const startupLocked of [false, true]) test(`main restricts IPC, locks and assets without a GUI (startup lock ${startupLocked})`, { timeout: 10000 }, async t => {
   const handlers = new Map();
   const intervals = [], commands = [], rendererEvents = [];
   const windows = [];
   const userData = await fs.mkdtemp(path.join(os.tmpdir(), 'liteseal-main-test-'));
+  if (startupLocked) await fs.writeFile(path.join(userData, 'app-lock.json'), JSON.stringify({ enabled: true }));
+  let now = Date.now();
   const avatarPath = path.join(userData, 'avatar.png');
   await fs.writeFile(avatarPath, Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
   t.after(() => fs.rm(userData, { recursive: true, force: true }));
@@ -19,12 +21,14 @@ test('main process restricts IPC origins, navigation and packaged assets without
   let loaded;
   const load = new Promise(resolve => { loaded = resolve; });
   const child = new EventEmitter();
+  let holdDevice = false, heldDevice;
   child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
   child.kill = () => { child.emit('exit', 0); child.emit('close', 0); };
   child.stdin.on('finish', child.kill);
   child.stdin.on('data', frame => {
     const request = JSON.parse(frame.toString());
     commands.push(request.command.name);
+    if (holdDevice && request.command.name === 'get_device_control') { heldDevice = request; return; }
     child.stdout.write(JSON.stringify({ id: request.id, result: request.command.name === 'process_scheduled_messages' ? 1 : request.command.name === 'process_groups' ? { changed: 1, errors: [] } : [] }) + '\n');
   });
   const app = Object.assign(new EventEmitter(), {
@@ -62,6 +66,7 @@ test('main process restricts IPC origins, navigation and packaged assets without
   };
   vm.runInNewContext(await fs.readFile('dist-electron/main.cjs', 'utf8'), {
     Blob, Buffer, URL, Headers, Response, console, setTimeout, clearTimeout,
+    Date: class extends Date { static now() { return now; } },
     setInterval: callback => { intervals.push(callback); return { unref() {} }; },
     process: { platform: process.platform, resourcesPath: '/installed/resources' },
     require(name) {
@@ -86,7 +91,42 @@ test('main process restricts IPC origins, navigation and packaged assets without
   assert.equal(blocked, true);
   const handler = handlers.get('liteseal:get_contacts');
   const valid = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
+  assert.equal(handlers.has('liteseal:resume_device_control'), false);
+  assert.equal(handlers.has('liteseal:suspend_device_control'), false);
+  if (startupLocked) {
+    assert.equal((await handlers.get('liteseal:app_lock_state')(valid, {})).result, true);
+    assert.equal((await handlers.get('liteseal:get_device_control')(valid, {})).ok, false);
+    assert.ok(commands.includes('suspend_device_control'), 'startup invalidates Rust coordinator');
+    assert.equal((await handlers.get('liteseal:unlock_app')(valid, { password: 'synthetic-unlock' })).ok, true);
+    now += 5000;
+    // Subsequent system-lock checks intentionally exercise the optional-lock-off case.
+    assert.equal((await handlers.get('liteseal:configure_app_lock')(valid, { enabled: false, password: 'synthetic-unlock' })).ok, true);
+    now += 5000;
+  }
   assert.equal((await handler(valid, {})).ok, true);
+  const devices = handlers.get('liteseal:get_device_control');
+  holdDevice = true;
+  const delayedDevice = devices(valid, {});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.ok(heldDevice);
+  electron.powerMonitor.emit('lock-screen');
+  assert.equal((await devices(valid, {})).ok, false, 'system lock blocks authorization without optional app lock');
+  electron.powerMonitor.emit('unlock-screen');
+  await new Promise(resolve => setTimeout(resolve, 0));
+  child.stdout.write(JSON.stringify({ id: heldDevice.id, result: { late: true } }) + '\n');
+  assert.equal((await delayedDevice).ok, false, 'unlock must not accept pre-lock results');
+  holdDevice = false;
+  const resumedDevice = await devices(valid, {});
+  assert.equal(resumedDevice.ok, true, resumedDevice.error);
+  electron.powerMonitor.emit('suspend');
+  assert.equal((await devices(valid, {})).ok, false);
+  electron.powerMonitor.emit('lock-screen');
+  electron.powerMonitor.emit('resume');
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal((await devices(valid, {})).ok, false, 'resume does not override screen lock');
+  electron.powerMonitor.emit('unlock-screen');
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal((await devices(valid, {})).ok, true);
   intervals[0](); await new Promise(resolve => setTimeout(resolve, 0));
   assert.ok(rendererEvents.some(args => args[0] === 'liteseal:scheduled-changed' && args.length === 1));
   intervals[1](); await new Promise(resolve => setTimeout(resolve, 0));
@@ -120,7 +160,7 @@ test('main process restricts IPC origins, navigation and packaged assets without
   const reader = windows[1];
   assert.ok(reader);
   const readerEvent = { sender: reader.webContents, senderFrame: reader.webContents.mainFrame };
-  for (const name of ['get_contacts', 'send_message', 'connect_relay', 'sign_message', 'prepare_identity', 'process_groups', 'start_backup_export', 'start_backup_restore']) {
+  for (const name of ['get_contacts', 'send_message', 'connect_relay', 'sign_message', 'prepare_identity', 'process_groups', 'start_backup_export', 'start_backup_restore', 'get_device_control', 'prepare_device_grant', 'cancel_device_task']) {
     assert.equal((await handlers.get(`liteseal:${name}`)(readerEvent, {})).ok, false, name);
   }
   assert.equal((await handlers.get('liteseal:get_backup_archive_info')(readerEvent, { id: 'archive-job' })).ok, true);
@@ -132,6 +172,7 @@ test('main process restricts IPC origins, navigation and packaged assets without
   assert.equal((await lock(valid, {})).ok, true);
   assert.equal((await handlers.get('liteseal:get_backup_archive_info')(readerEvent, { id: 'archive-job' })).ok, false);
   assert.equal((await lockState(valid, {})).result, true);
+  assert.equal((await devices(valid, {})).ok, false);
   for (const name of ['start_backup_export', 'start_backup_restore', 'get_backup_job', 'get_backup_history', 'export_backup_attachment']) {
     assert.equal((await handlers.get(`liteseal:${name}`)(valid, {})).ok, false, name);
   }

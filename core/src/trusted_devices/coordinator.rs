@@ -41,6 +41,23 @@ pub struct JoinInspection {
     pub combined_fingerprint: String,
     pub phase: JoinPhase,
 }
+#[derive(Debug, Serialize)]
+pub struct RootSnapshot {
+    pub root_fingerprint: String,
+    pub supported: bool,
+    pub syncing: bool,
+    pub messaging_enabled: bool,
+    pub requests: Vec<JoinInspection>,
+    pub tasks: Vec<TaskView>,
+    pub authorized: Option<AuthorizedView>,
+}
+#[derive(Debug, Serialize)]
+pub struct AuthorizedView {
+    pub device_id: String,
+    pub combined_fingerprint: String,
+    pub encryption_fingerprint: String,
+    pub signing_fingerprint: String,
+}
 pub fn device_fingerprint(device: &DeviceIdentity) -> String {
     use sha2::Digest;
     hex::encode(sha2::Sha256::digest(
@@ -78,6 +95,72 @@ pub struct DeviceCoordinator {
     session: RwLock<String>,
 }
 impl DeviceCoordinator {
+    pub async fn root_snapshot(&self, keys: &KeyPair) -> Result<RootSnapshot> {
+        let lease = self.lease(keys)?;
+        let _network = self.network.lock().await;
+        let anchor = self.owner.root_anchor().ok_or_else(invalid)?;
+        let tasks = self.with(&lease, |s| s.views(keys))?;
+        let token = self.token(&lease)?;
+        let statuses = match self.api.list(&token, &anchor.root.device_id).await {
+            Ok(statuses) => statuses,
+            Err(error) if error.status == Some(404) => {
+                self.with(&lease, |_| Ok(()))?;
+                return Ok(RootSnapshot {
+                    root_fingerprint: anchor_fingerprint(&anchor),
+                    supported: false,
+                    syncing: false,
+                    messaging_enabled: false,
+                    requests: vec![],
+                    tasks,
+                    authorized: None,
+                });
+            }
+            Err(_) => return Err(invalid()),
+        };
+        let mut requests = vec![];
+        for status in statuses {
+            if status.ticket.anchor != anchor {
+                return Err(invalid());
+            }
+            use sha2::Digest;
+            requests.push(JoinInspection {
+                request_id: status.ticket.id,
+                device_id: status.ticket.device.device_id.clone(),
+                device_name: status.ticket.device_name,
+                encryption_fingerprint: hex::encode(sha2::Sha256::digest(
+                    status.ticket.device.encryption_key,
+                )),
+                signing_fingerprint: hex::encode(sha2::Sha256::digest(
+                    status.ticket.device.signing_key,
+                )),
+                combined_fingerprint: device_fingerprint(&status.ticket.device),
+                phase: status.phase,
+            });
+        }
+        let state = self
+            .sync(&lease, None, &anchor, &token, None, keys)
+            .await
+            .map_err(|_| invalid())?;
+        use sha2::Digest;
+        let authorized = state
+            .as_ref()
+            .and_then(DeviceState::secondary)
+            .map(|device| AuthorizedView {
+                device_id: device.device_id.clone(),
+                combined_fingerprint: device_fingerprint(device),
+                encryption_fingerprint: hex::encode(sha2::Sha256::digest(device.encryption_key)),
+                signing_fingerprint: hex::encode(sha2::Sha256::digest(device.signing_key)),
+            });
+        Ok(RootSnapshot {
+            root_fingerprint: anchor_fingerprint(&anchor),
+            supported: true,
+            syncing: state.is_none(),
+            messaging_enabled: false,
+            requests,
+            tasks,
+            authorized,
+        })
+    }
     pub fn open(path: &Path, owner: TaskOwner, keys: &KeyPair) -> Result<Self> {
         let api = DeviceControlApi::new(owner.origin()).map_err(|_| invalid())?;
         let store = DeviceTaskStore::open(path, owner.clone(), keys).map_err(local)?;
@@ -381,6 +464,21 @@ impl DeviceCoordinator {
         })
     }
     pub async fn prepare_revoke(&self, keys: &KeyPair) -> Result<Option<TaskView>> {
+        self.prepare_revoke_with(None, keys).await
+    }
+    pub async fn prepare_revoke_confirmed(
+        &self,
+        confirmed_fingerprint: &str,
+        keys: &KeyPair,
+    ) -> Result<Option<TaskView>> {
+        self.prepare_revoke_with(Some(confirmed_fingerprint), keys)
+            .await
+    }
+    async fn prepare_revoke_with(
+        &self,
+        confirmed_fingerprint: Option<&str>,
+        keys: &KeyPair,
+    ) -> Result<Option<TaskView>> {
         let lease = self.lease(keys)?;
         let _network = self.network.lock().await;
         let anchor = self.owner.root_anchor().ok_or_else(invalid)?;
@@ -397,6 +495,13 @@ impl DeviceCoordinator {
         else {
             return Ok(None);
         };
+        if confirmed_fingerprint.is_some_and(|fingerprint| {
+            state
+                .secondary()
+                .is_none_or(|device| device_fingerprint(device) != fingerprint)
+        }) {
+            return Err(invalid());
+        }
         self.with(&lease, |s| {
             s.prepare_revoke(&state, chrono::Utc::now().timestamp_millis(), keys)
                 .map(|t| Some(t.view()))

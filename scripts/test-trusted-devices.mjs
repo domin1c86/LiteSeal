@@ -36,6 +36,11 @@ try {
   const coordinatorCounts = /test result: ok\. (\d+) passed; 0 failed; 0 ignored/.exec(coordinator.output);
   report.steps.push({ name: 'coordinator lock, token rotation and original expired task', passed: Number(coordinatorCounts?.[1] ?? 0), command: ['cargo', ...coordinatorArgs], status: coordinator.code === 0 && coordinatorCounts ? 'passed' : 'failed' });
   if (coordinator.code || !coordinatorCounts) throw new Error('device coordinator tests failed');
+  const desktopArgs = ['test', '--locked', '-p', 'liteseal-desktop', '--test', 'device_control'];
+  const desktop = execute('cargo', desktopArgs);
+  const desktopCounts = /test result: ok\. (\d+) passed; 0 failed; 0 ignored/.exec(desktop.output);
+  report.steps.push({ name: 'original-device typed IPC, DPAPI, suspension and late result rejection', passed: Number(desktopCounts?.[1] ?? 0), command: ['cargo', ...desktopArgs], status: desktop.code === 0 && desktopCounts ? 'passed' : 'failed' });
+  if (desktop.code || !desktopCounts) throw new Error('desktop device controls tests failed');
   const trial = execute('cargo', ['run', '--quiet', '--locked', '-p', 'liteseal-shared', '--example', 'trusted_device_trial']);
   const line = trial.output.split(/\r?\n/).find(line => line.startsWith('{'));
   const result = line ? JSON.parse(line) : null;

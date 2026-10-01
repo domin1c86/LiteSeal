@@ -1,0 +1,30 @@
+const { app, BrowserWindow, nativeTheme } = require('electron');
+const fs = require('node:fs/promises');
+const path = require('node:path');
+const directory = process.argv[2];
+const began = Date.now();
+app.setPath('userData', path.join(directory, 'profile')); app.disableHardwareAcceleration();
+let window;
+const report = { status: 'failed', scope: 'real Electron Chromium, simulated trusted-device business API, no network or real identity', cases: [], errors: [] };
+app.whenReady().then(async () => {
+  window = new BrowserWindow({ width: 1280, height: 900, useContentSize: true, show: false, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } });
+  window.webContents.on('console-message', (_event, level, message) => { if (level >= 3) report.errors.push(message); });
+  window.webContents.on('render-process-gone', () => report.errors.push('renderer terminated'));
+  await window.loadFile(path.join(directory, 'index.html'));
+  for (const theme of ['dark','light']) for (const [size,width,height] of [['wide',1280,900],['narrow',390,844]]) {
+    window.setContentSize(width,height);
+    nativeTheme.themeSource = theme;
+    const results = await window.webContents.executeJavaScript('window.runDeviceTests()');
+    await window.webContents.executeJavaScript('window.showDevicePanel()');
+    if (!await window.webContents.executeJavaScript('!!document.querySelector("section[aria-label]") && [...document.querySelectorAll("button")].some(node => node.textContent === "批准设备授权")')) throw new Error('confirmation absent at capture');
+    window.setContentSize(width+1,height);
+    await new Promise(resolve => setTimeout(resolve,100));
+    window.setContentSize(width,height);
+    await new Promise(resolve => setTimeout(resolve,300));
+    if (await window.webContents.executeJavaScript('document.documentElement.scrollWidth > window.innerWidth || [...document.querySelectorAll("dialog,section")].some(node => node.scrollWidth > node.clientWidth + 1)')) throw new Error('horizontal overflow');
+    const name = `${theme}-${size}`;
+    report.cases.push({ name, results });
+    await fs.writeFile(path.join(directory,name+'.png'),(await window.webContents.capturePage()).toPNG());
+  }
+  if (report.errors.length) throw new Error('renderer errors'); report.status='passed';
+}).catch(error=>report.errors.push(String(error))).finally(async()=>{report.actual_seconds=Math.round((Date.now()-began)/1000);await fs.writeFile(path.join(directory,'result.json'),JSON.stringify(report,null,2));window?.destroy();app.exit(report.status==='passed'?0:1);});
