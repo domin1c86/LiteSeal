@@ -34,4 +34,4 @@ zeroize = { version = "1", features = ["zeroize_derive"] }
 uniffi = { version = "=0.31.0", features = ["tokio"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_Security_Credentials", "Win32_System_Threading"] }

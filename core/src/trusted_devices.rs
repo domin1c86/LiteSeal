@@ -11,6 +11,7 @@ pub mod api;
 pub mod coordinator;
 pub mod profiles;
 pub mod tasks;
+pub mod witness;
 const MAX_EVENT_BYTES: usize = MAX_DEVICE_EVENT_BYTES;
 const MAX_BATCH: usize = 100;
 const MAX_BATCH_BYTES: usize = MAX_DEVICE_PAGE_BYTES;
@@ -44,6 +45,7 @@ impl Checkpoint {
 }
 pub struct DeviceTrustStore {
     conn: Connection,
+    witness: Option<witness::Witness>,
 }
 impl DeviceTrustStore {
     /// Verify the entire page, including the advertised terminal head, before
@@ -93,29 +95,63 @@ impl DeviceTrustStore {
         conn.busy_timeout(Duration::from_secs(5))
             .map_err(|e| e.to_string())?;
         conn.execute_batch(SCHEMA).map_err(|e| e.to_string())?;
-        Ok(Self { conn })
+        Ok(Self {
+            conn,
+            witness: None,
+        })
     }
-    /// A different root is never silently installed over an existing account.
-    pub fn pin(&mut self, anchor: &Anchor) -> Result<DeviceState, String> {
-        let initial = DeviceState::pin(anchor.clone()).map_err(|e| e.to_string())?;
+    pub fn protect(&mut self, witness: witness::Witness) -> Result<(), String> {
+        // Even failed initialization must not leave a usable unprotected handle.
+        self.witness = Some(witness.clone());
+        self.conn
+            .execute_batch(tasks::SCHEMA)
+            .map_err(|_| "设备任务存储不可用")?;
+        witness.initialize(&mut self.conn)
+    }
+    pub(super) fn read_checked<T>(
+        &mut self,
+        callback: impl FnOnce(&Connection) -> Result<T, String>,
+    ) -> Result<T, String> {
+        if let Some(witness) = self.witness.clone() {
+            return witness.read(&mut self.conn, callback);
+        }
+        let tx = self.conn.transaction().map_err(|e| e.to_string())?;
+        let result = callback(&tx)?;
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(result)
+    }
+    pub(super) fn write_checked<T>(
+        &mut self,
+        callback: impl FnOnce(&Connection) -> Result<T, String>,
+    ) -> Result<T, String> {
+        if let Some(witness) = self.witness.clone() {
+            return witness.write(&mut self.conn, callback);
+        }
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
-        tx.execute(
-            "INSERT OR IGNORE INTO trusted_device_anchors(origin,account,anchor,revision,head)
-            VALUES(?1,?2,?3,0,?4)",
-            params![
-                anchor.origin,
-                anchor.account,
-                serde_json::to_vec(anchor).map_err(|e| e.to_string())?,
-                initial.head()
-            ],
-        )
-        .map_err(|e| e.to_string())?;
-        let state = read(&tx, anchor, None)?;
+        let result = callback(&tx)?;
         tx.commit().map_err(|e| e.to_string())?;
-        Ok(state)
+        Ok(result)
+    }
+    /// A different root is never silently installed over an existing account.
+    pub fn pin(&mut self, anchor: &Anchor) -> Result<DeviceState, String> {
+        let initial = DeviceState::pin(anchor.clone()).map_err(|e| e.to_string())?;
+        self.write_checked(|tx| {
+            tx.execute(
+                "INSERT OR IGNORE INTO trusted_device_anchors(origin,account,anchor,revision,head)
+            VALUES(?1,?2,?3,0,?4)",
+                params![
+                    anchor.origin,
+                    anchor.account,
+                    serde_json::to_vec(anchor).map_err(|e| e.to_string())?,
+                    initial.head()
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+            read(tx, anchor, None)
+        })
     }
     /// Uses a consistent SQLite read transaction, not independent snapshot queries.
     pub fn load(
@@ -123,10 +159,7 @@ impl DeviceTrustStore {
         anchor: &Anchor,
         minimum: Option<&Checkpoint>,
     ) -> Result<DeviceState, String> {
-        let tx = self.conn.transaction().map_err(|e| e.to_string())?;
-        let state = read(&tx, anchor, minimum)?;
-        tx.commit().map_err(|e| e.to_string())?;
-        Ok(state)
+        self.read_checked(|conn| read(conn, anchor, minimum))
     }
     /// Live admission enforces expiry. Retries must use the original signed event.
     pub fn append_live(
@@ -168,22 +201,19 @@ impl DeviceTrustStore {
         {
             return Err("device event batch exceeds byte limit".into());
         }
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|e| e.to_string())?;
-        let mut state = read(&tx, anchor, Some(expected))?;
-        if Checkpoint::from_state(&state) != *expected {
-            return Err("stale device directory write".into());
-        }
-        for (event, payload) in events.iter().zip(payloads) {
-            let next = match now {
-                Some(at) => state.apply_live(event, at),
-                None => state.apply(event),
+        self.write_checked(|tx| {
+            let mut state = read(tx, anchor, Some(expected))?;
+            if Checkpoint::from_state(&state) != *expected {
+                return Err("stale device directory write".into());
             }
-            .map_err(|e| e.to_string())?;
-            if next.revision() != state.revision() {
-                tx.execute(
+            for (event, payload) in events.iter().zip(payloads) {
+                let next = match now {
+                    Some(at) => state.apply_live(event, at),
+                    None => state.apply(event),
+                }
+                .map_err(|e| e.to_string())?;
+                if next.revision() != state.revision() {
+                    tx.execute(
                     "INSERT INTO trusted_device_events(origin,account,revision,event_id,payload)
                     VALUES(?1,?2,?3,?4,?5)",
                     params![
@@ -195,10 +225,10 @@ impl DeviceTrustStore {
                     ],
                 )
                 .map_err(|e| e.to_string())?;
+                }
+                state = next;
             }
-            state = next;
-        }
-        tx.execute(
+            tx.execute(
             "UPDATE trusted_device_anchors SET revision=?3,head=?4 WHERE origin=?1 AND account=?2",
             params![
                 anchor.origin,
@@ -208,8 +238,8 @@ impl DeviceTrustStore {
             ],
         )
         .map_err(|e| e.to_string())?;
-        tx.commit().map_err(|e| e.to_string())?;
-        Ok(state)
+            Ok(state)
+        })
     }
 }
 fn read(

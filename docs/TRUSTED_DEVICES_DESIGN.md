@@ -1,5 +1,15 @@
 # T23 两台 Windows 可信设备：设计与授权基础
 
+## 2026-10-02 外部高水位核心与 Windows 适配
+
+新增 `witness` 保护引擎，覆盖同一 SQLite 中全部账号/设备 scope 的授权根、签名日志、加密控制任务及加入绑定，包含表/索引/触发器结构摘要；普通聊天表不在此防回滚范围。每次读写核对外部状态，修改递增代次，根确认与意向保存仍原子提交。首次接入只能登记本机现存状态，不证明登记前的新鲜度；登记后缺少外部记录或 marker、状态/结构不匹配均拒绝，不能自动重置。`protect` 是显式核心接口；本次尚未接到桌面协调器的默认构造，不能声称所有产品操作已经防回滚。
+
+Windows 适配通过当前用户 Credential Manager 指定目标保存 DPAPI 保护的小记录，绑定用户 SID、规范数据库路径及版本域；不枚举凭据，不提供生产删除/重置。Global 命名互斥锁串行同步提交，线程归属 guard 不跨 await；超时/存储不可用拒绝，遗弃锁取得后重新校验。随机测试命名空间仅允许精确删除本次测试目标。实现依据 [CredReadW](https://learn.microsoft.com/en-us/windows/win32/api/wincred/nf-wincred-credreadw)、[CredWriteW](https://learn.microsoft.com/en-us/windows/win32/api/wincred/nf-wincred-credwritew)、[记录限制](https://learn.microsoft.com/en-us/windows/win32/api/wincred/ns-wincred-credentialw)及[互斥等待语义](https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-waitforsingleobject)。
+
+SQLite 与系统存储间使用 DPAPI 写前变更日志：先同步确定的白名单行补丁，再保存外部 pending，SQLite FULL 同步提交，最后完成外部 head。重开时只接受原 before/after 摘要；数据库已提交则完成记录，否则重放原编号/原密文，不重新签名。缺失/损坏/不匹配日志保留数据并拒绝。日志限 4 MiB、每次最多 256 行变更、保护状态限 512 MiB；资源超限明确失败。日志只含公开授权证据及已加密任务，不含明文私钥或聊天正文。
+
+该机制信任 Windows 用户凭据存储仍保留最新状态，能拒绝仅应用目录/SQLite 的整体回退；Credential Manager 可由该用户修改，它不是硬件单调计数器。数据库和系统凭据一起恢复/替换、首次登记前回退、用户/路径迁移需要远端或硬件锚及单独恢复设计，不能宣称已防住。T22 不携带这些记录，也不用于在线激活。9 项故障引擎、4 项原生入口（含一个子进程 helper，主用例实际启动子进程）及备份往返短测通过，实际证据见验收记录。下一增量接桌面默认防护、档案创建/整理生命周期与隔离测试清理，再实现完整设备收件协议和激活。
+
 ## 2026-10-02 加入端独立档案与 Windows 页面
 
 登录页新增“加入另一台 Windows”。用户先创建独立档案，再输入原账号密码提交原申请，核对原设备提供的完整身份指纹，并在原设备核对新设备的加密/签名双指纹。确认原根后每五秒以原意向、挑战及证明继续查询/重试，遇到明确冲突不重签；进程重开后从本机档案恢复相同密钥与申请编号。完成只表示授权证据已经验链，界面不触发普通登录、中继连接或消息后台任务。

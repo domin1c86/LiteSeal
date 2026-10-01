@@ -5,13 +5,13 @@ use liteseal_shared::{
     crypto::{self, KeyPair},
     trusted_device::*,
 };
-use rusqlite::{params, OptionalExtension, TransactionBehavior};
+use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{path::Path, sync::Mutex};
 use zeroize::Zeroize;
 const MAX_TASK_BYTES: usize = 64 * 1024;
-const SCHEMA:&str="
+pub(super) const SCHEMA:&str="
 CREATE TABLE IF NOT EXISTS device_control_tasks (
  scope TEXT NOT NULL,id TEXT NOT NULL,revision INTEGER NOT NULL,kind TEXT NOT NULL,
  terminal INTEGER NOT NULL CHECK(terminal IN (0,1)),body BLOB NOT NULL CHECK(length(body)<=65576),
@@ -393,12 +393,11 @@ impl DeviceTaskStore {
         if task.inner.phase != TaskPhase::Cancelling || status.phase != JoinPhase::Authorized {
             return Err(invalid());
         }
-        self.trust.load(&data.anchor, None)?;
-        let bytes: Vec<u8> = self.trust.conn.query_row(
-            "SELECT payload FROM trusted_device_events WHERE origin=?1 AND account=?2 AND event_id=?3",
-            params![data.anchor.origin, data.anchor.account, status.authorization_id.as_deref().ok_or_else(invalid)?],
-            |row| row.get(0),
-        ).map_err(db)?;
+        let (_, bytes) = self.verified_event(
+            &data.anchor,
+            status.authorization_id.as_deref().ok_or_else(invalid)?,
+        )?;
+        let bytes = bytes.ok_or_else(invalid)?;
         let event: DeviceEvent = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
         let DeviceAction::Grant {
             intent, challenge, ..
@@ -463,12 +462,11 @@ impl DeviceTaskStore {
         let Data::Event(data) = &task.inner.data else {
             return Err(invalid());
         };
-        let current = self.trust.load(&data.anchor, None)?;
+        let (current, digest) = self.verified_event(&data.anchor, &data.event.id)?;
         if current.revision() < data.event.revision {
             return Ok(false);
         }
-        let digest:Vec<u8>=self.trust.conn.query_row("SELECT payload FROM trusted_device_events WHERE origin=?1 AND account=?2 AND event_id=?3",
-            params![data.anchor.origin,data.anchor.account,data.event.id],|r|r.get(0)).optional().map_err(db)?.unwrap_or_default();
+        let digest = digest.unwrap_or_default();
         if digest.is_empty() {
             return Ok(false);
         }
@@ -495,14 +493,30 @@ impl DeviceTaskStore {
         trust.conn.execute_batch(SCHEMA).map_err(db)?;
         Ok(Self { trust, owner })
     }
+    pub fn protect(&mut self, witness: super::witness::Witness) -> Result<(), String> {
+        self.trust.protect(witness)
+    }
     /// Caller verifies pages through this store, without holding a SQLite lock across await.
     pub fn trust(&mut self) -> &mut DeviceTrustStore {
         &mut self.trust
     }
+    fn verified_event(
+        &mut self,
+        anchor: &Anchor,
+        id: &str,
+    ) -> Result<(DeviceState, Option<Vec<u8>>), String> {
+        self.trust.read_checked(|conn| {
+            let state = super::read(conn, anchor, None)?;
+            let bytes = conn.query_row("SELECT payload FROM trusted_device_events WHERE origin=?1 AND account=?2 AND event_id=?3",
+                params![anchor.origin,anchor.account,id],|r|r.get(0)).optional().map_err(db)?;
+            Ok((state, bytes))
+        })
+    }
     fn historical(&mut self, anchor: &Anchor, base: &Checkpoint) -> Result<DeviceState, String> {
-        self.trust.load(anchor, Some(base))?;
+        self.trust.read_checked(|conn| {
+        super::read(conn, anchor, Some(base))?;
         let mut state = DeviceState::pin(anchor.clone()).map_err(|_| invalid())?;
-        let mut query=self.trust.conn.prepare("SELECT payload FROM trusted_device_events WHERE origin=?1 AND account=?2 AND revision<=?3 ORDER BY revision").map_err(db)?;
+        let mut query=conn.prepare("SELECT payload FROM trusted_device_events WHERE origin=?1 AND account=?2 AND revision<=?3 ORDER BY revision").map_err(db)?;
         let rows = query
             .query_map(params![anchor.origin, anchor.account, base.revision], |r| {
                 r.get::<_, Vec<u8>>(0)
@@ -520,6 +534,7 @@ impl DeviceTaskStore {
             return Err(invalid());
         }
         Ok(state)
+        })
     }
     fn validate(&mut self, task: &StoredTask, keys: &KeyPair) -> Result<(), String> {
         self.owner.keys(keys)?;
@@ -649,15 +664,12 @@ impl DeviceTaskStore {
     fn insert(&mut self, task: StoredTask, keys: &KeyPair) -> Result<ControlTask, String> {
         self.validate(&task, keys)?;
         let body = self.encrypted(&task, keys)?;
-        let tx = self
-            .trust
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(db)?;
+        let scope = self.owner.scope();
+        self.trust.write_checked(|tx|{
         let count: i64 = tx
             .query_row(
                 "SELECT COUNT(*) FROM device_control_tasks WHERE scope=?1",
-                params![self.owner.scope()],
+                params![scope],
                 |r| r.get(0),
             )
             .map_err(db)?;
@@ -665,8 +677,8 @@ impl DeviceTaskStore {
             return Err("设备任务数量达到上限，请整理已完成任务".into());
         }
         tx.execute("INSERT INTO device_control_tasks(scope,id,revision,kind,terminal,body) VALUES(?1,?2,?3,?4,?5,?6)",
-            params![self.owner.scope(),task.id,task.revision,Self::kind(&task),task.phase.terminal(),body]).map_err(|_|"已有待处理设备任务，请查询或取消原任务".to_string())?;
-        tx.commit().map_err(db)?;
+            params![scope,task.id,task.revision,Self::kind(&task),task.phase.terminal(),body]).map_err(|_|"已有待处理设备任务，请查询或取消原任务".to_string())?;
+        Ok(())})?;
         Ok(ControlTask { inner: task })
     }
     fn replace(
@@ -688,17 +700,21 @@ impl DeviceTaskStore {
         }
         self.validate(&task, keys)?;
         let body = self.encrypted(&task, keys)?;
-        let changed=self.trust.conn.execute("UPDATE device_control_tasks SET revision=?4,kind=?5,terminal=?6,body=?7 WHERE scope=?1 AND id=?2 AND revision=?3",
-            params![self.owner.scope(),task.id,original.inner.revision,task.revision,Self::kind(&task),task.phase.terminal(),body]).map_err(db)?;
+        let scope = self.owner.scope();
+        self.trust.write_checked(|tx|{
+        let changed=tx.execute("UPDATE device_control_tasks SET revision=?4,kind=?5,terminal=?6,body=?7 WHERE scope=?1 AND id=?2 AND revision=?3",
+            params![scope,task.id,original.inner.revision,task.revision,Self::kind(&task),task.phase.terminal(),body]).map_err(db)?;
         if changed != 1 {
             return Err(stale());
         }
+        Ok(())})?;
         Ok(ControlTask { inner: task })
     }
     pub fn get(&mut self, id: &str, keys: &KeyPair) -> Result<ControlTask, String> {
         self.owner.keys(keys)?;
-        let (revision,kind,terminal,body):(u64,String,bool,Vec<u8>)=self.trust.conn.query_row("SELECT revision,kind,terminal,body FROM device_control_tasks WHERE scope=?1 AND id=?2",
-            params![self.owner.scope(),id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).map_err(|_|invalid())?;
+        let scope = self.owner.scope();
+        let (revision,kind,terminal,body):(u64,String,bool,Vec<u8>)=self.trust.read_checked(|conn|conn.query_row("SELECT revision,kind,terminal,body FROM device_control_tasks WHERE scope=?1 AND id=?2",
+            params![scope,id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).map_err(|_|invalid()))?;
         if body.len() > MAX_TASK_BYTES + 40 {
             return Err(invalid());
         }
@@ -722,19 +738,16 @@ impl DeviceTaskStore {
         })
     }
     pub fn views(&mut self, keys: &KeyPair) -> Result<Vec<TaskView>, String> {
-        let ids: Vec<String> = {
-            let mut q = self
-                .trust
-                .conn
+        let scope = self.owner.scope();
+        let ids: Vec<String> = self.trust.read_checked(|conn| {
+            let mut q = conn
                 .prepare(
                     "SELECT id FROM device_control_tasks WHERE scope=?1 ORDER BY rowid LIMIT 129",
                 )
                 .map_err(db)?;
-            let rows = q
-                .query_map(params![self.owner.scope()], |r| r.get(0))
-                .map_err(db)?;
-            rows.collect::<Result<_, _>>().map_err(db)?
-        };
+            let rows = q.query_map(params![scope], |r| r.get(0)).map_err(db)?;
+            rows.collect::<Result<_, _>>().map_err(db)
+        })?;
         if ids.len() > 128 {
             return Err(invalid());
         }
@@ -836,20 +849,16 @@ impl DeviceTaskStore {
         let body = self.encrypted(&next, keys)?;
         let scope = self.owner.scope();
         let initial = DeviceState::pin(known.clone()).map_err(|_| invalid())?;
-        let tx = self
-            .trust
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(db)?;
+        self.trust.write_checked(|tx|{
         tx.execute("INSERT OR IGNORE INTO trusted_device_anchors(origin,account,anchor,revision,head) VALUES(?1,?2,?3,0,?4)",
             params![known.origin,known.account,serde_json::to_vec(known).map_err(|_|invalid())?,initial.head()]).map_err(db)?;
-        super::read(&tx, known, None)?;
+        super::read(tx, known, None)?;
         let changed=tx.execute("UPDATE device_control_tasks SET revision=?4,body=?5 WHERE scope=?1 AND id=?2 AND revision=?3 AND terminal=0",
             params![scope,next.id,task.inner.revision,next.revision,body]).map_err(db)?;
         if changed != 1 {
             return Err(stale());
         }
-        tx.commit().map_err(db)?;
+        Ok(())})?;
         Ok(ControlTask { inner: next })
     }
     pub fn seal_proof(
@@ -1114,9 +1123,8 @@ impl DeviceTaskStore {
             return Err(invalid());
         };
         let ticket = data.ticket.as_ref().ok_or_else(invalid)?;
-        let current = self.trust.load(&ticket.anchor, None)?;
-        let payload:Vec<u8>=self.trust.conn.query_row("SELECT payload FROM trusted_device_events WHERE origin=?1 AND account=?2 AND event_id=?3",
-            params![ticket.anchor.origin,ticket.anchor.account,event_id],|r|r.get(0)).map_err(db)?;
+        let (current, payload) = self.verified_event(&ticket.anchor, event_id)?;
+        let payload = payload.ok_or_else(invalid)?;
         let event: DeviceEvent = serde_json::from_slice(&payload).map_err(|_| invalid())?;
         let DeviceAction::Grant {
             intent,
@@ -1145,11 +1153,13 @@ impl DeviceTaskStore {
         if !task.inner.phase.terminal() || task.inner.owner != self.owner {
             return Err(invalid());
         }
-        let deleted=self.trust.conn.execute("DELETE FROM device_control_tasks WHERE scope=?1 AND id=?2 AND revision=?3 AND terminal=1",params![self.owner.scope(),task.inner.id,task.inner.revision]).map_err(db)?;
+        let scope = self.owner.scope();
+        self.trust.write_checked(|tx|{
+        let deleted=tx.execute("DELETE FROM device_control_tasks WHERE scope=?1 AND id=?2 AND revision=?3 AND terminal=1",params![scope,task.inner.id,task.inner.revision]).map_err(db)?;
         if deleted != 1 {
             return Err(stale());
         }
-        Ok(())
+        Ok(())})
     }
 }
 /// An invalidation waits for an in-progress synchronous commit, but never for

@@ -12,6 +12,14 @@ use liteseal_shared::{crypto, group};
 use rusqlite::{params, Connection};
 use std::sync::atomic::AtomicBool;
 const PASSWORD: &[u8] = b"independent backup password 123";
+struct IsolatedWitness(
+    std::sync::Arc<liteseal_core::trusted_devices::witness::windows::WindowsStore>,
+);
+impl Drop for IsolatedWitness {
+    fn drop(&mut self) {
+        self.0.clear_isolated().unwrap();
+    }
+}
 #[path = "../../shared/examples/group_trial/support.rs"]
 #[allow(dead_code)]
 mod support;
@@ -360,6 +368,19 @@ fn portable_round_trip_preserves_history_and_excludes_jobs_other_scopes_and_cred
     let mut device_jobs =
         liteseal_core::trusted_devices::tasks::DeviceTaskStore::open(&db, task_owner, &task_keys)
             .unwrap();
+    let witness = IsolatedWitness(std::sync::Arc::new(
+        liteseal_core::trusted_devices::witness::windows::WindowsStore::isolated(
+            &db,
+            uuid::Uuid::new_v4(),
+        )
+        .unwrap(),
+    ));
+    device_jobs
+        .protect(liteseal_core::trusted_devices::witness::Witness::new(
+            &db,
+            witness.0.clone(),
+        ))
+        .unwrap();
     device_jobs
         .prepare_join("pending-device", &task_keys)
         .unwrap();
@@ -398,16 +419,26 @@ fn portable_round_trip_preserves_history_and_excludes_jobs_other_scopes_and_cred
             .unwrap();
     assert_eq!(stored.ed25519_pk, identity.ed25519_pk);
     let archived = Connection::open(restored.directory.0.join("history.db")).unwrap();
-    assert_eq!(
-        archived
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_schema WHERE name='device_control_tasks'",
-                [],
-                |r| r.get::<_, i64>(0)
-            )
-            .unwrap(),
-        0
-    );
+    for table in [
+        "device_control_tasks",
+        "device_state_witness",
+        "trusted_device_anchors",
+        "trusted_device_events",
+        "join_identity_binding",
+    ] {
+        assert_eq!(
+            archived
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_schema WHERE name=?1",
+                    [table],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+    }
+    // Backup export/restore does not change or reset the original external witness.
+    assert_eq!(device_jobs.views(&task_keys).unwrap().len(), 1);
     for table in [
         "scheduled_messages",
         "local_group_outbox",
