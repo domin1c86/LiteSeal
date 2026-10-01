@@ -1,5 +1,6 @@
 pub mod backup_crypto;
 pub mod crypto;
+pub mod direct_message;
 pub mod group;
 pub mod group_extension;
 pub mod protocol;
