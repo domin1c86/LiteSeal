@@ -85,6 +85,10 @@ impl WindowsStore {
         }
         let path = path.to_str().ok_or_else(unavailable)?.to_lowercase();
         let sid = user_sid()?;
+        // This Windows environment can lose distinct target writes when the
+        // credential set is updated concurrently. Serialize all our targets for
+        // this user, including profile deletion, across threads/processes.
+        let user_mutex = hex::encode(Sha256::digest(&sid));
         let mut hash = Sha256::new();
         hash.update(b"LiteSeal/Windows-device-witness/v1");
         hash.update((sid.len() as u64).to_le_bytes());
@@ -106,7 +110,9 @@ impl WindowsStore {
         Ok(Self {
             binding,
             target: wide(&format!("{prefix}/{suffix}")),
-            mutex: wide(&format!("Global\\{prefix}.{suffix}")),
+            mutex: wide(&format!(
+                "Global\\LiteSeal.DeviceState.v1.User.{user_mutex}"
+            )),
             isolated: namespace.is_some(),
         })
     }

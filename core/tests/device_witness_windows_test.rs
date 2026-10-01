@@ -130,3 +130,40 @@ fn named_mutex_serializes_real_parent_and_child_process_updates() {
         Some(b"60".to_vec())
     );
 }
+
+#[test]
+fn concurrent_distinct_targets_keep_each_original_record() {
+    let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
+    let mut natives = vec![];
+    for n in 0..8 {
+        let path = work.0.join(format!("distinct-{n}.db"));
+        fs::write(&path, []).unwrap();
+        natives.push(native(&path));
+    }
+    let gate = Arc::new(std::sync::Barrier::new(8));
+    let threads = natives
+        .iter()
+        .enumerate()
+        .map(|(n, native)| {
+            let store = native.0.clone();
+            let gate = gate.clone();
+            std::thread::spawn(move || {
+                gate.wait();
+                let bytes = vec![n as u8; 2048];
+                for _ in 0..20 {
+                    let mut cell = store.lock().unwrap();
+                    cell.write(&bytes).unwrap();
+                    assert!(
+                        cell.read().unwrap().as_deref() == Some(bytes.as_slice()),
+                        "original synthetic target missing or replaced"
+                    );
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    let results = threads
+        .into_iter()
+        .map(|thread| thread.join())
+        .collect::<Vec<_>>();
+    assert!(results.into_iter().all(|result| result.is_ok()));
+}
