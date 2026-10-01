@@ -759,3 +759,159 @@ async fn authorization_opt_in_defaults_closed_and_preserves_beta_device_rules() 
             .unwrap();
     assert_eq!(count, 0);
 }
+
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn rust_control_client_verifies_repeated_join_after_revocation_and_restart() {
+    use liteseal_core::trusted_devices::{api::DeviceControlApi, Checkpoint, DeviceTrustStore};
+    let f = Fixture::start(true).await;
+    let root = f.account().await;
+    let api = DeviceControlApi::new(&f.url).unwrap();
+    let mut pinned = DeviceState::pin(Anchor {
+        origin: f.url.clone(),
+        account: root.id.clone(),
+        root: DeviceIdentity::from_keys(root.device.clone(), &root.keys),
+    })
+    .unwrap();
+    let path = std::env::temp_dir().join(format!(
+        "liteseal-control-client-{}.db",
+        uuid::Uuid::new_v4()
+    ));
+    let mut store = DeviceTrustStore::open(&path).unwrap();
+    store.pin(pinned.anchor()).unwrap();
+    for turn in 0..2 {
+        let keys = crypto::generate_keypair().unwrap();
+        let token = hex::encode(crypto::random_challenge().unwrap());
+        let input = JoinStartRequest {
+            request_id: uuid::Uuid::new_v4().to_string(),
+            request_token: token.clone(),
+            username: root.username.clone(),
+            password: root.password.clone(),
+            device_name: format!("synthetic Windows {turn}"),
+            encryption_key: keys.public_key,
+            signing_key: keys.ed25519_pk,
+        };
+        let ticket = api.begin(&input).await.unwrap();
+        assert_eq!(api.begin(&input).await.unwrap(), ticket);
+        // This root is compared with the separately known original identity, not accepted from the ticket.
+        assert_eq!(ticket.ticket.anchor, *pinned.anchor());
+        let own_page = api
+            .join_manifest(&token, &ticket.ticket.id, 0)
+            .await
+            .unwrap();
+        let mut second_state = DeviceState::pin(pinned.anchor().clone()).unwrap();
+        for event in &own_page.events {
+            second_state = second_state.apply(event).unwrap();
+        }
+        assert_eq!(second_state, pinned);
+        let intent = ticket.ticket.sign_intent(&keys).unwrap();
+        api.intent(&token, &intent).await.unwrap();
+        assert_eq!(api.list(&root.token, &root.device).await.unwrap().len(), 1);
+        let challenge = make_challenge(&pinned, &intent, now(), &root.keys).unwrap();
+        api.challenge(&root.token, &intent.id, &root.device, &challenge)
+            .await
+            .unwrap();
+        let status = api.status(&token, &intent.id, None).await.unwrap();
+        let proof = answer_challenge(
+            &second_state,
+            &intent,
+            status.challenge.as_ref().unwrap(),
+            now(),
+            &keys,
+        )
+        .unwrap();
+        api.proof(&token, &intent.id, &proof).await.unwrap();
+        let event = make_event(
+            &pinned,
+            uuid::Uuid::new_v4().to_string(),
+            DeviceAction::Grant {
+                intent: Box::new(intent),
+                challenge: Box::new(challenge),
+                proof,
+            },
+            now(),
+            &root.keys,
+        )
+        .unwrap();
+        let accepted = api.submit(&root.token, &root.device, &event).await.unwrap();
+        assert!(!accepted.messaging_enabled);
+        let page = api
+            .manifest(&root.token, &root.id, pinned.revision())
+            .await
+            .unwrap();
+        pinned = store
+            .import_page(pinned.anchor(), &Checkpoint::from_state(&pinned), &page)
+            .unwrap();
+        assert_eq!(pinned.secondary().unwrap().encryption_key, keys.public_key);
+        let revoke = make_event(
+            &pinned,
+            uuid::Uuid::new_v4().to_string(),
+            DeviceAction::Revoke {
+                device_id: ticket.ticket.device.device_id,
+                grant_hash: event.hash(),
+            },
+            now(),
+            &root.keys,
+        )
+        .unwrap();
+        api.submit(&root.token, &root.device, &revoke)
+            .await
+            .unwrap();
+        let page = api
+            .manifest(&root.token, &root.id, pinned.revision())
+            .await
+            .unwrap();
+        pinned = store
+            .import_page(pinned.anchor(), &Checkpoint::from_state(&pinned), &page)
+            .unwrap();
+        assert!(pinned.secondary().is_none());
+        assert_eq!(
+            api.submit(&root.token, &root.device, &event)
+                .await
+                .unwrap()
+                .current_revision,
+            pinned.revision()
+        );
+        assert_eq!(
+            api.join_manifest(&token, &input.request_id, 0)
+                .await
+                .unwrap_err()
+                .status,
+            Some(401)
+        );
+    }
+    drop(store);
+    assert_eq!(
+        DeviceTrustStore::open(&path)
+            .unwrap()
+            .load(pinned.anchor(), Some(&Checkpoint::from_state(&pinned)))
+            .unwrap(),
+        pinned
+    );
+    let _ = std::fs::remove_file(path);
+    let cancelled = f.join(&root).await;
+    assert_eq!(
+        api.cancel(&cancelled.token, &cancelled.status.ticket.id, None)
+            .await
+            .unwrap()
+            .phase,
+        JoinPhase::Cancelled
+    );
+    assert_eq!(
+        api.join_manifest(&cancelled.token, &cancelled.status.ticket.id, 0)
+            .await
+            .unwrap_err()
+            .status,
+        Some(410)
+    );
+    // A token for this request cannot select another account or request.
+    let peer = f.account().await;
+    let peer_join = f.join(&peer).await;
+    assert_eq!(
+        api.join_manifest(&cancelled.token, &peer_join.status.ticket.id, 0)
+            .await
+            .unwrap_err()
+            .status,
+        Some(401)
+    );
+}

@@ -291,3 +291,117 @@ fn public_log_contains_no_private_keys_and_batch_bound_is_enforced() {
     assert!(!json.contains("access_token"));
     assert!(!json.contains("secret_key"));
 }
+
+#[test]
+fn manifest_pages_verify_terminal_head_before_any_persistence() {
+    let f = Fixture::new();
+    let mut store = f.open();
+    let initial = store.pin(&f.anchor).unwrap();
+    let grant = f.grant(&initial, "second", &f.second);
+    let joined = initial.apply(&grant).unwrap();
+    let revoke = make_event(
+        &joined,
+        "revoke-page".into(),
+        DeviceAction::Revoke {
+            device_id: "second".into(),
+            grant_hash: grant.hash(),
+        },
+        2000,
+        &f.root,
+    )
+    .unwrap();
+    let revoked = joined.apply(&revoke).unwrap();
+    let first = DeviceManifestPage {
+        anchor: f.anchor.clone(),
+        events: vec![grant],
+        through_revision: 1,
+        current_revision: 2,
+        current_hash: revoked.head().to_vec(),
+        more: true,
+    };
+    assert_eq!(
+        store
+            .import_page(&f.anchor, &Checkpoint::from_state(&initial), &first)
+            .unwrap(),
+        joined
+    );
+    let mut last = DeviceManifestPage {
+        anchor: f.anchor.clone(),
+        events: vec![revoke],
+        through_revision: 2,
+        current_revision: 2,
+        current_hash: vec![0; 32],
+        more: false,
+    };
+    assert!(store
+        .import_page(&f.anchor, &Checkpoint::from_state(&joined), &last)
+        .is_err());
+    assert_eq!(store.load(&f.anchor, None).unwrap(), joined);
+    last.current_hash = revoked.head().to_vec();
+    assert_eq!(
+        store
+            .import_page(&f.anchor, &Checkpoint::from_state(&joined), &last)
+            .unwrap(),
+        revoked
+    );
+    assert!(store
+        .import_page(&f.anchor, &Checkpoint::from_state(&revoked), &last)
+        .is_err());
+    drop(store);
+    assert_eq!(f.open().load(&f.anchor, None).unwrap(), revoked);
+}
+
+#[test]
+fn malformed_manifest_scope_gap_more_flag_and_bad_second_event_are_atomic() {
+    let f = Fixture::new();
+    let mut store = f.open();
+    let initial = store.pin(&f.anchor).unwrap();
+    let checkpoint = Checkpoint::from_state(&initial);
+    let grant = f.grant(&initial, "second", &f.second);
+    let joined = initial.apply(&grant).unwrap();
+    let valid = DeviceManifestPage {
+        anchor: f.anchor.clone(),
+        events: vec![grant.clone()],
+        through_revision: 1,
+        current_revision: 1,
+        current_hash: joined.head().to_vec(),
+        more: false,
+    };
+    let mut wrong = valid.clone();
+    wrong.anchor.account = "other".into();
+    assert!(store.import_page(&f.anchor, &checkpoint, &wrong).is_err());
+    let mut wrong = valid.clone();
+    wrong.through_revision = 2;
+    assert!(store.import_page(&f.anchor, &checkpoint, &wrong).is_err());
+    let mut wrong = valid.clone();
+    wrong.events[0].revision = 2;
+    assert!(store.import_page(&f.anchor, &checkpoint, &wrong).is_err());
+    let mut wrong = valid;
+    wrong.events.clear();
+    wrong.through_revision = 0;
+    wrong.more = true;
+    assert!(store.import_page(&f.anchor, &checkpoint, &wrong).is_err());
+    let mut revoke = make_event(
+        &joined,
+        "revoke-bad-page".into(),
+        DeviceAction::Revoke {
+            device_id: "second".into(),
+            grant_hash: grant.hash(),
+        },
+        2000,
+        &f.root,
+    )
+    .unwrap();
+    let end = joined.apply(&revoke).unwrap();
+    revoke.signature[0] ^= 1;
+    let batch = DeviceManifestPage {
+        anchor: f.anchor.clone(),
+        events: vec![grant, revoke],
+        through_revision: 2,
+        current_revision: 2,
+        current_hash: end.head().to_vec(),
+        more: false,
+    };
+    assert!(store.import_page(&f.anchor, &checkpoint, &batch).is_err());
+    assert_eq!(store.load(&f.anchor, None).unwrap(), initial);
+}

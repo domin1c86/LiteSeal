@@ -1,12 +1,16 @@
 //! Verified T23 directory persistence. Only public authorization evidence is stored.
 //! The caller supplies the independently pinned root and an optional trusted high-water mark.
-use liteseal_shared::trusted_device::{Anchor, DeviceEvent, DeviceState, MAX_DEVICE_EVENTS};
+use liteseal_shared::trusted_device::{
+    Anchor, DeviceEvent, DeviceManifestPage, DeviceState, MAX_DEVICE_EVENTS,
+    MAX_DEVICE_EVENT_BYTES, MAX_DEVICE_PAGE_BYTES,
+};
 use rusqlite::{params, Connection, TransactionBehavior};
 use std::{path::Path, time::Duration};
 
-const MAX_EVENT_BYTES: usize = 16 * 1024;
+pub mod api;
+const MAX_EVENT_BYTES: usize = MAX_DEVICE_EVENT_BYTES;
 const MAX_BATCH: usize = 100;
-const MAX_BATCH_BYTES: usize = 512 * 1024;
+const MAX_BATCH_BYTES: usize = MAX_DEVICE_PAGE_BYTES;
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS trusted_device_anchors (
  origin TEXT NOT NULL, account TEXT NOT NULL, anchor BLOB NOT NULL,
@@ -39,6 +43,48 @@ pub struct DeviceTrustStore {
     conn: Connection,
 }
 impl DeviceTrustStore {
+    /// Verify the entire page, including the advertised terminal head, before
+    /// advancing any persisted version. A server-supplied anchor is not a pin.
+    pub fn import_page(
+        &mut self,
+        anchor: &Anchor,
+        expected: &Checkpoint,
+        page: &DeviceManifestPage,
+    ) -> Result<DeviceState, String> {
+        if page.anchor != *anchor
+            || page.events.len() > MAX_BATCH
+            || page.current_revision > MAX_DEVICE_EVENTS
+            || page.current_hash.len() != 32
+            || page.through_revision < expected.revision
+            || page.through_revision > page.current_revision
+            || page.more != (page.through_revision < page.current_revision)
+            || serde_json::to_vec(page).map_err(|e| e.to_string())?.len() > MAX_DEVICE_PAGE_BYTES
+        {
+            return Err("invalid device manifest page".into());
+        }
+        let initial = self.load(anchor, Some(expected))?;
+        if Checkpoint::from_state(&initial) != *expected {
+            return Err("stale device manifest cursor".into());
+        }
+        let mut checked = initial.clone();
+        for event in &page.events {
+            if event.revision != checked.revision() + 1 {
+                return Err("device manifest page has a gap or replay".into());
+            }
+            checked = checked.apply(event).map_err(|e| e.to_string())?;
+        }
+        if checked.revision() != page.through_revision
+            || page.events.is_empty() && page.more
+            || !page.more && checked.head() != page.current_hash
+        {
+            return Err("device manifest head or cursor does not match".into());
+        }
+        if page.events.is_empty() {
+            Ok(initial)
+        } else {
+            self.import_verified(anchor, expected, &page.events)
+        }
+    }
     pub fn open(path: &Path) -> Result<Self, String> {
         let conn = Connection::open(path).map_err(|e| e.to_string())?;
         conn.busy_timeout(Duration::from_secs(5))

@@ -1222,6 +1222,7 @@ dependencies = [
  "dashmap",
  "futures-util",
  "hex",
+ "liteseal-core",
  "liteseal-shared",
  "rand 0.8.6",
  "reqwest",

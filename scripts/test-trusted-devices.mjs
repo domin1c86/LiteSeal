@@ -21,6 +21,11 @@ try {
   const storedCounts = /test result: ok\. (\d+) passed; 0 failed; 0 ignored/.exec(store.output);
   report.steps.push({ name: 'atomic SQLite trust log and restart replay', passed: Number(storedCounts?.[1] ?? 0), command: ['cargo', ...storeArgs], status: store.code === 0 && storedCounts ? 'passed' : 'failed' });
   if (store.code || !storedCounts) throw new Error('directory persistence tests failed');
+  const apiArgs = ['test', '--locked', '-p', 'liteseal-core', '--test', 'device_control_api_test'];
+  const api = execute('cargo', apiArgs);
+  const apiCounts = /test result: ok\. (\d+) passed; 0 failed; 0 ignored/.exec(api.output);
+  report.steps.push({ name: 'bounded HTTP and redirect credential isolation', passed: Number(apiCounts?.[1] ?? 0), command: ['cargo', ...apiArgs], status: api.code === 0 && apiCounts ? 'passed' : 'failed' });
+  if (api.code || !apiCounts) throw new Error('bounded HTTP tests failed');
   const trial = execute('cargo', ['run', '--quiet', '--locked', '-p', 'liteseal-shared', '--example', 'trusted_device_trial']);
   const line = trial.output.split(/\r?\n/).find(line => line.startsWith('{'));
   const result = line ? JSON.parse(line) : null;

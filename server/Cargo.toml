@@ -24,5 +24,6 @@ sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 
 [dev-dependencies]
+liteseal-core = { path = "../core" }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 tokio-tungstenite = "0.24"

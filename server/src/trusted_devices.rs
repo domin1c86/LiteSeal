@@ -138,6 +138,7 @@ pub fn router() -> Router<AppState> {
         .route("/devices/join_requests/:id/intent", post(intent))
         .route("/devices/join_requests/:id/challenge", post(challenge))
         .route("/devices/join_requests/:id/proof", post(proof))
+        .route("/devices/join_requests/:id/manifest", get(join_manifest))
         .route("/devices/grants", post(grant))
         .route("/devices/revoke", post(revoke))
         .route("/users/:user_id/device_manifest", get(manifest))
@@ -844,6 +845,40 @@ async fn manifest(
     let mut tx = state.db.pool().begin().await.map_err(unavailable)?;
     lock(&mut tx, &user).await?;
     let (directory, events) = directory(&mut tx, &user, origin(&state)?).await?;
+    let page = manifest_page(&directory, events, &query)?;
+    tx.commit().await.map_err(unavailable)?;
+    Ok(Json(page))
+}
+async fn join_manifest(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(query): Query<ManifestQuery>,
+) -> Result<Json<DeviceManifestPage>, Failure> {
+    let user = join_account(&state, &headers, &id).await?;
+    let mut tx = state.db.pool().begin().await.map_err(unavailable)?;
+    lock(&mut tx, &user).await?;
+    let (status, token) = read_join(&mut tx, &id).await?;
+    join_token(&token, &headers)?;
+    if !active(&status, now()) && status.phase != JoinPhase::Authorized {
+        return Err(gone());
+    }
+    let (directory, events) = directory(&mut tx, &user, origin(&state)?).await?;
+    if status.ticket.anchor != *directory.anchor() {
+        return Err(corrupt());
+    }
+    let page = manifest_page(&directory, events, &query)?;
+    tx.commit().await.map_err(unavailable)?;
+    Ok(Json(page))
+}
+fn manifest_page(
+    directory: &DeviceState,
+    events: Vec<DeviceEvent>,
+    query: &ManifestQuery,
+) -> Result<DeviceManifestPage, Failure> {
+    if !(1..=100).contains(&query.limit) || query.after_revision > MAX_DEVICE_EVENTS {
+        return Err(bad());
+    }
     if query.after_revision > directory.revision() {
         return Err(conflict());
     }
@@ -871,6 +906,5 @@ async fn manifest(
             break;
         }
     }
-    tx.commit().await.map_err(unavailable)?;
-    Ok(Json(page))
+    Ok(page)
 }

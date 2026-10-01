@@ -614,7 +614,7 @@ pub struct DeviceReceipt {
     pub current_hash: Vec<u8>,
     pub messaging_enabled: bool,
 }
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DeviceManifestPage {
     pub anchor: Anchor,

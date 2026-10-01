@@ -1,5 +1,13 @@
 # P0/P1 验收记录（待执行）
 
+## 2026-10-02 T23 Rust 客户端短测
+
+最终 `npm test`：15 项 Node/Electron、163 项普通 Rust、0 失败，31 项数据库默认 ignored（下方专用入口已全部实际执行）。完整输出 `target/test-results/device-client-regression-2026-10-02.txt`；生产 `npm run build` 通过，保留既有 LNK4098/LNK4099。本轮未启动长期测试或执行安装、推送、发布；原未跟踪预览文件和 `src-tauri/` 保留。
+
+专用 PostgreSQL 31/31、0 失败/跳过，报告 `database-2026-10-01T19-54-47-098Z.json`。新增真实 Rust 控制客户端覆盖两轮独立密钥申请/证明/授权/撤销、本账号证据分页、可信根核对、原编号回包查询/重试、撤销后旧授权不复活及本机 SQLite 重开验链；取消/撤销/跨申请凭据不能获取授权页。每次申请保持普通登录/收发关闭。使用新随机标记库、合成账号和临时客户端文件。
+
+`npm run test:devices:trial` 报告 `trusted-devices-2026-10-01T19-57-51-796Z.json` 共 19 项及离线示例通过；新增核心场景为末页头不符、分页断号/重复/错根/more 错误及第二条坏签名均不落库，HTTP 重定向不转发凭据、过大/非类型响应拒绝且错误不泄露正文。全 workspace/all-targets Clippy、格式和核心 FFI 编译通过。加密待发授权任务重启、平台高水位防整体回滚、桌面、历史迁移和真正多设备聊天尚待实现；双 Windows/独立审查仍待验收。
+
 ## 2026-10-02 T23 服务端短测
 
 `./scripts/run-isolated-validation.ps1 -DatabaseOnly` 创建随机角色和标记专用库；PostgreSQL 16.14 下 30 项用例全部实际通过、0 失败/跳过。报告 `target/test-results/database-2026-10-01T19-45-11-117Z.json`。
