@@ -8,6 +8,7 @@ use rusqlite::{params, Connection, TransactionBehavior};
 use std::{path::Path, time::Duration};
 
 pub mod api;
+pub mod coordinator;
 pub mod tasks;
 const MAX_EVENT_BYTES: usize = MAX_DEVICE_EVENT_BYTES;
 const MAX_BATCH: usize = 100;

@@ -5,7 +5,7 @@ use liteseal_shared::{
     crypto::{self, KeyPair},
     trusted_device::*,
 };
-use rusqlite::{params, TransactionBehavior};
+use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{path::Path, sync::Mutex};
@@ -54,6 +54,20 @@ pub struct TaskOwner {
     joining: bool,
 }
 impl TaskOwner {
+    pub(super) fn origin(&self) -> &str {
+        &self.origin
+    }
+    pub(super) fn root_anchor(&self) -> Option<Anchor> {
+        (!self.joining).then(|| Anchor {
+            origin: self.origin.clone(),
+            account: self.profile.clone(),
+            root: DeviceIdentity {
+                device_id: self.device.clone(),
+                encryption_key: self.encryption,
+                signing_key: self.signing,
+            },
+        })
+    }
     pub fn for_join(
         server: &str,
         username: &str,
@@ -100,7 +114,7 @@ impl TaskOwner {
                 .expect("task owner serialization"),
         ))
     }
-    fn keys(&self, keys: &KeyPair) -> Result<(), String> {
+    pub(super) fn keys(&self, keys: &KeyPair) -> Result<(), String> {
         key_check(keys)?;
         if self.encryption != keys.public_key || self.signing != keys.ed25519_pk {
             Err(invalid())
@@ -222,6 +236,21 @@ pub fn anchor_fingerprint(anchor: &Anchor) -> String {
     hex::encode(anchor.hash())
 }
 impl ControlTask {
+    pub(super) fn same_ticket(&self, status: &JoinStatus) -> bool {
+        self.ticket().is_some_and(|ticket| ticket == &status.ticket)
+            && self
+                .intent()
+                .is_none_or(|intent| status.intent.as_ref().is_none_or(|other| intent == other))
+            && self.challenge().is_none_or(|challenge| {
+                status
+                    .challenge
+                    .as_ref()
+                    .is_none_or(|other| challenge == other)
+            })
+            && self
+                .proof()
+                .is_none_or(|proof| status.proof.as_ref().is_none_or(|other| proof == other))
+    }
     pub fn view(&self) -> TaskView {
         let (kind, request_id, event_id, anchor) = match &self.inner.data {
             Data::Join(data) => (
@@ -322,6 +351,77 @@ pub struct DeviceTaskStore {
     owner: TaskOwner,
 }
 impl DeviceTaskStore {
+    pub(super) fn challenge_terminal(
+        &mut self,
+        task: &ControlTask,
+        status: &JoinStatus,
+        keys: &KeyPair,
+    ) -> Result<ControlTask, String> {
+        let Data::Challenge(data) = &task.inner.data else {
+            return Err(invalid());
+        };
+        if !status.ticket.matches(&data.intent)
+            || !matches!(status.phase, JoinPhase::Cancelled | JoinPhase::Expired)
+        {
+            return Err(invalid());
+        }
+        let mut next = task.inner.clone();
+        next.phase = if status.phase == JoinPhase::Cancelled {
+            TaskPhase::Cancelled
+        } else {
+            TaskPhase::Expired
+        };
+        self.replace(task, next, keys)
+    }
+    pub(super) fn join_terminal(
+        &mut self,
+        task: &ControlTask,
+        status: &JoinStatus,
+        keys: &KeyPair,
+    ) -> Result<ControlTask, String> {
+        if !matches!(status.phase, JoinPhase::Cancelled | JoinPhase::Expired)
+            || !task.same_ticket(status)
+        {
+            return Err(invalid());
+        }
+        let mut next = task.inner.clone();
+        next.phase = if status.phase == JoinPhase::Cancelled {
+            TaskPhase::Cancelled
+        } else {
+            TaskPhase::Expired
+        };
+        self.replace(task, next, keys)
+    }
+    pub(super) fn event_accepted(&mut self, task: &ControlTask) -> Result<bool, String> {
+        let Data::Event(data) = &task.inner.data else {
+            return Err(invalid());
+        };
+        let current = self.trust.load(&data.anchor, None)?;
+        if current.revision() < data.event.revision {
+            return Ok(false);
+        }
+        let digest:Vec<u8>=self.trust.conn.query_row("SELECT payload FROM trusted_device_events WHERE origin=?1 AND account=?2 AND event_id=?3",
+            params![data.anchor.origin,data.anchor.account,data.event.id],|r|r.get(0)).optional().map_err(db)?.unwrap_or_default();
+        if digest.is_empty() {
+            return Ok(false);
+        }
+        let event: DeviceEvent = serde_json::from_slice(&digest).map_err(|_| invalid())?;
+        if event.hash() != data.event.hash() {
+            return Err(invalid());
+        }
+        Ok(true)
+    }
+    pub(super) fn base_matches(&mut self, task: &ControlTask, current: &DeviceState) -> bool {
+        match &task.inner.data {
+            Data::Event(data) => {
+                data.anchor == *current.anchor() && data.base == Checkpoint::from_state(current)
+            }
+            Data::Challenge(data) => {
+                data.anchor == *current.anchor() && data.base == Checkpoint::from_state(current)
+            }
+            _ => false,
+        }
+    }
     pub fn open(path: &Path, owner: TaskOwner, keys: &KeyPair) -> Result<Self, String> {
         owner.keys(keys)?;
         let trust = DeviceTrustStore::open(path)?;
@@ -984,6 +1084,14 @@ pub struct TaskLease {
     generation: u64,
 }
 impl TaskGate {
+    pub(super) fn rotate_with<T>(
+        &self,
+        callback: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
+        let mut state = self.state.lock().map_err(|_| invalid())?;
+        state.generation = state.generation.checked_add(1).ok_or_else(invalid)?;
+        callback()
+    }
     pub fn new() -> Result<Self, String> {
         Ok(Self {
             state: Mutex::new(GateState {

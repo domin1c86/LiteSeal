@@ -1349,3 +1349,204 @@ async fn encrypted_control_jobs_reopen_after_lost_acceptance_and_ignore_locked_c
     let _ = std::fs::remove_file(path);
     let _ = std::fs::remove_file(root_path);
 }
+
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn coordinator_drives_join_retry_verified_acceptance_and_cancel_without_resigning() {
+    use liteseal_core::trusted_devices::{api::DeviceControlApi, coordinator::*, tasks::*};
+    let (f, lose) = Fixture::start_with_loss().await;
+    let root = f.account().await;
+    let keys = crypto::generate_keypair().unwrap();
+    let path = std::env::temp_dir().join(format!(
+        "liteseal-coordinator-join-{}.db",
+        uuid::Uuid::new_v4()
+    ));
+    let root_path = std::env::temp_dir().join(format!(
+        "liteseal-coordinator-root-{}.db",
+        uuid::Uuid::new_v4()
+    ));
+    let owner = TaskOwner::for_join(
+        &f.url,
+        &root.username,
+        &uuid::Uuid::new_v4().to_string(),
+        &keys,
+    )
+    .unwrap();
+    let joining = DeviceCoordinator::open(&path, owner.clone(), &keys).unwrap();
+    let job = joining.prepare_join("new Windows", &keys).unwrap();
+    assert_eq!(
+        joining.step(&job.id, None, &keys).await.unwrap().condition,
+        Condition::NeedsPassword
+    );
+    *lose.lock().unwrap() = Some("/devices/join_requests".into());
+    assert_eq!(
+        joining
+            .step(&job.id, Some(&root.password), &keys)
+            .await
+            .unwrap()
+            .condition,
+        Condition::Retry
+    );
+    drop(joining);
+    let joining = DeviceCoordinator::open(&path, owner, &keys).unwrap();
+    assert_eq!(
+        joining.step(&job.id, None, &keys).await.unwrap().condition,
+        Condition::NeedsConfirmation
+    );
+    let anchor = Anchor {
+        origin: f.url.clone(),
+        account: root.id.clone(),
+        root: DeviceIdentity::from_keys(root.device.clone(), &root.keys),
+    };
+    assert!(joining
+        .confirm_root(&job.id, "bad-fingerprint", &keys)
+        .is_err());
+    joining
+        .confirm_root(&job.id, &anchor_fingerprint(&anchor), &keys)
+        .unwrap();
+    *lose.lock().unwrap() = Some(format!("/devices/join_requests/{}/intent", job.id));
+    assert_eq!(
+        joining.step(&job.id, None, &keys).await.unwrap().condition,
+        Condition::Retry
+    );
+    assert_eq!(
+        joining.step(&job.id, None, &keys).await.unwrap().condition,
+        Condition::Waiting
+    );
+    let root_owner = TaskOwner::for_root(&anchor, &root.keys).unwrap();
+    let authority = DeviceCoordinator::open(&root_path, root_owner.clone(), &root.keys).unwrap();
+    authority.renew_session(root.token.clone()).unwrap();
+    let inspection = authority.inspect_join(&job.id, &root.keys).await.unwrap();
+    assert!(authority
+        .prepare_challenge(&job.id, "bad-fingerprint", &root.keys)
+        .await
+        .is_err());
+    let challenge = authority
+        .prepare_challenge(&job.id, &inspection.combined_fingerprint, &root.keys)
+        .await
+        .unwrap()
+        .unwrap();
+    *lose.lock().unwrap() = Some(format!("/devices/join_requests/{}/challenge", job.id));
+    assert_eq!(
+        authority
+            .step(&challenge.id, None, &root.keys)
+            .await
+            .unwrap()
+            .condition,
+        Condition::Retry
+    );
+    drop(authority);
+    let authority = DeviceCoordinator::open(&root_path, root_owner, &root.keys).unwrap();
+    authority.renew_session(root.token.clone()).unwrap();
+    assert_eq!(
+        authority
+            .step(&challenge.id, None, &root.keys)
+            .await
+            .unwrap()
+            .condition,
+        Condition::Terminal
+    );
+    assert_eq!(
+        joining.step(&job.id, None, &keys).await.unwrap().condition,
+        Condition::Advanced
+    ); // Seal proof before sending it.
+    *lose.lock().unwrap() = Some(format!("/devices/join_requests/{}/proof", job.id));
+    assert_eq!(
+        joining.step(&job.id, None, &keys).await.unwrap().condition,
+        Condition::Retry
+    );
+    assert_eq!(
+        joining.step(&job.id, None, &keys).await.unwrap().condition,
+        Condition::Waiting
+    );
+    let grant = authority
+        .prepare_grant(&job.id, &inspection.combined_fingerprint, &root.keys)
+        .await
+        .unwrap()
+        .unwrap();
+    *lose.lock().unwrap() = Some("/devices/grants".into());
+    assert_eq!(
+        authority
+            .step(&grant.id, None, &root.keys)
+            .await
+            .unwrap()
+            .condition,
+        Condition::Retry
+    );
+    assert_eq!(
+        authority
+            .step(&grant.id, None, &root.keys)
+            .await
+            .unwrap()
+            .task
+            .phase,
+        TaskPhase::Complete
+    );
+    assert_eq!(
+        joining.step(&job.id, None, &keys).await.unwrap().task.phase,
+        TaskPhase::Complete
+    );
+    let revoke = authority.prepare_revoke(&root.keys).await.unwrap().unwrap();
+    authority.request_cancel(&revoke.id, &root.keys).unwrap();
+    *lose.lock().unwrap() = Some("/devices/events/cancel".into());
+    assert_eq!(
+        authority
+            .step(&revoke.id, None, &root.keys)
+            .await
+            .unwrap()
+            .condition,
+        Condition::Retry
+    );
+    assert_eq!(
+        authority
+            .step(&revoke.id, None, &root.keys)
+            .await
+            .unwrap()
+            .task
+            .phase,
+        TaskPhase::Cancelled
+    );
+    let pending = authority.prepare_revoke(&root.keys).await.unwrap().unwrap();
+    let api = DeviceControlApi::new(&f.url).unwrap();
+    // A later accepted operation makes this original queued version conflict; the coordinator does not re-sign it.
+    let page = api.manifest(&root.token, &root.id, 0).await.unwrap();
+    let mut state = DeviceState::pin(anchor.clone()).unwrap();
+    for event in &page.events {
+        state = state.apply(event).unwrap();
+    }
+    let other = make_event(
+        &state,
+        uuid::Uuid::new_v4().to_string(),
+        DeviceAction::Revoke {
+            device_id: state.secondary().unwrap().device_id.clone(),
+            grant_hash: state.grant_hash().unwrap().to_vec(),
+        },
+        now(),
+        &root.keys,
+    )
+    .unwrap();
+    api.submit(&root.token, &root.device, &other).await.unwrap();
+    assert_eq!(
+        authority
+            .step(&pending.id, None, &root.keys)
+            .await
+            .unwrap()
+            .condition,
+        Condition::Conflict
+    );
+    assert_eq!(
+        authority
+            .tasks(&root.keys)
+            .unwrap()
+            .iter()
+            .find(|v| v.id == pending.id)
+            .unwrap()
+            .phase,
+        TaskPhase::Conflict
+    );
+    assert_eq!(f.db.list_user_devices(&root.id).await.unwrap().len(), 1);
+    drop(authority);
+    drop(joining);
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(root_path);
+}
