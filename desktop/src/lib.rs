@@ -14,6 +14,7 @@ pub struct AppState {
     pub(crate) groups_runtime: Mutex<commands::groups::Runtime>,
     pub(crate) groups_gate: tokio::sync::Mutex<()>,
     pub(crate) device_control_runtime: Mutex<commands::device_control::Runtime>,
+    pub(crate) device_join_runtime: Mutex<commands::device_join::Runtime>,
     pub(crate) backup_runtime: std::sync::Arc<Mutex<commands::backup::Runtime>>,
     pub(crate) backup_commit: std::sync::Arc<Mutex<()>>,
 }
@@ -35,6 +36,7 @@ impl AppState {
             groups_runtime: Mutex::new(commands::groups::Runtime::default()),
             groups_gate: tokio::sync::Mutex::new(()),
             device_control_runtime: Default::default(),
+            device_join_runtime: Default::default(),
             backup_runtime: Default::default(),
             backup_commit: Default::default(),
         })
@@ -141,5 +143,15 @@ impl AppState {
     pub fn clear_pending_keys(&self) -> Result<(), String> {
         *self.pending_keys.lock().map_err(|e| e.to_string())? = None;
         Ok(())
+    }
+    pub(crate) fn device_join_directory(&self) -> Result<PathBuf, String> {
+        let path = match &self.keystore_path {
+            Some(path) => path.clone(),
+            None => keystore::keystore_path()?,
+        };
+        Ok(path
+            .parent()
+            .ok_or("加入档案目录不可用")?
+            .join("join-profiles"))
     }
 }

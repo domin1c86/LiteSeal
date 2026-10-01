@@ -21,12 +21,13 @@ test('preload exposes exactly the typed business commands, with error propagatio
   let exposed;
   let fail = false;
   const selectedFile = {};
+  const events=[], listeners=new Map();
   vm.runInNewContext(await fs.readFile('dist-electron/preload.cjs', 'utf8'), {
     require(name) {
       assert.equal(name, 'electron');
       return { contextBridge: { exposeInMainWorld(key, value) { assert.equal(key, 'desktop'); exposed = value; } },
         webUtils: { getPathForFile(file) { return file === selectedFile ? 'C:\\test.png' : ''; } },
-        ipcRenderer: { on() {}, async invoke(channel, args) {
+        ipcRenderer: { on(channel,handler) {listeners.set(channel,handler);}, async invoke(channel, args) {
           if (channel === 'liteseal:stage_attachment_file') {
             assert.equal(args.peerId, 'bob'); assert.equal(args.path, 'C:\\test.png');
             return { ok: true, result: { id: 'staged' } };
@@ -35,10 +36,12 @@ test('preload exposes exactly the typed business commands, with error propagatio
           return fail ? { ok: false, error: 'test error' } : { ok: true, result: [] };
         } } };
     },
+    window:{dispatchEvent(event){events.push(event.type);}}, Event,
   });
   assert.deepEqual(Object.keys(exposed).sort(), [...commandNames].sort());
   assert.equal(exposed.resume_device_control, undefined);
   assert.equal(exposed.suspend_device_control, undefined);
+  listeners.get('liteseal:device-paused')();assert.deepEqual(events,['liteseal-device-paused']);
   assert.deepEqual(await exposed.get_contacts({}), []);
   assert.equal((await exposed.stage_attachment_file({ peerId: 'bob', file: selectedFile })).id, 'staged');
   await assert.rejects(exposed.stage_attachment_file({ peerId: 'bob', file: {} }), /没有本机路径/);
@@ -195,4 +198,32 @@ test('Rust stream accepts fragmented requests, rejects unknown commands and exit
   assert.match(results[1].error, /Invalid command/);
   child.stdin.end();
   assert.equal(await exit, 0);
+});
+
+test('real joining-profile IPC preserves normal identity and reopens original draft without normal login', async t => {
+  const directory=await fs.mkdtemp(path.join(os.tmpdir(),'liteseal-join-ipc-'));
+  const requests=[];
+  const server=http.createServer((request,response)=>{requests.push(request.method);response.writeHead(404,{'content-type':'application/json'});response.end('{}');});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  let bridge=new DesktopBridge(10000);
+  t.after(async()=>{await bridge.stop();await new Promise(resolve=>server.close(resolve));await fs.rm(directory,{recursive:true,force:true});});
+  const database=path.join(directory,'normal.db'), keyfile=path.join(directory,'normal.bin');
+  const args=['--db-path',database,'--keystore-path',keyfile];
+  await bridge.start(executable,args);
+  const normal=await bridge.call('prepare_identity',{});
+  await bridge.call('save_session',{userId:'normal-synthetic',deviceId:'normal-device',token:'normal-isolated',refreshToken:'normal-refresh',serverUrl:`http://127.0.0.1:${server.address().port}`});
+  const original=await fs.readFile(keyfile);
+  const created=await bridge.call('create_device_join_profile',{origin:`http://127.0.0.1:${server.address().port}`,username:'Alice',deviceName:'新 Windows 🦭'});
+  assert.equal(created.join.task.phase,'draft');assert.equal(created.messaging_enabled,false);
+  for(const field of ['secret_key','ed25519_sk','token','password']) assert.equal(JSON.stringify(created).includes(field),false,field);
+  assert.equal((await bridge.call('device_join_step',{profileId:created.profile.id,password:'synthetic-password'})).condition,'unsupported');
+  assert.deepEqual(requests,['GET'],'unsupported server must never receive a password POST');
+  await bridge.stop();bridge=new DesktopBridge(10000);await bridge.start(executable,args);
+  const reopened=await bridge.call('get_device_join_profile',{profileId:created.profile.id});
+  assert.equal(reopened.join.task.id,created.join.task.id);assert.equal(reopened.profile.encryption_fingerprint,created.profile.encryption_fingerprint);
+  const loaded=await bridge.call('load_identity',{});assert.deepEqual(loaded.public_key,normal.public_key);assert.equal(loaded.token,'normal-isolated');
+  await assert.rejects(bridge.call('forget_device_join_profile',{profileId:created.profile.id}),/先确认/);
+  const abandoned=await bridge.call('abandon_device_join',{profileId:created.profile.id});assert.equal(abandoned.join.local_abandonment,true);
+  await bridge.call('forget_device_join_profile',{profileId:created.profile.id});assert.deepEqual(await bridge.call('list_device_join_profiles',{}),[]);
+  assert.deepEqual(await fs.readFile(keyfile),original);
 });

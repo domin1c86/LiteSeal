@@ -41,6 +41,15 @@ try {
   const desktopCounts = /test result: ok\. (\d+) passed; 0 failed; 0 ignored/.exec(desktop.output);
   report.steps.push({ name: 'original-device typed IPC, DPAPI, suspension and late result rejection', passed: Number(desktopCounts?.[1] ?? 0), command: ['cargo', ...desktopArgs], status: desktop.code === 0 && desktopCounts ? 'passed' : 'failed' });
   if (desktop.code || !desktopCounts) throw new Error('desktop device controls tests failed');
+  for(const [crate,target,label] of [
+    ['liteseal-core','device_profiles_test','isolated DPAPI profiles, binding, quota and safe cleanup'],
+    ['liteseal-desktop','device_join','joining IPC, password invalidation, pause and retired handles'],
+  ]) {
+    const args=['test','--locked','-p',crate,'--test',target];const tested=execute('cargo',args);
+    const count=/test result: ok\. (\d+) passed; 0 failed; 0 ignored/.exec(tested.output);
+    report.steps.push({name:label,passed:Number(count?.[1]??0),command:['cargo',...args],status:tested.code===0&&count?'passed':'failed'});
+    if(tested.code||!count)throw new Error(target+' failed');
+  }
   const trial = execute('cargo', ['run', '--quiet', '--locked', '-p', 'liteseal-shared', '--example', 'trusted_device_trial']);
   const line = trial.output.split(/\r?\n/).find(line => line.startsWith('{'));
   const result = line ? JSON.parse(line) : null;

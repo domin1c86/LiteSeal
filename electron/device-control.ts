@@ -2,6 +2,7 @@ import type { CommandName } from "./contracts";
 import type { DesktopBridge } from "./bridge";
 
 export const deviceCommands = new Set<CommandName>([
+  "list_device_join_profiles", "create_device_join_profile", "get_device_join_profile", "confirm_device_join_root", "device_join_step", "cancel_device_join", "abandon_device_join", "forget_device_join_profile",
   "get_device_control", "inspect_device_request", "prepare_device_challenge", "prepare_device_grant",
   "prepare_device_revoke", "device_task_step", "cancel_device_task", "discard_device_task",
 ]);

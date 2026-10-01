@@ -16,6 +16,48 @@ pub struct Request {
 #[derive(Deserialize)]
 #[serde(tag = "name", content = "args", deny_unknown_fields)]
 pub enum Command {
+    #[serde(rename = "list_device_join_profiles")]
+    ListDeviceJoinProfiles {},
+    #[serde(rename = "create_device_join_profile")]
+    CreateDeviceJoinProfile {
+        origin: String,
+        username: String,
+        #[serde(rename = "deviceName")]
+        device_name: String,
+    },
+    #[serde(rename = "get_device_join_profile")]
+    GetDeviceJoinProfile {
+        #[serde(rename = "profileId")]
+        profile_id: String,
+    },
+    #[serde(rename = "confirm_device_join_root")]
+    ConfirmDeviceJoinRoot {
+        #[serde(rename = "profileId")]
+        profile_id: String,
+        #[serde(rename = "confirmedFingerprint")]
+        confirmed_fingerprint: String,
+    },
+    #[serde(rename = "device_join_step")]
+    DeviceJoinStep {
+        #[serde(rename = "profileId")]
+        profile_id: String,
+        password: Option<String>,
+    },
+    #[serde(rename = "cancel_device_join")]
+    CancelDeviceJoin {
+        #[serde(rename = "profileId")]
+        profile_id: String,
+    },
+    #[serde(rename = "abandon_device_join")]
+    AbandonDeviceJoin {
+        #[serde(rename = "profileId")]
+        profile_id: String,
+    },
+    #[serde(rename = "forget_device_join_profile")]
+    ForgetDeviceJoinProfile {
+        #[serde(rename = "profileId")]
+        profile_id: String,
+    },
     #[serde(rename = "get_device_control")]
     GetDeviceControl {},
     #[serde(rename = "inspect_device_request")]
@@ -797,6 +839,43 @@ impl Response {
 
 pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, String> {
     let result = match command {
+        Command::ListDeviceJoinProfiles {} => {
+            serde_json::to_value(commands::device_join::list(state)?)
+        }
+        Command::CreateDeviceJoinProfile {
+            origin,
+            username,
+            device_name,
+        } => serde_json::to_value(commands::device_join::create(
+            state,
+            origin,
+            username,
+            device_name,
+        )?),
+        Command::GetDeviceJoinProfile { profile_id } => {
+            serde_json::to_value(commands::device_join::snapshot(state, profile_id)?)
+        }
+        Command::ConfirmDeviceJoinRoot {
+            profile_id,
+            confirmed_fingerprint,
+        } => serde_json::to_value(commands::device_join::confirm(
+            state,
+            profile_id,
+            confirmed_fingerprint,
+        )?),
+        Command::DeviceJoinStep {
+            profile_id,
+            password,
+        } => serde_json::to_value(commands::device_join::step(state, profile_id, password).await?),
+        Command::CancelDeviceJoin { profile_id } => {
+            serde_json::to_value(commands::device_join::cancel(state, profile_id)?)
+        }
+        Command::AbandonDeviceJoin { profile_id } => {
+            serde_json::to_value(commands::device_join::abandon(state, profile_id)?)
+        }
+        Command::ForgetDeviceJoinProfile { profile_id } => {
+            serde_json::to_value(commands::device_join::forget(state, profile_id)?)
+        }
         Command::GetDeviceControl {} => {
             serde_json::to_value(commands::device_control::snapshot(state).await?)
         }

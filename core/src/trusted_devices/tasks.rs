@@ -753,13 +753,22 @@ impl DeviceTaskStore {
         }
     }
     pub fn prepare_join(&mut self, name: &str, keys: &KeyPair) -> Result<ControlTask, String> {
+        self.prepare_join_with_id(&uuid::Uuid::new_v4().to_string(), name, keys)
+    }
+    pub(super) fn prepare_join_with_id(
+        &mut self,
+        id: &str,
+        name: &str,
+        keys: &KeyPair,
+    ) -> Result<ControlTask, String> {
+        uuid::Uuid::parse_str(id).map_err(|_| invalid())?;
         let username = self
             .owner
             .profile
             .strip_prefix("join:")
             .ok_or_else(invalid)?
             .to_string();
-        let task = self.new_task(
+        let mut task = self.new_task(
             Data::Join(Box::new(JoinData {
                 local_abandonment: false,
                 username,
@@ -775,6 +784,7 @@ impl DeviceTaskStore {
             })),
             TaskPhase::Draft,
         );
+        task.id = id.into();
         self.insert(task, keys)
     }
     pub fn accept_ticket(

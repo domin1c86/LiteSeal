@@ -324,6 +324,358 @@ async fn cancellation_after_authorization_confirms_verified_acceptance_on_both_c
     assert_eq!(f.db.list_user_devices(&root.id).await.unwrap().len(), 1);
 }
 
+#[cfg(windows)]
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn both_desktop_join_profiles_recover_lost_responses_without_activating_or_replacing_identity(
+) {
+    use liteseal_core::backup::WorkDirectory;
+    use liteseal_desktop::{
+        protocol::{dispatch, Command},
+        AppState as DesktopState,
+    };
+    async fn call(
+        state: &DesktopState,
+        name: &str,
+        args: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        dispatch(
+            serde_json::from_value::<Command>(serde_json::json!({"name":name,"args":args}))
+                .unwrap(),
+            state,
+        )
+        .await
+    }
+    let (f, lose) = Fixture::start_with_loss().await;
+    let root = f.account().await;
+    let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
+    let original_dir = work.0.join("original");
+    let joining_dir = work.0.join("joining");
+    std::fs::create_dir(&original_dir).unwrap();
+    std::fs::create_dir(&joining_dir).unwrap();
+    let original_path = original_dir.join("normal.bin");
+    let original_db = original_dir.join("normal.db");
+    let original =
+        DesktopState::with_keystore(original_db.to_str().unwrap(), Some(original_path.clone()))
+            .unwrap();
+    original
+        .save_identity(liteseal_core::keystore::KeystoreData {
+            user_id: root.id.clone(),
+            device_id: root.device.clone(),
+            server_url: f.url.clone(),
+            token: root.token.clone(),
+            refresh_token: "synthetic-unused".into(),
+            public_key: root.keys.public_key.to_vec(),
+            secret_key: root.keys.secret_key.to_vec(),
+            ed25519_pk: root.keys.ed25519_pk.to_vec(),
+            ed25519_sk: root.keys.ed25519_sk.to_vec(),
+        })
+        .unwrap();
+    let original_bytes = std::fs::read(&original_path).unwrap();
+    let joining_path = joining_dir.join("normal.bin");
+    let joining_db = joining_dir.join("normal.db");
+    let joining =
+        DesktopState::with_keystore(joining_db.to_str().unwrap(), Some(joining_path.clone()))
+            .unwrap();
+    let created=call(&joining,"create_device_join_profile",serde_json::json!({"origin":f.url,"username":root.username,"deviceName":"new Windows 中文 🦭"})).await.unwrap();
+    let id = created["profile"]["id"].as_str().unwrap();
+    let request = created["join"]["task"]["id"].as_str().unwrap();
+    *lose.lock().unwrap() = Some("/devices/join_requests".into());
+    assert_eq!(
+        call(
+            &joining,
+            "device_join_step",
+            serde_json::json!({"profileId":id,"password":root.password})
+        )
+        .await
+        .unwrap()["condition"],
+        "retry"
+    );
+    drop(joining);
+    let joining =
+        DesktopState::with_keystore(joining_db.to_str().unwrap(), Some(joining_path.clone()))
+            .unwrap();
+    assert_eq!(
+        call(
+            &joining,
+            "get_device_join_profile",
+            serde_json::json!({"profileId":id})
+        )
+        .await
+        .unwrap()["join"]["task"]["id"],
+        request
+    );
+    assert_eq!(
+        call(
+            &joining,
+            "device_join_step",
+            serde_json::json!({"profileId":id})
+        )
+        .await
+        .unwrap()["condition"],
+        "needs_confirmation"
+    );
+    assert!(call(
+        &joining,
+        "confirm_device_join_root",
+        serde_json::json!({"profileId":id,"confirmedFingerprint":"wrong"})
+    )
+    .await
+    .is_err());
+    let original_view = call(&original, "get_device_control", serde_json::json!({}))
+        .await
+        .unwrap();
+    call(&joining,"confirm_device_join_root",serde_json::json!({"profileId":id,"confirmedFingerprint":original_view["root_fingerprint"]})).await.unwrap();
+    *lose.lock().unwrap() = Some(format!("/devices/join_requests/{request}/intent"));
+    assert_eq!(
+        call(
+            &joining,
+            "device_join_step",
+            serde_json::json!({"profileId":id})
+        )
+        .await
+        .unwrap()["condition"],
+        "retry"
+    );
+    call(
+        &joining,
+        "device_join_step",
+        serde_json::json!({"profileId":id}),
+    )
+    .await
+    .unwrap();
+    let inspected = call(
+        &original,
+        "inspect_device_request",
+        serde_json::json!({"requestId":request}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        inspected["encryption_fingerprint"],
+        created["profile"]["encryption_fingerprint"]
+    );
+    assert_eq!(
+        inspected["signing_fingerprint"],
+        created["profile"]["signing_fingerprint"]
+    );
+    let confirmed = serde_json::json!({"requestId":request,"confirmedFingerprint":inspected["combined_fingerprint"]});
+    let challenge = call(&original, "prepare_device_challenge", confirmed.clone())
+        .await
+        .unwrap();
+    *lose.lock().unwrap() = Some(format!("/devices/join_requests/{request}/challenge"));
+    assert_eq!(
+        call(
+            &original,
+            "device_task_step",
+            serde_json::json!({"id":challenge["id"]})
+        )
+        .await
+        .unwrap()["condition"],
+        "retry"
+    );
+    call(
+        &original,
+        "device_task_step",
+        serde_json::json!({"id":challenge["id"]}),
+    )
+    .await
+    .unwrap();
+    call(
+        &joining,
+        "device_join_step",
+        serde_json::json!({"profileId":id}),
+    )
+    .await
+    .unwrap();
+    *lose.lock().unwrap() = Some(format!("/devices/join_requests/{request}/proof"));
+    assert_eq!(
+        call(
+            &joining,
+            "device_join_step",
+            serde_json::json!({"profileId":id})
+        )
+        .await
+        .unwrap()["condition"],
+        "retry"
+    );
+    call(
+        &joining,
+        "device_join_step",
+        serde_json::json!({"profileId":id}),
+    )
+    .await
+    .unwrap();
+    let grant = call(&original, "prepare_device_grant", confirmed)
+        .await
+        .unwrap();
+    *lose.lock().unwrap() = Some("/devices/grants".into());
+    assert_eq!(
+        call(
+            &original,
+            "device_task_step",
+            serde_json::json!({"id":grant["id"]})
+        )
+        .await
+        .unwrap()["condition"],
+        "retry"
+    );
+    drop(original);
+    drop(joining);
+    let original =
+        DesktopState::with_keystore(original_db.to_str().unwrap(), Some(original_path.clone()))
+            .unwrap();
+    let joining =
+        DesktopState::with_keystore(joining_db.to_str().unwrap(), Some(joining_path.clone()))
+            .unwrap();
+    call(
+        &original,
+        "device_task_step",
+        serde_json::json!({"id":grant["id"]}),
+    )
+    .await
+    .unwrap();
+    call(
+        &joining,
+        "device_join_step",
+        serde_json::json!({"profileId":id}),
+    )
+    .await
+    .unwrap();
+    let accepted = call(
+        &joining,
+        "get_device_join_profile",
+        serde_json::json!({"profileId":id}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(accepted["join"]["task"]["phase"], "complete");
+    assert_eq!(accepted["messaging_enabled"], false);
+    assert_eq!(
+        accepted["profile"]["encryption_fingerprint"],
+        created["profile"]["encryption_fingerprint"]
+    );
+    for field in [
+        "secret_key",
+        "ed25519_sk",
+        "request_token",
+        "password",
+        "refresh_token",
+    ] {
+        assert!(!accepted.to_string().contains(field));
+    }
+    assert!(joining.identity().is_err());
+    assert!(joining.existing_pending_keys().unwrap().is_none());
+    assert!(!joining_path.exists());
+    assert_eq!(std::fs::read(&original_path).unwrap(), original_bytes);
+    assert_eq!(f.db.list_user_devices(&root.id).await.unwrap().len(), 1);
+    assert!(call(
+        &joining,
+        "forget_device_join_profile",
+        serde_json::json!({"profileId":id})
+    )
+    .await
+    .is_err());
+    let keys = liteseal_core::trusted_devices::profiles::JoinProfileStore::new(
+        joining_dir.join("join-profiles"),
+    )
+    .load(id)
+    .unwrap()
+    .keys()
+    .unwrap();
+    let login=f.client.post(format!("{}/auth/login",f.url)).json(&serde_json::json!({"username":root.username,"password":root.password,"device_id":accepted["join"]["device_id"],"device_public_key":keys.public_key,"ed25519_pk":keys.ed25519_pk})).send().await.unwrap();
+    assert_eq!(login.status(), StatusCode::FORBIDDEN);
+    let another = f.account().await;
+    let cancel=call(&joining,"create_device_join_profile",serde_json::json!({"origin":f.url,"username":another.username,"deviceName":"cancelled Windows"})).await.unwrap();
+    let cancel_id = cancel["profile"]["id"].as_str().unwrap();
+    let cancel_request = cancel["join"]["task"]["id"].as_str().unwrap();
+    call(
+        &joining,
+        "device_join_step",
+        serde_json::json!({"profileId":cancel_id,"password":another.password}),
+    )
+    .await
+    .unwrap();
+    call(
+        &joining,
+        "cancel_device_join",
+        serde_json::json!({"profileId":cancel_id}),
+    )
+    .await
+    .unwrap();
+    *lose.lock().unwrap() = Some(format!("/devices/join_requests/{cancel_request}"));
+    assert_eq!(
+        call(
+            &joining,
+            "device_join_step",
+            serde_json::json!({"profileId":cancel_id})
+        )
+        .await
+        .unwrap()["condition"],
+        "retry"
+    );
+    call(
+        &joining,
+        "device_join_step",
+        serde_json::json!({"profileId":cancel_id}),
+    )
+    .await
+    .unwrap();
+    let cancelled = call(
+        &joining,
+        "get_device_join_profile",
+        serde_json::json!({"profileId":cancel_id}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(cancelled["join"]["task"]["phase"], "cancelled");
+    assert_eq!(cancelled["join"]["local_abandonment"], false);
+    call(
+        &joining,
+        "forget_device_join_profile",
+        serde_json::json!({"profileId":cancel_id}),
+    )
+    .await
+    .unwrap();
+    let disabled = Fixture::start(false).await;
+    let absent=call(&joining,"create_device_join_profile",serde_json::json!({"origin":disabled.url,"username":"no-account-needed","deviceName":"unsupported"})).await.unwrap();
+    let absent_id = absent["profile"]["id"].as_str().unwrap();
+    assert_eq!(
+        call(
+            &joining,
+            "device_join_step",
+            serde_json::json!({"profileId":absent_id})
+        )
+        .await
+        .unwrap()["condition"],
+        "unsupported"
+    );
+    let abandoned = call(
+        &joining,
+        "abandon_device_join",
+        serde_json::json!({"profileId":absent_id}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(abandoned["join"]["local_abandonment"], true);
+    call(
+        &joining,
+        "forget_device_join_profile",
+        serde_json::json!({"profileId":absent_id}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        call(&joining, "list_device_join_profiles", serde_json::json!({}))
+            .await
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
 #[tokio::test]
 #[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
 async fn authorization_round_trip_manifest_pagination_and_revoke_are_isolated() {
@@ -1205,7 +1557,7 @@ async fn proxy_control_request(
     let lose = {
         let mut expected = proxy.lose.lock().unwrap();
         if status.is_success()
-            && method == reqwest::Method::POST
+            && matches!(method, reqwest::Method::POST | reqwest::Method::DELETE)
             && expected.as_deref() == Some(&path)
         {
             expected.take();

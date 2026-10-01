@@ -111,6 +111,10 @@ for (const startupLocked of [false, true]) test(`main restricts IPC, locks and a
   assert.ok(heldDevice);
   electron.powerMonitor.emit('lock-screen');
   assert.equal((await devices(valid, {})).ok, false, 'system lock blocks authorization without optional app lock');
+  for(const name of ['list_device_join_profiles','create_device_join_profile','get_device_join_profile','confirm_device_join_root','device_join_step','cancel_device_join','abandon_device_join','forget_device_join_profile']) {
+    assert.equal((await handlers.get(`liteseal:${name}`)(valid,{})).ok,false,name);
+  }
+  assert.ok(rendererEvents.some(event=>event[0]==='liteseal:device-paused'),'system lock clears joining password forms');
   electron.powerMonitor.emit('unlock-screen');
   await new Promise(resolve => setTimeout(resolve, 0));
   child.stdout.write(JSON.stringify({ id: heldDevice.id, result: { late: true } }) + '\n');
@@ -160,7 +164,7 @@ for (const startupLocked of [false, true]) test(`main restricts IPC, locks and a
   const reader = windows[1];
   assert.ok(reader);
   const readerEvent = { sender: reader.webContents, senderFrame: reader.webContents.mainFrame };
-  for (const name of ['get_contacts', 'send_message', 'connect_relay', 'sign_message', 'prepare_identity', 'process_groups', 'start_backup_export', 'start_backup_restore', 'get_device_control', 'prepare_device_grant', 'cancel_device_task']) {
+  for (const name of ['get_contacts', 'send_message', 'connect_relay', 'sign_message', 'prepare_identity', 'process_groups', 'start_backup_export', 'start_backup_restore', 'get_device_control', 'prepare_device_grant', 'cancel_device_task', 'list_device_join_profiles', 'device_join_step', 'create_device_join_profile']) {
     assert.equal((await handlers.get(`liteseal:${name}`)(readerEvent, {})).ok, false, name);
   }
   assert.equal((await handlers.get('liteseal:get_backup_archive_info')(readerEvent, { id: 'archive-job' })).ok, true);

@@ -13,6 +13,14 @@ export interface GroupPoll { id: string; creator: string; question: string; opti
 export interface GroupCollaboration { polls: GroupPoll[]; pin: string | null; pin_unavailable: boolean; pin_revision: number; pending: boolean; conflict: boolean; pending_message: string | null }
 export type CollaborationCommand = { kind: "mention"; text: string; mentions: CollaborationMember[] } | { kind: "poll"; question: string; options: string[] } | { kind: "vote"; poll: string; option: string; revision: number } | { kind: "close"; poll: string; revision: number } | { kind: "pin"; message: string | null; revision: number };
 export interface CommandMap {
+  list_device_join_profiles: { args: {}; result: DeviceJoinListing[] };
+  create_device_join_profile: { args: { origin: string; username: string; deviceName: string }; result: DeviceJoinSnapshot };
+  get_device_join_profile: { args: { profileId: string }; result: DeviceJoinSnapshot };
+  confirm_device_join_root: { args: { profileId: string; confirmedFingerprint: string }; result: DeviceJoinSnapshot };
+  device_join_step: { args: { profileId: string; password?: string }; result: DeviceProgress };
+  cancel_device_join: { args: { profileId: string }; result: DeviceJoinSnapshot };
+  abandon_device_join: { args: { profileId: string }; result: DeviceJoinSnapshot };
+  forget_device_join_profile: { args: { profileId: string }; result: void };
   get_device_control: { args: {}; result: DeviceControlSnapshot };
   inspect_device_request: { args: { requestId: string }; result: DeviceRequest };
   prepare_device_challenge: { args: { requestId: string; confirmedFingerprint: string }; result: DeviceTask | null };
@@ -167,6 +175,9 @@ export interface CommandMap {
   clear_downloaded_attachments: { args: {  }; result: number };
 }
 export type CommandName = keyof CommandMap;
+export interface DeviceJoinProfile { id: string; origin: string; username: string; device_name: string; local_device_id: string; encryption_fingerprint: string; signing_fingerprint: string }
+export interface DeviceJoinListing { id: string; profile: DeviceJoinProfile | null; error: string | null }
+export interface DeviceJoinSnapshot { profile: DeviceJoinProfile; join: { task: DeviceTask; local_abandonment: boolean; device_id: string | null; root_origin: string | null; root_account: string | null; root_device: string | null }; messaging_enabled: boolean }
 export type DeviceTaskPhase = "draft" | "awaiting_root_confirmation" | "awaiting_challenge" | "awaiting_authorization" | "prepared" | "cancelling" | "conflict" | "complete" | "cancelled" | "expired" | "revoked";
 export interface DeviceTask { id: string; kind: "join" | "challenge" | "grant" | "revoke"; phase: DeviceTaskPhase; revision: number; request_id: string | null; event_id: string | null; root_fingerprint: string | null }
 export interface DeviceRequest { request_id: string; device_id: string; device_name: string; encryption_fingerprint: string; signing_fingerprint: string; combined_fingerprint: string; phase: "begun" | "ready" | "challenged" | "proved" | "authorized" | "cancelled" | "expired" | "revoked" }
@@ -193,6 +204,7 @@ export interface GroupActivity { id:string;creator:string;title:string;start_at:
 export interface GroupExtensions { attachments:{id:string;blob:string;name:string;size:number;mime:string;duration_ms:number|null}[];activities:GroupActivity[];pending:boolean;conflict:boolean;pending_root:string|null }
 export type GroupExtensionCommand={kind:"activity";title:string;start_at:number;timezone:string;location:string;description:string}|{kind:"respond";activity:string;answer:GroupAnswer;revision:number}|{kind:"close"|"cancel";activity:string;revision:number};
 export const commandNames = [
+  "list_device_join_profiles", "create_device_join_profile", "get_device_join_profile", "confirm_device_join_root", "device_join_step", "cancel_device_join", "abandon_device_join", "forget_device_join_profile",
   "get_device_control", "inspect_device_request", "prepare_device_challenge", "prepare_device_grant", "prepare_device_revoke", "device_task_step", "cancel_device_task", "discard_device_task",
   "get_group_extensions", "sync_group_extensions", "submit_group_extension", "retry_group_extension", "cancel_group_extension", "select_group_attachment", "stage_group_attachment_file", "stage_group_recorded_audio", "stage_group_clipboard_image", "group_attachment_tasks", "group_attachment_step", "publish_group_attachment", "cancel_group_attachment", "begin_group_attachment_download", "export_group_attachment", "clear_group_attachment_cache",
   "start_backup_export", "start_backup_restore", "get_backup_job", "cancel_backup_job", "open_backup_archive", "get_backup_archive_info", "get_backup_conversations", "get_backup_history", "export_backup_attachment", "close_backup_archive",

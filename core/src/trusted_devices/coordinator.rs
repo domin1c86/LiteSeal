@@ -59,6 +59,15 @@ pub struct AuthorizedView {
     pub encryption_fingerprint: String,
     pub signing_fingerprint: String,
 }
+#[derive(Debug, Serialize)]
+pub struct JoinInfo {
+    pub task: TaskView,
+    pub local_abandonment: bool,
+    pub device_id: Option<String>,
+    pub root_origin: Option<String>,
+    pub root_account: Option<String>,
+    pub root_device: Option<String>,
+}
 pub fn device_fingerprint(device: &DeviceIdentity) -> String {
     use sha2::Digest;
     hex::encode(sha2::Sha256::digest(
@@ -96,6 +105,28 @@ pub struct DeviceCoordinator {
     session: RwLock<String>,
 }
 impl DeviceCoordinator {
+    pub fn join_info(&self, id: &str, keys: &KeyPair) -> Result<JoinInfo> {
+        if self.owner.root_anchor().is_some() {
+            return Err(invalid());
+        }
+        let lease = self.lease(keys)?;
+        self.with(&lease, |s| {
+            let task = s.get(id, keys)?;
+            if task.view().kind != TaskKind::Join {
+                return Err("不是加入任务".into());
+            }
+            Ok(JoinInfo {
+                task: task.view(),
+                local_abandonment: task.local_abandonment(),
+                device_id: task.ticket().map(|ticket| ticket.device.device_id.clone()),
+                root_origin: task.ticket().map(|ticket| ticket.anchor.origin.clone()),
+                root_account: task.ticket().map(|ticket| ticket.anchor.account.clone()),
+                root_device: task
+                    .ticket()
+                    .map(|ticket| ticket.anchor.root.device_id.clone()),
+            })
+        })
+    }
     pub async fn root_snapshot(&self, keys: &KeyPair) -> Result<RootSnapshot> {
         let lease = self.lease(keys)?;
         let _network = self.network.lock().await;
@@ -301,6 +332,25 @@ impl DeviceCoordinator {
         self.with(&lease, |s| {
             let task = s.get(id, keys)?;
             s.discard_terminal(&task, keys)
+        })
+    }
+    pub fn abandon_unsigned(&self, id: &str, keys: &KeyPair) -> Result<TaskView> {
+        let lease = self.lease(keys)?;
+        self.with(&lease, |s| {
+            let task = s.get(id, keys)?;
+            if task.local_abandonment() {
+                return Ok(task.view());
+            }
+            if task.view().kind != TaskKind::Join || task.intent().is_some() {
+                return Err("已签署的申请不能仅在本机放弃".into());
+            }
+            let cancelling = if task.view().phase == TaskPhase::Cancelling {
+                task
+            } else {
+                s.request_cancel(&task, keys)?
+            };
+            s.abandon_unsigned_join(&cancelling, keys)
+                .map(|task| task.view())
         })
     }
     /// At most one page per invocation. A partial directory cannot authorize a new task.
@@ -548,6 +598,7 @@ impl DeviceCoordinator {
                 return Ok(Self::progress(&abandoned, Condition::UnsignedAbandoned));
             }
             Err(error) if task.view().phase == TaskPhase::Draft && error.status == Some(401) => {
+                self.current(lease, &task, keys, |_| Ok(()))?;
                 let Some(password) = password else {
                     return Ok(Self::progress(&task, Condition::NeedsPassword));
                 };

@@ -112,7 +112,8 @@ pub(crate) fn invalidate(state: &AppState) -> Result<(), String> {
     if let Some(cache) = runtime.cache.take() {
         cache.client.invalidate().map_err(|e| e.to_string())?;
     }
-    Ok(())
+    drop(runtime);
+    super::device_join::invalidate(state, false)
 }
 pub fn suspend(state: &AppState) -> Result<(), String> {
     let mut runtime = state
@@ -124,7 +125,8 @@ pub fn suspend(state: &AppState) -> Result<(), String> {
     if let Some(cache) = runtime.cache.take() {
         cache.client.invalidate().map_err(|e| e.to_string())?;
     }
-    Ok(())
+    drop(runtime);
+    super::device_join::invalidate(state, true)
 }
 pub fn resume(state: &AppState) -> Result<(), String> {
     let mut runtime = state
@@ -133,7 +135,8 @@ pub fn resume(state: &AppState) -> Result<(), String> {
         .map_err(|_| "设备控制锁不可用")?;
     runtime.epoch = runtime.epoch.checked_add(1).ok_or("设备控制代次无效")?;
     runtime.suspended = false;
-    Ok(())
+    drop(runtime);
+    super::device_join::resume(state)
 }
 pub async fn snapshot(state: &AppState) -> Result<RootSnapshot, String> {
     let ctx = context(state)?;

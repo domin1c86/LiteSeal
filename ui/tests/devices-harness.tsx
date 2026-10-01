@@ -1,9 +1,9 @@
-import { createRoot } from "react-dom/client";
+import { root } from "./device-harness-root";
+import "./joining-harness";
 import DeviceControlPanel from "../src/components/DeviceControlPanel";
 import type { DeviceControlSnapshot, DeviceRequest, DeviceTask } from "../../electron/contracts";
 import "../src/theme.css";
 
-const root = createRoot(document.getElementById("root")!);
 const request: DeviceRequest = { request_id: "synthetic-request", device_id: "synthetic-second", device_name: "第二台 Windows 🦭 <script>", encryption_fingerprint: "e".repeat(64), signing_fingerprint: "a".repeat(64), combined_fingerprint: "f".repeat(64), phase: "ready" };
 let view: DeviceControlSnapshot;
 let delay = false, deferred: ((value: DeviceControlSnapshot) => void) | null = null;
@@ -27,7 +27,7 @@ const api = {
   cancel_device_task: async ({ id }: { id: string }) => { calls.push({ name: "cancel", args: { id } }); const job = view.tasks.find(row => row.id === id)!; job.phase = "cancelling"; return structuredClone(job); },
   discard_device_task: async ({ id }: { id: string }) => { calls.push({ name: "discard", args: { id } }); view.tasks = view.tasks.filter(row => row.id !== id); },
 };
-window.desktop = new Proxy(api, { get(target, key: keyof typeof api) { if (!(key in target)) throw new Error("unexpected device API " + String(key)); return target[key]; } }) as any;
+const installApi=()=>{window.desktop = new Proxy(api, { get(target, key: keyof typeof api) { if (!(key in target)) throw new Error("unexpected device API " + String(key)); return target[key]; } }) as any;};
 const sleep = () => new Promise(resolve => setTimeout(resolve, 90));
 const check = (condition: unknown, message: string) => { if (!condition) throw new Error(message); };
 const button = (text: string) => [...document.querySelectorAll<HTMLButtonElement>("button")].find(row => row.textContent?.trim() === text);
@@ -36,6 +36,7 @@ async function confirm() { document.querySelector<HTMLInputElement>('input[type=
 let generation = 0;
 const panel = () => root.render(<DeviceControlPanel key={++generation} onClose={() => root.render(<div>closed</div>)} />);
 (window as any).runDeviceTests = async () => {
+  installApi();
   const results: string[] = []; reset(); panel(); await sleep(); await click("核对设备");
   check(document.body.textContent!.includes(request.encryption_fingerprint) && document.body.textContent!.includes(request.signing_fingerprint), "both fingerprints absent");
   check(button("验证新设备")!.disabled, "unchecked fingerprints accepted");
@@ -68,4 +69,4 @@ const panel = () => root.render(<DeviceControlPanel key={++generation} onClose={
   check(document.body.textContent === "closed", "closed panel accepted late result"); results.push("closed panel ignores late result");
   return results;
 };
-(window as any).showDevicePanel = async () => { reset(); view.requests[0].phase = "proved"; panel(); await sleep(); await click("核对设备"); };
+(window as any).showDevicePanel = async () => { installApi();reset(); view.requests[0].phase = "proved"; panel(); await sleep(); await click("核对设备"); };

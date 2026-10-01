@@ -53,6 +53,8 @@ Windows 数据路径和格式保持兼容：
 
 ### 可信设备原设备管理（2026-10-02）
 
+加入端新增 `list_device_join_profiles`、`create_device_join_profile`、`get_device_join_profile`、`confirm_device_join_root`、`device_join_step`、`cancel_device_join`、`abandon_device_join`、`forget_device_join_profile`。独立 DPAPI/SQLite 档案由 Rust 生成与保存，页面不接收密钥、申请凭据或文件路径，完成授权不调用普通登录/中继。固定 `liteseal:device-paused` 事件清除加入表单，即使应用锁未启用；所有加入命令也受原设备相同的主进程和 Rust 代次门禁约束。切换档案失效旧协调器，仍在等待 HTTP 的旧 SQLite 句柄保留为弱引用以阻止提前清理。具体绑定、缺失拒绝及终态规则见可信设备设计。
+
 页面新增 `get_device_control`、`inspect_device_request`、`prepare_device_challenge`、`prepare_device_grant`、`prepare_device_revoke`、`device_task_step`、`cancel_device_task`、`discard_device_task`。仅传请求/任务编号和已确认的公开指纹，Rust 读取原身份及密钥后签名，返回无凭据视图。暂停/恢复两个命令仅存在于私有 sidecar 允许列表，不注册页面 IPC 或 preload 方法，离线档案也不能调用设备管理。
 
 主进程门禁拒绝系统锁屏/休眠/应用锁/退出期间的新操作与旧结果，Rust 上下文同时失效租约。启动锁定亦暂停，解锁/恢复按代次串行；新锁发生后旧恢复不能解除暂停。身份变更失效旧上下文，令牌更新不能绕过锁定。账号管理页使用完整双指纹确认和原任务推进，当前不开放第二设备聊天。协议及剩余边界见[可信设备设计](TRUSTED_DEVICES_DESIGN.md)。

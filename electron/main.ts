@@ -11,6 +11,7 @@ protocol.registerSchemesAsPrivileged([{ scheme: "liteseal", privileges: { standa
 const devUrl = "http://127.0.0.1:1420";
 const bridge = new DesktopBridge();
 const deviceControl = new DeviceControlGate(bridge);
+function suspendDevices() { deviceControl.suspend(); mainWindow?.webContents.send("liteseal:device-paused"); }
 let screenLocked = false;
 let systemSuspended = false;
 let mainWindow: BrowserWindow | undefined;
@@ -40,7 +41,7 @@ let releaseUrl: string | null = null;
 function lockApp() {
   invalidateBackups();
   if (!lockEnabled || locked) return;
-  deviceControl.suspend();
+  suspendDevices();
   locked = true; lockGeneration++;
   notifications.lock(true);
   // Unmount decrypted renderer state, including message and image previews.
@@ -57,7 +58,7 @@ else {
   app.on("window-all-closed", () => app.quit());
   app.on("before-quit", event => {
     invalidateBackups();
-    deviceControl.suspend();
+    suspendDevices();
     if (cleanedUp) return;
     exitRequested = true;
     event.preventDefault();
@@ -108,11 +109,11 @@ else {
       if (typeof configuration.enabled !== "boolean") throw new Error("应用锁配置损坏");
       lockEnabled = configuration.enabled; locked = lockEnabled; notifications.lock(locked);
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-    if (locked) deviceControl.suspend();
+    if (locked) suspendDevices();
     if (quitting) return;
     app.setAppUserModelId("com.liteseal.app");
-    powerMonitor.on("lock-screen", () => { screenLocked = true; deviceControl.suspend(); notifications.lock(true); lockApp(); });
-    powerMonitor.on("suspend", () => { systemSuspended = true; deviceControl.suspend(); invalidateBackups(); void bridge.call("suspend_scheduled_messages", {}).catch(() => {}); });
+    powerMonitor.on("lock-screen", () => { screenLocked = true; suspendDevices(); notifications.lock(true); lockApp(); });
+    powerMonitor.on("suspend", () => { systemSuspended = true; suspendDevices(); invalidateBackups(); void bridge.call("suspend_scheduled_messages", {}).catch(() => {}); });
     powerMonitor.on("unlock-screen", () => { screenLocked = false; if (!locked) { notifications.lock(false); if (!systemSuspended) void deviceControl.resume().catch(() => {}); } });
     powerMonitor.on("resume", () => { systemSuspended = false; if (!locked && !screenLocked) void deviceControl.resume().catch(() => {}); });
     setInterval(() => { if (powerMonitor.getSystemIdleTime() >= 300) lockApp(); }, 1000).unref();

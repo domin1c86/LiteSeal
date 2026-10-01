@@ -5,6 +5,7 @@ pub mod backup;
 pub mod chat;
 pub mod contacts;
 pub mod device_control;
+pub mod device_join;
 pub mod groups;
 pub mod groups_media;
 pub mod keystore;

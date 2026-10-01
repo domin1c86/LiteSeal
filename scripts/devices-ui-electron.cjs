@@ -25,6 +25,13 @@ app.whenReady().then(async () => {
     const name = `${theme}-${size}`;
     report.cases.push({ name, results });
     await fs.writeFile(path.join(directory,name+'.png'),(await window.webContents.capturePage()).toPNG());
+    const joining=await window.webContents.executeJavaScript('window.runJoiningTests()');
+    await window.webContents.executeJavaScript('window.showJoiningPanel()');
+    if(!await window.webContents.executeJavaScript('!!document.querySelector("input[aria-label=核对原设备指纹]")'))throw new Error('joining confirmation absent at capture');
+    window.setContentSize(width+1,height);await new Promise(resolve=>setTimeout(resolve,100));window.setContentSize(width,height);await new Promise(resolve=>setTimeout(resolve,300));
+    if(await window.webContents.executeJavaScript('document.documentElement.scrollWidth > window.innerWidth || [...document.querySelectorAll("dialog,section")].some(node => node.scrollWidth > node.clientWidth + 1)'))throw new Error('joining horizontal overflow');
+    report.cases.push({name:name+'-joining',results:joining});
+    await fs.writeFile(path.join(directory,name+'-joining.png'),(await window.webContents.capturePage()).toPNG());
   }
   if (report.errors.length) throw new Error('renderer errors'); report.status='passed';
 }).catch(error=>report.errors.push(String(error))).finally(async()=>{report.actual_seconds=Math.round((Date.now()-began)/1000);await fs.writeFile(path.join(directory,'result.json'),JSON.stringify(report,null,2));window?.destroy();app.exit(report.status==='passed'?0:1);});

@@ -55,9 +55,10 @@ export default function DeviceControlPanel({ onClose }: { onClose: () => void })
     live.current = true;
     const locked = () => { epoch.current++; paused.current = true; setSnapshot(null); setSelected(null); setConfirmed(false); setRevokeConfirmed(false); setStatus(""); setBusy(false); setError("设备授权已暂停，请解锁后重新打开"); };
     window.addEventListener("liteseal-app-locked", locked);
+    window.addEventListener("liteseal-device-paused", locked);
     void run();
     const timer = setInterval(() => void run(), 5000);
-    return () => { live.current = false; epoch.current++; clearInterval(timer); window.removeEventListener("liteseal-app-locked", locked); };
+    return () => { live.current = false; epoch.current++; clearInterval(timer); window.removeEventListener("liteseal-app-locked", locked); window.removeEventListener("liteseal-device-paused", locked); };
   }, []);
 
   async function inspect(requestId: string) {
