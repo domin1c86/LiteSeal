@@ -26,6 +26,11 @@ try {
   const apiCounts = /test result: ok\. (\d+) passed; 0 failed; 0 ignored/.exec(api.output);
   report.steps.push({ name: 'bounded HTTP and redirect credential isolation', passed: Number(apiCounts?.[1] ?? 0), command: ['cargo', ...apiArgs], status: api.code === 0 && apiCounts ? 'passed' : 'failed' });
   if (api.code || !apiCounts) throw new Error('bounded HTTP tests failed');
+  const taskArgs = ['test', '--locked', '-p', 'liteseal-core', '--test', 'device_tasks_test'];
+  const tasks = execute('cargo', taskArgs);
+  const taskCounts = /test result: ok\. (\d+) passed; 0 failed; 0 ignored/.exec(tasks.output);
+  report.steps.push({ name: 'encrypted tasks, original signatures, DPAPI and stale callbacks', passed: Number(taskCounts?.[1] ?? 0), command: ['cargo', ...taskArgs], status: tasks.code === 0 && taskCounts ? 'passed' : 'failed' });
+  if (tasks.code || !taskCounts) throw new Error('encrypted device tasks tests failed');
   const trial = execute('cargo', ['run', '--quiet', '--locked', '-p', 'liteseal-shared', '--example', 'trusted_device_trial']);
   const line = trial.output.split(/\r?\n/).find(line => line.startsWith('{'));
   const result = line ? JSON.parse(line) : null;

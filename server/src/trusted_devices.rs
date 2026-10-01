@@ -39,6 +39,12 @@ CREATE TABLE device_authorizations (
 );
 CREATE UNIQUE INDEX one_secondary_authorization ON device_authorizations(user_id) WHERE revoked=false;
 ";
+pub const CANCEL_MIGRATION: &str = "
+CREATE TABLE device_event_cancellations (
+ user_id TEXT NOT NULL REFERENCES users(id), event_id TEXT NOT NULL,
+ digest BYTEA NOT NULL CHECK(octet_length(digest)=32), PRIMARY KEY(user_id,event_id)
+);
+";
 fn unavailable(_: sqlx::Error) -> Failure {
     (
         StatusCode::SERVICE_UNAVAILABLE,
@@ -141,6 +147,7 @@ pub fn router() -> Router<AppState> {
         .route("/devices/join_requests/:id/manifest", get(join_manifest))
         .route("/devices/grants", post(grant))
         .route("/devices/revoke", post(revoke))
+        .route("/devices/events/cancel", post(cancel_event))
         .route("/users/:user_id/device_manifest", get(manifest))
         .layer(DefaultBodyLimit::max(MAX_DEVICE_EVENT_BYTES))
 }
@@ -757,9 +764,25 @@ async fn submit(
     let (directory, events) = directory(&mut tx, &user, origin(&state)?).await?;
     root_session(&mut tx, &headers, &directory, &input.device_id).await?;
     let event = &input.event;
+    let cancelled: Option<Vec<u8>> = sqlx::query_scalar(
+        "SELECT digest FROM device_event_cancellations WHERE user_id=$1 AND event_id=$2",
+    )
+    .bind(&user)
+    .bind(&event.id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(unavailable)?;
+    if let Some(hash) = cancelled {
+        return Err(if hash == event.hash() {
+            gone()
+        } else {
+            conflict()
+        });
+    }
     let next = directory.apply_live(event, now()).map_err(device_error)?;
     let duplicate = events.iter().any(|old| old.id == event.id);
     if !duplicate {
+        event_capacity(&mut tx, &user).await?;
         match &event.action {
             DeviceAction::Grant {
                 intent,
@@ -819,6 +842,98 @@ async fn submit(
     };
     tx.commit().await.map_err(unavailable)?;
     Ok(Json(receipt))
+}
+async fn event_capacity(tx: &mut Tx<'_>, user: &str) -> Result<(), Failure> {
+    let count: i64 = sqlx::query_scalar(
+        "SELECT (SELECT COUNT(*) FROM device_authorization_events WHERE user_id=$1)
+        +(SELECT COUNT(*) FROM device_event_cancellations WHERE user_id=$1)",
+    )
+    .bind(user)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(unavailable)?;
+    if count >= MAX_DEVICE_EVENTS as i64 {
+        return Err(conflict());
+    }
+    Ok(())
+}
+async fn cancel_event(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<DeviceEventSubmission>,
+) -> Result<Json<DeviceCancelResult>, Failure> {
+    let user = admit(&state, &headers).await?;
+    encode(&input.event)?;
+    let mut tx = state.db.pool().begin().await.map_err(unavailable)?;
+    lock(&mut tx, &user).await?;
+    let (directory, events) = directory(&mut tx, &user, origin(&state)?).await?;
+    root_session(&mut tx, &headers, &directory, &input.device_id).await?;
+    let event = &input.event;
+    if event.version != 1
+        || event.anchor_hash != directory.anchor().hash()
+        || !liteseal_shared::crypto::verify_with_public_key(
+            &event.signing_bytes(),
+            &event.signature,
+            &directory.anchor().root.signing_key,
+        )
+        .unwrap_or(false)
+    {
+        return Err((StatusCode::FORBIDDEN, "取消记录未绑定原根签名".into()));
+    }
+    let result = if let Some(accepted) = events.iter().find(|old| old.id == event.id) {
+        if accepted.hash() != event.hash() {
+            return Err(conflict());
+        }
+        DeviceCancelResult {
+            cancelled: false,
+            receipt: Some(DeviceReceipt {
+                event_id: event.id.clone(),
+                event_hash: event.hash(),
+                accepted_revision: event.revision,
+                current_revision: directory.revision(),
+                current_hash: directory.head().to_vec(),
+                messaging_enabled: false,
+            }),
+        }
+    } else {
+        // Cancellation may concern a stale or expired original task, but it
+        // must still be a valid signed transition from a known historical head.
+        let mut prior = DeviceState::pin(directory.anchor().clone()).map_err(|_| corrupt())?;
+        for accepted in events.iter().filter(|old| old.revision < event.revision) {
+            prior = prior.apply(accepted).map_err(|_| corrupt())?;
+        }
+        prior.apply(event).map_err(device_error)?;
+        let old: Option<Vec<u8>> = sqlx::query_scalar(
+            "SELECT digest FROM device_event_cancellations WHERE user_id=$1 AND event_id=$2",
+        )
+        .bind(&user)
+        .bind(&event.id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(unavailable)?;
+        if let Some(old) = old {
+            if old != event.hash() {
+                return Err(conflict());
+            }
+        } else {
+            event_capacity(&mut tx, &user).await?;
+            sqlx::query(
+                "INSERT INTO device_event_cancellations(user_id,event_id,digest) VALUES($1,$2,$3)",
+            )
+            .bind(&user)
+            .bind(&event.id)
+            .bind(event.hash())
+            .execute(&mut *tx)
+            .await
+            .map_err(unavailable)?;
+        }
+        DeviceCancelResult {
+            cancelled: true,
+            receipt: None,
+        }
+    };
+    tx.commit().await.map_err(unavailable)?;
+    Ok(Json(result))
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -348,6 +348,21 @@ fn portable_round_trip_preserves_history_and_excludes_jobs_other_scopes_and_cred
     groups.save_draft("group", "群草稿 🦭", &keys).unwrap();
     drop(groups);
     let conn = Connection::open(&db).unwrap();
+    // Even a task encrypted by the exported identity must not accompany an offline archive.
+    let task_keys = backup::identity_keys(&identity).unwrap();
+    let task_owner = liteseal_core::trusted_devices::tasks::TaskOwner::for_join(
+        &identity.server_url,
+        "alice",
+        &uuid::Uuid::new_v4().to_string(),
+        &task_keys,
+    )
+    .unwrap();
+    let mut device_jobs =
+        liteseal_core::trusted_devices::tasks::DeviceTaskStore::open(&db, task_owner, &task_keys)
+            .unwrap();
+    device_jobs
+        .prepare_join("pending-device", &task_keys)
+        .unwrap();
     conn.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE secret_session(token TEXT); INSERT INTO secret_session VALUES('must-never-be-exported'); INSERT INTO locally_deleted_messages VALUES('alice','msg-0'); INSERT INTO scheduled_messages VALUES('alice','alice-device','task','bob',123,X'00','scheduled',''); INSERT INTO typing_preferences VALUES('alice',1); INSERT INTO typing_preferences VALUES('mallory',1);").unwrap();
     let output = dir.0.join("test.lseal");
     let cancel = AtomicBool::new(false);
@@ -383,6 +398,16 @@ fn portable_round_trip_preserves_history_and_excludes_jobs_other_scopes_and_cred
             .unwrap();
     assert_eq!(stored.ed25519_pk, identity.ed25519_pk);
     let archived = Connection::open(restored.directory.0.join("history.db")).unwrap();
+    assert_eq!(
+        archived
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_schema WHERE name='device_control_tasks'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
     for table in [
         "scheduled_messages",
         "local_group_outbox",

@@ -8,10 +8,14 @@ struct Fixture {
     url: String,
     client: reqwest::Client,
     task: tokio::task::JoinHandle<()>,
+    proxy_task: Option<tokio::task::JoinHandle<()>>,
 }
 impl Drop for Fixture {
     fn drop(&mut self) {
         self.task.abort();
+        if let Some(task) = &self.proxy_task {
+            task.abort();
+        }
     }
 }
 struct Account {
@@ -57,6 +61,7 @@ impl Fixture {
             url,
             client,
             task,
+            proxy_task: None,
         }
     }
     async fn account(&self) -> Account {
@@ -914,4 +919,433 @@ async fn rust_control_client_verifies_repeated_join_after_revocation_and_restart
             .status,
         Some(401)
     );
+}
+
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn signed_event_cancellation_serializes_late_grant_revoke_and_quota() {
+    use liteseal_core::trusted_devices::api::DeviceControlApi;
+    let f = Fixture::start(true).await;
+    let root = f.account().await;
+    let api = DeviceControlApi::new(&f.url).unwrap();
+    let join = f.join(&root).await;
+    let initial = DeviceState::pin(join.status.ticket.anchor.clone()).unwrap();
+    let event = f.prove(&root, &join, &initial).await;
+    let (cancel, send) = tokio::join!(
+        api.cancel_event(&root.token, &root.device, &event),
+        api.submit(&root.token, &root.device, &event)
+    );
+    let cancel = cancel.unwrap();
+    if cancel.cancelled {
+        assert_eq!(send.unwrap_err().status, Some(410));
+        assert_eq!(
+            api.submit(&root.token, &root.device, &event)
+                .await
+                .unwrap_err()
+                .status,
+            Some(410)
+        );
+        assert!(
+            api.cancel_event(&root.token, &root.device, &event)
+                .await
+                .unwrap()
+                .cancelled
+        );
+        let mut changed = event.clone();
+        changed.created_at -= 1;
+        changed.signature = crypto::sign(&changed.signing_bytes(), &root.keys.ed25519_sk).unwrap();
+        assert_eq!(
+            api.cancel_event(&root.token, &root.device, &changed)
+                .await
+                .unwrap_err()
+                .status,
+            Some(409)
+        );
+        assert_eq!(
+            api.submit(&root.token, &root.device, &changed)
+                .await
+                .unwrap_err()
+                .status,
+            Some(409)
+        );
+        // An explicit new authorization uses a different ID; it cannot reuse the cancelled one.
+        let DeviceAction::Grant {
+            intent,
+            challenge,
+            proof,
+        } = event.action.clone()
+        else {
+            panic!()
+        };
+        let replacement = make_event(
+            &initial,
+            uuid::Uuid::new_v4().to_string(),
+            DeviceAction::Grant {
+                intent,
+                challenge,
+                proof,
+            },
+            now(),
+            &root.keys,
+        )
+        .unwrap();
+        api.submit(&root.token, &root.device, &replacement)
+            .await
+            .unwrap();
+    } else {
+        send.unwrap();
+        assert_eq!(cancel.receipt.unwrap().event_hash, event.hash());
+    }
+    let page = api.manifest(&root.token, &root.id, 0).await.unwrap();
+    let accepted = &page.events[0];
+    let joined = initial.apply(accepted).unwrap();
+    let revoke = make_event(
+        &joined,
+        uuid::Uuid::new_v4().to_string(),
+        DeviceAction::Revoke {
+            device_id: join.status.ticket.device.device_id,
+            grant_hash: accepted.hash(),
+        },
+        now(),
+        &root.keys,
+    )
+    .unwrap();
+    assert!(
+        api.cancel_event(&root.token, &root.device, &revoke)
+            .await
+            .unwrap()
+            .cancelled
+    );
+    assert_eq!(
+        api.submit(&root.token, &root.device, &revoke)
+            .await
+            .unwrap_err()
+            .status,
+        Some(410)
+    );
+    let peer = f.account().await;
+    assert_eq!(
+        api.cancel_event(&peer.token, &root.device, &revoke)
+            .await
+            .unwrap_err()
+            .status,
+        Some(403)
+    );
+    let mut forged = revoke.clone();
+    forged.signature[0] ^= 1;
+    assert_eq!(
+        api.cancel_event(&root.token, &root.device, &forged)
+            .await
+            .unwrap_err()
+            .status,
+        Some(403)
+    );
+    // Quota fixtures contain only cancellation routing digests, no message ciphertext.
+    let current:i64=sqlx::query_scalar("SELECT (SELECT COUNT(*) FROM device_authorization_events WHERE user_id=$1)+(SELECT COUNT(*) FROM device_event_cancellations WHERE user_id=$1)")
+        .bind(&root.id).fetch_one(f.db.pool()).await.unwrap();
+    sqlx::query("INSERT INTO device_event_cancellations(user_id,event_id,digest) SELECT $1,'quota-'||n,decode(repeat('01',32),'hex') FROM generate_series(1,$2::integer) n")
+        .bind(&root.id).bind((MAX_DEVICE_EVENTS as i64-current) as i32).execute(f.db.pool()).await.unwrap();
+    assert!(
+        api.cancel_event(&root.token, &root.device, &revoke)
+            .await
+            .unwrap()
+            .cancelled
+    );
+    assert!(
+        !api.cancel_event(&root.token, &root.device, accepted)
+            .await
+            .unwrap()
+            .cancelled
+    );
+    let extra = make_event(
+        &joined,
+        uuid::Uuid::new_v4().to_string(),
+        revoke.action.clone(),
+        now(),
+        &root.keys,
+    )
+    .unwrap();
+    assert_eq!(
+        api.cancel_event(&root.token, &root.device, &extra)
+            .await
+            .unwrap_err()
+            .status,
+        Some(409)
+    );
+    assert_eq!(
+        api.submit(&root.token, &root.device, &extra)
+            .await
+            .unwrap_err()
+            .status,
+        Some(409)
+    );
+}
+
+#[derive(Clone)]
+struct LossProxy {
+    upstream: String,
+    client: reqwest::Client,
+    lose: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+}
+async fn proxy_control_request(
+    axum::extract::State(proxy): axum::extract::State<LossProxy>,
+    request: axum::http::Request<axum::body::Body>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let path = request.uri().to_string();
+    let method = request.method().clone();
+    let authorization = request.headers().get("authorization").cloned();
+    let body = axum::body::to_bytes(request.into_body(), MAX_DEVICE_EVENT_BYTES)
+        .await
+        .unwrap();
+    let mut outgoing = proxy
+        .client
+        .request(method.clone(), format!("{}{path}", proxy.upstream))
+        .header("content-type", "application/json")
+        .body(body);
+    if let Some(header) = authorization {
+        outgoing = outgoing.header("authorization", header);
+    }
+    let response = outgoing.send().await.unwrap();
+    let status = response.status();
+    let bytes = response.bytes().await.unwrap();
+    let lose = {
+        let mut expected = proxy.lose.lock().unwrap();
+        if status.is_success()
+            && method == reqwest::Method::POST
+            && expected.as_deref() == Some(&path)
+        {
+            expected.take();
+            true
+        } else {
+            false
+        }
+    };
+    if lose {
+        (StatusCode::SERVICE_UNAVAILABLE, "").into_response()
+    } else {
+        (status, [("content-type", "application/json")], bytes).into_response()
+    }
+}
+impl Fixture {
+    async fn start_with_loss() -> (Self, std::sync::Arc<std::sync::Mutex<Option<String>>>) {
+        let database = std::env::var("LITESEAL_TEST_DATABASE_URL").unwrap();
+        let db = Db::connect(&database).await.unwrap();
+        let front = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let back = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", front.local_addr().unwrap());
+        let upstream = format!("http://{}", back.local_addr().unwrap());
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(std::time::Duration::from_secs(20))
+            .build()
+            .unwrap();
+        let mut state = AppState::new(db.clone());
+        state.device_authorization_origin = Some(url.clone());
+        let app = build_router(state, HeaderValue::from_static("http://localhost:1420"));
+        let task = tokio::spawn(async move {
+            axum::serve(
+                back,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+        let lose = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let proxy = axum::Router::new()
+            .fallback(proxy_control_request)
+            .with_state(LossProxy {
+                upstream,
+                client: client.clone(),
+                lose: lose.clone(),
+            });
+        let proxy_task = tokio::spawn(async move {
+            axum::serve(front, proxy.into_make_service()).await.unwrap();
+        });
+        (
+            Self {
+                db,
+                url,
+                client,
+                task,
+                proxy_task: Some(proxy_task),
+            },
+            lose,
+        )
+    }
+}
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn encrypted_control_jobs_reopen_after_lost_acceptance_and_ignore_locked_callbacks() {
+    use liteseal_core::trusted_devices::{api::DeviceControlApi, tasks::*, Checkpoint};
+    let (f, lose) = Fixture::start_with_loss().await;
+    let root = f.account().await;
+    let keys = crypto::generate_keypair().unwrap();
+    let path =
+        std::env::temp_dir().join(format!("liteseal-control-jobs-{}.db", uuid::Uuid::new_v4()));
+    let root_path =
+        std::env::temp_dir().join(format!("liteseal-root-jobs-{}.db", uuid::Uuid::new_v4()));
+    let local_device = uuid::Uuid::new_v4().to_string();
+    let owner = TaskOwner::for_join(&f.url, &root.username, &local_device, &keys).unwrap();
+    let api = DeviceControlApi::new(&f.url).unwrap();
+    let mut joining = DeviceTaskStore::open(&path, owner.clone(), &keys).unwrap();
+    let draft = joining.prepare_join("new Windows", &keys).unwrap();
+    let id = draft.view().id;
+    let credential = draft.join_credential().unwrap().to_string();
+    *lose.lock().unwrap() = Some("/devices/join_requests".into());
+    assert_eq!(
+        api.begin(&draft.start_request(&root.password).unwrap())
+            .await
+            .unwrap_err()
+            .status,
+        Some(503)
+    );
+    drop(joining);
+    let mut joining = DeviceTaskStore::open(&path, owner.clone(), &keys).unwrap();
+    let draft = joining.get(&id, &keys).unwrap();
+    assert_eq!(draft.join_credential().unwrap(), credential);
+    let ticket = api.status(&credential, &id, None).await.unwrap();
+    let draft = joining.accept_ticket(&draft, &ticket, &keys).unwrap();
+    let anchor = Anchor {
+        origin: f.url.clone(),
+        account: root.id.clone(),
+        root: DeviceIdentity::from_keys(root.device.clone(), &root.keys),
+    };
+    let job = joining
+        .confirm_root(&draft, &anchor, &anchor_fingerprint(&anchor), &keys)
+        .unwrap();
+    let intent = job.intent().unwrap().clone();
+    *lose.lock().unwrap() = Some(format!("/devices/join_requests/{id}/intent"));
+    assert_eq!(
+        api.intent(&credential, &intent).await.unwrap_err().status,
+        Some(503)
+    );
+    drop(joining);
+    let mut joining = DeviceTaskStore::open(&path, owner, &keys).unwrap();
+    let job = joining.get(&id, &keys).unwrap();
+    assert_eq!(job.intent().unwrap(), &intent);
+    let remote = api.status(&credential, &id, None).await.unwrap();
+    assert_eq!(remote.intent.as_ref(), Some(&intent));
+    let root_owner = TaskOwner::for_root(&anchor, &root.keys).unwrap();
+    let mut authority = DeviceTaskStore::open(&root_path, root_owner.clone(), &root.keys).unwrap();
+    let initial = authority.trust().pin(&anchor).unwrap();
+    let challenge = authority
+        .prepare_challenge(&initial, &intent, now(), &root.keys)
+        .unwrap();
+    let challenge_id = challenge.view().id;
+    let signed_challenge = challenge.challenge().unwrap().clone();
+    *lose.lock().unwrap() = Some(format!("/devices/join_requests/{id}/challenge"));
+    assert_eq!(
+        api.challenge(&root.token, &id, &root.device, &signed_challenge)
+            .await
+            .unwrap_err()
+            .status,
+        Some(503)
+    );
+    drop(authority);
+    let mut authority = DeviceTaskStore::open(&root_path, root_owner.clone(), &root.keys).unwrap();
+    let challenge = authority.get(&challenge_id, &root.keys).unwrap();
+    assert_eq!(challenge.challenge().unwrap(), &signed_challenge);
+    let remote = api
+        .status(&root.token, &id, Some(&root.device))
+        .await
+        .unwrap();
+    authority
+        .confirm_challenge(&challenge, &remote, &root.keys)
+        .unwrap();
+    let proof_job = joining
+        .seal_proof(&job, &initial, &signed_challenge, now(), &keys)
+        .unwrap();
+    let proof = proof_job.proof().unwrap().clone();
+    *lose.lock().unwrap() = Some(format!("/devices/join_requests/{id}/proof"));
+    assert_eq!(
+        api.proof(&credential, &id, &proof)
+            .await
+            .unwrap_err()
+            .status,
+        Some(503)
+    );
+    let remote = api
+        .status(&root.token, &id, Some(&root.device))
+        .await
+        .unwrap();
+    assert_eq!(remote.proof.as_ref(), Some(&proof));
+    let grant = authority
+        .prepare_grant(&initial, &remote, now(), &root.keys)
+        .unwrap();
+    let grant_id = grant.view().id;
+    let event = grant.event().unwrap().clone();
+    *lose.lock().unwrap() = Some("/devices/grants".into());
+    assert_eq!(
+        api.submit(&root.token, &root.device, &event)
+            .await
+            .unwrap_err()
+            .status,
+        Some(503)
+    );
+    drop(authority);
+    let mut authority = DeviceTaskStore::open(&root_path, root_owner, &root.keys).unwrap();
+    let grant = authority.get(&grant_id, &root.keys).unwrap();
+    assert_eq!(grant.event().unwrap(), &event);
+    let gate = TaskGate::new().unwrap();
+    let lease = gate.lease().unwrap();
+    let page = api.manifest(&root.token, &root.id, 0).await.unwrap();
+    gate.invalidate().unwrap();
+    assert!(gate
+        .with_current(&lease, || authority.trust().import_page(
+            &anchor,
+            &Checkpoint::from_state(&initial),
+            &page
+        ))
+        .is_err());
+    assert_eq!(
+        authority.get(&grant_id, &root.keys).unwrap().view().phase,
+        TaskPhase::Prepared
+    );
+    gate.unlock().unwrap();
+    let lease = gate.lease().unwrap();
+    let joined = gate
+        .with_current(&lease, || {
+            authority
+                .trust()
+                .import_page(&anchor, &Checkpoint::from_state(&initial), &page)
+        })
+        .unwrap();
+    authority
+        .confirm_event_accepted(&grant, &root.keys)
+        .unwrap(); // Only the verified page confirms success.
+    let join_job = joining.get(&id, &keys).unwrap();
+    let own_page = api.join_manifest(&credential, &id, 0).await.unwrap();
+    joining
+        .trust()
+        .import_page(&anchor, &Checkpoint::from_state(&initial), &own_page)
+        .unwrap();
+    let complete = joining
+        .confirm_join_authorized(&join_job, &event.id, &keys)
+        .unwrap();
+    assert_eq!(complete.view().phase, TaskPhase::Complete);
+    assert!(complete.join_credential().is_err());
+    let revoke = authority
+        .prepare_revoke(&joined, now(), &root.keys)
+        .unwrap();
+    let event = revoke.event().unwrap().clone();
+    let cancellation = authority.request_cancel(&revoke, &root.keys).unwrap();
+    let result = api
+        .cancel_event(&root.token, &root.device, &event)
+        .await
+        .unwrap();
+    authority
+        .confirm_event_cancel(&cancellation, &result, &root.keys)
+        .unwrap();
+    assert_eq!(
+        api.submit(&root.token, &root.device, &event)
+            .await
+            .unwrap_err()
+            .status,
+        Some(410)
+    );
+    drop(authority);
+    drop(joining);
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(root_path);
 }

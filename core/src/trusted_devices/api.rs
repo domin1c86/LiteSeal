@@ -287,6 +287,35 @@ impl DeviceControlApi {
         self.manifest_request(token, &format!("/users/{account}/device_manifest"), after)
             .await
     }
+    pub async fn cancel_event(
+        &self,
+        token: &str,
+        root_device: &str,
+        event: &DeviceEvent,
+    ) -> Result<DeviceCancelResult, ControlError> {
+        id(root_device)?;
+        let result: DeviceCancelResult = self
+            .send(self.body(
+                self.request(Method::POST, "/devices/events/cancel", token)?,
+                &DeviceEventSubmission {
+                    device_id: root_device.into(),
+                    event: event.clone(),
+                },
+            )?)
+            .await?;
+        match (&result.receipt, result.cancelled) {
+            (None, true) => {}
+            (Some(receipt), false)
+                if receipt.event_id == event.id
+                    && receipt.event_hash == event.hash()
+                    && receipt.accepted_revision == event.revision
+                    && receipt.current_revision >= event.revision
+                    && receipt.current_revision <= MAX_DEVICE_EVENTS
+                    && receipt.current_hash.len() == 32 => {}
+            _ => return Err(invalid()),
+        }
+        Ok(result)
+    }
     /// Join-only access to this applicant's own account authorization evidence.
     /// It cannot retrieve message history or another account's directory.
     pub async fn join_manifest(
