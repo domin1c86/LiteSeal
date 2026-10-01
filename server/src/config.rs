@@ -4,6 +4,7 @@ pub struct ServerConfig {
     pub bind_addr: String,
     pub cors_allow_origin: String,
     pub invite_codes: Vec<String>,
+    pub device_authorization_origin: Option<String>,
 }
 
 impl ServerConfig {
@@ -18,11 +19,24 @@ impl ServerConfig {
         if cors_allow_origin == "*" {
             return Err("Wildcard CORS origins are forbidden".to_string());
         }
+        let device_authorization_origin = std::env::var("LITESEAL_DEVICE_AUTHORIZATION_ORIGIN")
+            .ok()
+            .filter(|value| !value.is_empty())
+            .map(|value| -> Result<String, String> {
+                let canonical = liteseal_shared::trusted_device::canonical_origin(&value)
+                    .map_err(|_| "invalid LITESEAL_DEVICE_AUTHORIZATION_ORIGIN".to_string())?;
+                if canonical != value {
+                    return Err("device authorization origin must be canonical".into());
+                }
+                Ok(canonical)
+            })
+            .transpose()?;
         Ok(Self {
             database_url,
             bind_addr: std::env::var("LITESEAL_BIND")
                 .unwrap_or_else(|_| "0.0.0.0:3000".to_string()),
             cors_allow_origin,
+            device_authorization_origin,
             // Reusable, comma-separated codes; none configured closes registration.
             invite_codes: std::env::var("LITESEAL_INVITE_CODES")
                 .unwrap_or_default()

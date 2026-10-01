@@ -1,4 +1,4 @@
-param([switch]$GroupsOnly, [switch]$SoakSmoke, [switch]$StartSoak, [switch]$ExtensionsOnly)
+param([switch]$GroupsOnly, [switch]$SoakSmoke, [switch]$StartSoak, [switch]$ExtensionsOnly, [switch]$DatabaseOnly)
 $ErrorActionPreference = 'Stop'
 Set-Location (Split-Path -Parent $PSScriptRoot)
 $validationSuffix = [guid]::NewGuid().ToString('N')
@@ -23,6 +23,9 @@ try {
         [PSCustomObject]@{ Status='started'; ProcessId=$validationProcess.Id; Mode='24h'; Database=$validationDatabase; Stdout=$validationStdout } | ConvertTo-Json
     } elseif ($SoakSmoke) {
         node scripts/test-group-soak.mjs --smoke
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    } elseif ($DatabaseOnly) {
+        node scripts/test-database.mjs
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     } else {
         if (!$GroupsOnly) { node scripts/test-database.mjs; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }

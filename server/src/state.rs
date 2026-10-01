@@ -28,6 +28,8 @@ pub struct AppState {
     next_generation: Arc<AtomicU64>,
     pub db: Db,
     pub invite_codes: Arc<Vec<String>>,
+    /// Explicit opt-in for the T23 authorization control plane, not normal login.
+    pub device_authorization_origin: Option<String>,
 }
 
 impl AppState {
@@ -37,6 +39,7 @@ impl AppState {
             next_generation: Arc::new(AtomicU64::new(1)),
             db,
             invite_codes: Arc::new(Vec::new()),
+            device_authorization_origin: None,
         }
     }
 

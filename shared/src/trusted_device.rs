@@ -8,6 +8,8 @@ use thiserror::Error;
 
 pub const JOIN_LIFETIME_MS: i64 = 10 * 60 * 1000;
 pub const MAX_DEVICE_EVENTS: u64 = 4096;
+pub const MAX_DEVICE_EVENT_BYTES: usize = 16 * 1024;
+pub const MAX_DEVICE_PAGE_BYTES: usize = 512 * 1024;
 const MAX_TIME: i64 = 8_640_000_000_000_000;
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -515,4 +517,110 @@ pub fn make_event(
     event.signature = sign(&event.signing_bytes(), root)?;
     state.apply_live(&event, at)?;
     Ok(event)
+}
+
+/// A retryable, join-only credential. Never log this request or accept its token
+/// as a normal account session. The requester generates 32 random token bytes.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct JoinStartRequest {
+    pub request_id: String,
+    pub request_token: String,
+    pub username: String,
+    pub password: String,
+    pub device_name: String,
+    pub encryption_key: [u8; 32],
+    pub signing_key: [u8; 32],
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct JoinTicket {
+    pub id: String,
+    pub anchor: Anchor,
+    pub device: DeviceIdentity,
+    pub device_name: String,
+    pub server_challenge: Vec<u8>,
+    pub issued_at: i64,
+    pub expires_at: i64,
+}
+impl JoinTicket {
+    pub fn sign_intent(&self, keys: &KeyPair) -> Result<JoinIntent> {
+        if DeviceIdentity::from_keys(self.device.device_id.clone(), keys) != self.device {
+            return Err(DeviceError::Proof);
+        }
+        let mut intent = JoinIntent {
+            id: self.id.clone(),
+            anchor_hash: self.anchor.hash(),
+            device: self.device.clone(),
+            server_challenge: self.server_challenge.clone(),
+            issued_at: self.issued_at,
+            expires_at: self.expires_at,
+            signature: vec![],
+        };
+        intent.signature = sign(&intent.signing_bytes(), keys)?;
+        intent.verify(&self.anchor, self.issued_at)?;
+        Ok(intent)
+    }
+    pub fn matches(&self, intent: &JoinIntent) -> bool {
+        self.id == intent.id
+            && self.anchor.hash() == intent.anchor_hash
+            && self.device == intent.device
+            && self.server_challenge == intent.server_challenge
+            && self.issued_at == intent.issued_at
+            && self.expires_at == intent.expires_at
+    }
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum JoinPhase {
+    Begun,
+    Ready,
+    Challenged,
+    Proved,
+    Authorized,
+    Cancelled,
+    Revoked,
+    Expired,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct JoinStatus {
+    pub ticket: JoinTicket,
+    pub phase: JoinPhase,
+    pub intent: Option<JoinIntent>,
+    pub challenge: Option<Challenge>,
+    pub proof: Option<DeviceProof>,
+    pub authorization_id: Option<String>,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChallengeSubmission {
+    pub device_id: String,
+    pub challenge: Challenge,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeviceEventSubmission {
+    pub device_id: String,
+    pub event: DeviceEvent,
+}
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeviceReceipt {
+    pub event_id: String,
+    pub event_hash: Vec<u8>,
+    pub accepted_revision: u64,
+    pub current_revision: u64,
+    pub current_hash: Vec<u8>,
+    pub messaging_enabled: bool,
+}
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeviceManifestPage {
+    pub anchor: Anchor,
+    pub events: Vec<DeviceEvent>,
+    pub through_revision: u64,
+    pub current_revision: u64,
+    pub current_hash: Vec<u8>,
+    pub more: bool,
 }

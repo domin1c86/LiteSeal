@@ -410,7 +410,7 @@ pub(crate) async fn user_from_bearer(
         .ok_or(StatusCode::UNAUTHORIZED)
 }
 
-async fn enforce_auth_rate_limit(
+pub(crate) async fn enforce_auth_rate_limit(
     state: &AppState,
     username: &str,
     remote_ip: std::net::IpAddr,

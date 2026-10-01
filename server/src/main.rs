@@ -18,6 +18,9 @@ mod relay;
 mod relay_tests;
 mod state;
 mod test_database;
+#[cfg(test)]
+mod trusted_device_tests;
+mod trusted_devices;
 
 use axum::{
     extract::State,
@@ -54,6 +57,7 @@ async fn main() {
         }
     });
     state.invite_codes = std::sync::Arc::new(config.invite_codes);
+    state.device_authorization_origin = config.device_authorization_origin;
     let allowed_origin = HeaderValue::from_str(&config.cors_allow_origin)
         .expect("LITESEAL_CORS_ALLOW_ORIGIN is not a valid origin");
     let app = build_router(state, allowed_origin);
@@ -80,6 +84,7 @@ fn build_router(state: AppState, allowed_origin: HeaderValue) -> Router {
 
     Router::new()
         .merge(groups::router())
+        .merge(trusted_devices::router())
         .route("/reactions", get(reactions::list).post(reactions::submit))
         .route(
             "/read-receipts",
