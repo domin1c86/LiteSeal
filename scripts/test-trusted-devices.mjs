@@ -16,6 +16,11 @@ try {
   const counts = /test result: ok\. (\d+) passed; 0 failed; 0 ignored/.exec(tests.output);
   report.steps.push({ name: 'signed chain and dual key possession', passed: Number(counts?.[1] ?? 0), command: ['cargo', ...args], status: tests.code === 0 && counts ? 'passed' : 'failed' });
   if (tests.code || !counts) throw new Error('protocol tests failed');
+  const storeArgs = ['test', '--locked', '-p', 'liteseal-core', '--test', 'trusted_devices_test'];
+  const store = execute('cargo', storeArgs);
+  const storedCounts = /test result: ok\. (\d+) passed; 0 failed; 0 ignored/.exec(store.output);
+  report.steps.push({ name: 'atomic SQLite trust log and restart replay', passed: Number(storedCounts?.[1] ?? 0), command: ['cargo', ...storeArgs], status: store.code === 0 && storedCounts ? 'passed' : 'failed' });
+  if (store.code || !storedCounts) throw new Error('directory persistence tests failed');
   const trial = execute('cargo', ['run', '--quiet', '--locked', '-p', 'liteseal-shared', '--example', 'trusted_device_trial']);
   const line = trial.output.split(/\r?\n/).find(line => line.startsWith('{'));
   const result = line ? JSON.parse(line) : null;

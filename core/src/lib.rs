@@ -18,6 +18,7 @@ pub mod integrity;
 pub mod keystore;
 pub mod network;
 pub mod secret_store;
+pub mod trusted_devices;
 
 pub use client::LitesealClient;
 
