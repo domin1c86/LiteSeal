@@ -17,6 +17,8 @@ pub struct AppState {
     pub(crate) device_join_runtime: Mutex<commands::device_join::Runtime>,
     pub(crate) backup_runtime: std::sync::Arc<Mutex<commands::backup::Runtime>>,
     pub(crate) backup_commit: std::sync::Arc<Mutex<()>>,
+    // Last field: isolated test cleanup runs after cached SQLite task handles drop.
+    device_protection: liteseal_core::trusted_devices::witness::platform::Protection,
 }
 
 impl AppState {
@@ -26,6 +28,18 @@ impl AppState {
 
     /// `keystore_path` replaces the per-user keystore, for example in tests.
     pub fn with_keystore(db_path: &str, keystore_path: Option<PathBuf>) -> Result<Self, String> {
+        Self::with_device_protection(db_path, keystore_path, Default::default())
+    }
+    /// Rust test harnesses share one explicit isolated native namespace across
+    /// reopenings. No renderer command accepts this configuration.
+    pub fn with_device_protection(
+        db_path: &str,
+        keystore_path: Option<PathBuf>,
+        device_protection: liteseal_core::trusted_devices::witness::platform::Protection,
+    ) -> Result<Self, String> {
+        if device_protection.is_isolated() && (keystore_path.is_none() || db_path == ":memory:") {
+            return Err("隔离设备测试需要明确的数据库文件和密钥文件路径".into());
+        }
         Ok(Self {
             db_path: PathBuf::from(db_path),
             client: liteseal_core::LitesealClient::new(db_path)?,
@@ -39,6 +53,7 @@ impl AppState {
             device_join_runtime: Default::default(),
             backup_runtime: Default::default(),
             backup_commit: Default::default(),
+            device_protection,
         })
     }
 
@@ -153,5 +168,36 @@ impl AppState {
             .parent()
             .ok_or("加入档案目录不可用")?
             .join("join-profiles"))
+    }
+    pub(crate) fn device_witness(
+        &self,
+        database: &std::path::Path,
+    ) -> Result<liteseal_core::trusted_devices::witness::Witness, String> {
+        self.device_protection.witness(database)
+    }
+    pub(crate) fn device_join_store(
+        &self,
+    ) -> Result<liteseal_core::trusted_devices::profiles::JoinProfileStore, String> {
+        Ok(
+            liteseal_core::trusted_devices::profiles::JoinProfileStore::with_protection(
+                self.device_join_directory()?,
+                self.device_protection.clone(),
+            ),
+        )
+    }
+}
+
+#[cfg(test)]
+mod device_protection_tests {
+    #[test]
+    fn ordinary_constructors_select_persistent_production_protection() {
+        let state = super::AppState::new(":memory:").unwrap();
+        assert!(!state.device_protection.is_isolated());
+        let state = super::AppState::with_keystore(
+            ":memory:",
+            Some(std::path::PathBuf::from("unused-test-keyfile")),
+        )
+        .unwrap();
+        assert!(!state.device_protection.is_isolated());
     }
 }

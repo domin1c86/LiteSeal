@@ -350,14 +350,18 @@ async fn both_desktop_join_profiles_recover_lost_responses_without_activating_or
     let root = f.account().await;
     let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
     let original_dir = work.0.join("original");
+    let protection = liteseal_core::trusted_devices::witness::platform::Protection::isolated_test();
     let joining_dir = work.0.join("joining");
     std::fs::create_dir(&original_dir).unwrap();
     std::fs::create_dir(&joining_dir).unwrap();
     let original_path = original_dir.join("normal.bin");
     let original_db = original_dir.join("normal.db");
-    let original =
-        DesktopState::with_keystore(original_db.to_str().unwrap(), Some(original_path.clone()))
-            .unwrap();
+    let original = DesktopState::with_device_protection(
+        original_db.to_str().unwrap(),
+        Some(original_path.clone()),
+        protection.clone(),
+    )
+    .unwrap();
     original
         .save_identity(liteseal_core::keystore::KeystoreData {
             user_id: root.id.clone(),
@@ -374,9 +378,12 @@ async fn both_desktop_join_profiles_recover_lost_responses_without_activating_or
     let original_bytes = std::fs::read(&original_path).unwrap();
     let joining_path = joining_dir.join("normal.bin");
     let joining_db = joining_dir.join("normal.db");
-    let joining =
-        DesktopState::with_keystore(joining_db.to_str().unwrap(), Some(joining_path.clone()))
-            .unwrap();
+    let joining = DesktopState::with_device_protection(
+        joining_db.to_str().unwrap(),
+        Some(joining_path.clone()),
+        protection.clone(),
+    )
+    .unwrap();
     let created=call(&joining,"create_device_join_profile",serde_json::json!({"origin":f.url,"username":root.username,"deviceName":"new Windows 中文 🦭"})).await.unwrap();
     let id = created["profile"]["id"].as_str().unwrap();
     let request = created["join"]["task"]["id"].as_str().unwrap();
@@ -392,9 +399,12 @@ async fn both_desktop_join_profiles_recover_lost_responses_without_activating_or
         "retry"
     );
     drop(joining);
-    let joining =
-        DesktopState::with_keystore(joining_db.to_str().unwrap(), Some(joining_path.clone()))
-            .unwrap();
+    let joining = DesktopState::with_device_protection(
+        joining_db.to_str().unwrap(),
+        Some(joining_path.clone()),
+        protection.clone(),
+    )
+    .unwrap();
     assert_eq!(
         call(
             &joining,
@@ -522,12 +532,18 @@ async fn both_desktop_join_profiles_recover_lost_responses_without_activating_or
     );
     drop(original);
     drop(joining);
-    let original =
-        DesktopState::with_keystore(original_db.to_str().unwrap(), Some(original_path.clone()))
-            .unwrap();
-    let joining =
-        DesktopState::with_keystore(joining_db.to_str().unwrap(), Some(joining_path.clone()))
-            .unwrap();
+    let original = DesktopState::with_device_protection(
+        original_db.to_str().unwrap(),
+        Some(original_path.clone()),
+        protection.clone(),
+    )
+    .unwrap();
+    let joining = DesktopState::with_device_protection(
+        joining_db.to_str().unwrap(),
+        Some(joining_path.clone()),
+        protection.clone(),
+    )
+    .unwrap();
     call(
         &original,
         "device_task_step",
@@ -2035,8 +2051,14 @@ async fn desktop_original_device_commands_confirm_grant_retry_revoke_and_disable
     f.ready(&join).await;
     let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
     let db = work.0.join("original.db");
+    let protection = liteseal_core::trusted_devices::witness::platform::Protection::isolated_test();
     let keyfile = work.0.join("original.bin");
-    let state = DesktopState::with_keystore(db.to_str().unwrap(), Some(keyfile.clone())).unwrap();
+    let state = DesktopState::with_device_protection(
+        db.to_str().unwrap(),
+        Some(keyfile.clone()),
+        protection.clone(),
+    )
+    .unwrap();
     state.save_identity(saved(&root, &f.url)).unwrap();
     let snapshot = call(&state, "get_device_control", serde_json::json!({}))
         .await
@@ -2116,7 +2138,9 @@ async fn desktop_original_device_commands_confirm_grant_retry_revoke_and_disable
         "retry"
     );
     drop(state);
-    let state = DesktopState::with_keystore(db.to_str().unwrap(), Some(keyfile)).unwrap();
+    let state =
+        DesktopState::with_device_protection(db.to_str().unwrap(), Some(keyfile), protection)
+            .unwrap();
     assert_eq!(
         call(
             &state,

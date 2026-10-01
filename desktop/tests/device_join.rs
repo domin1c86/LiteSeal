@@ -1,4 +1,5 @@
 #![cfg(windows)]
+use liteseal_core::trusted_devices::witness::platform::Protection;
 use liteseal_core::{
     backup::WorkDirectory,
     keystore::KeystoreData,
@@ -15,10 +16,11 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
-fn state(work: &WorkDirectory) -> AppState {
-    AppState::with_keystore(
+fn state(work: &WorkDirectory, protection: &Protection) -> AppState {
+    AppState::with_device_protection(
         work.0.join("normal.db").to_str().unwrap(),
         Some(work.0.join("normal.bin")),
+        protection.clone(),
     )
     .unwrap()
 }
@@ -39,11 +41,13 @@ fn join_commands_reject_secrets_paths_and_keep_existing_identity_through_lifecyc
         serde_json::json!({"name":"create_device_join_profile","args":{"origin":"http://localhost","username":"Alice","deviceName":"one","secretKey":[0]}}),
         serde_json::json!({"name":"device_join_step","args":{"profileId":"id","token":"secret"}}),
         serde_json::json!({"name":"forget_device_join_profile","args":{"profileId":"id","path":"arbitrary"}}),
+        serde_json::json!({"name":"create_device_join_profile","args":{"origin":"http://localhost","username":"Alice","deviceName":"one","deviceTestNamespace":"unexpected"}}),
     ] {
         assert!(serde_json::from_value::<Command>(bad).is_err());
     }
     let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
-    let state = state(&work);
+    let protection = Protection::isolated_test();
+    let state = state(&work, &protection);
     let keys = crypto::generate_keypair().unwrap();
     let mut original = KeystoreData {
         user_id: uuid::Uuid::new_v4().to_string(),
@@ -122,9 +126,10 @@ fn join_commands_reject_secrets_paths_and_keep_existing_identity_through_lifecyc
         .unwrap();
     drop(conn);
     assert!(device_join::snapshot(&state, broken.profile.id.clone()).is_err());
-    let reopened = AppState::with_keystore(
+    let reopened = AppState::with_device_protection(
         work.0.join("normal.db").to_str().unwrap(),
         Some(work.0.join("normal.bin")),
+        protection.clone(),
     )
     .unwrap();
     assert!(device_join::snapshot(&reopened, broken.profile.id.clone()).is_err());
@@ -143,7 +148,8 @@ fn join_commands_reject_secrets_paths_and_keep_existing_identity_through_lifecyc
 #[tokio::test]
 async fn switching_profile_invalidates_delayed_query_before_it_can_submit_password() {
     let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
-    let state = Arc::new(state(&work));
+    let protection = Protection::isolated_test();
+    let state = Arc::new(state(&work, &protection));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let first = device_join::create(&state, url.clone(), "Alice".into(), "first".into()).unwrap();
@@ -194,7 +200,8 @@ async fn switching_profile_invalidates_delayed_query_before_it_can_submit_passwo
 #[tokio::test]
 async fn locked_late_begin_preserves_original_draft_and_refuses_cleanup_of_live_handles() {
     let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
-    let state = Arc::new(state(&work));
+    let protection = Protection::isolated_test();
+    let state = Arc::new(state(&work, &protection));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let view = device_join::create(&state, url.clone(), "Alice".into(), "second".into()).unwrap();

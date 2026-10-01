@@ -193,3 +193,58 @@ fn cleanup_checks_explicit_files_and_preserves_unknown_content_and_invalid_paths
     store.remove_empty(&empty).unwrap();
     assert!(store.list().unwrap().is_empty());
 }
+
+#[test]
+fn protected_initial_task_and_terminal_removal_keep_other_native_profile_state() {
+    use liteseal_core::trusted_devices::witness::{
+        platform::Protection, windows::WindowsStore, SecureStore,
+    };
+    struct Cleanup(Protection);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            self.0.clear_isolated().unwrap();
+        }
+    }
+    let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
+    let namespace = uuid::Uuid::new_v4();
+    let protection = Protection::isolated_process(namespace);
+    let _cleanup = Cleanup(protection.clone());
+    let store = JoinProfileStore::with_protection(work.0.join("joining"), protection.clone());
+    let first = store
+        .create("http://127.0.0.1:9", "Alice", "first")
+        .unwrap();
+    let second = store.create("http://127.0.0.1:9", "Bob", "second").unwrap();
+    let one = store.database(&first.view().id).unwrap();
+    let two = store.database(&second.view().id).unwrap();
+    let native_one = WindowsStore::isolated(&one, namespace).unwrap();
+    let native_two = WindowsStore::isolated(&two, namespace).unwrap();
+    let record: serde_json::Value =
+        serde_json::from_slice(&native_one.lock().unwrap().read().unwrap().unwrap()).unwrap();
+    assert_eq!(record["committed"]["generation"], 1);
+    let other = native_two.lock().unwrap().read().unwrap().unwrap();
+    let keys = first.keys().unwrap();
+    let coordinator = DeviceCoordinator::open_protected(
+        &one,
+        first.owner().unwrap(),
+        &keys,
+        protection.witness(&one).unwrap(),
+    )
+    .unwrap();
+    coordinator
+        .abandon_unsigned(first.task_id(), &keys)
+        .unwrap();
+    drop(coordinator);
+    fs::write(
+        one.parent().unwrap().join("preserve.txt"),
+        "synthetic unknown file",
+    )
+    .unwrap();
+    assert!(store.remove(&first.view().id).is_err());
+    assert!(native_one.lock().unwrap().read().unwrap().is_some());
+    fs::remove_file(one.parent().unwrap().join("preserve.txt")).unwrap();
+    store.remove(&first.view().id).unwrap();
+    assert!(native_one.lock().unwrap().read().unwrap().is_none());
+    assert_eq!(native_two.lock().unwrap().read().unwrap().unwrap(), other);
+    assert!(store.load(&second.view().id).is_ok());
+    assert!(Protection::default().clear_isolated().is_err());
+}

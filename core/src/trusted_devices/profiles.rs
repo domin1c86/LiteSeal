@@ -128,10 +128,39 @@ impl JoinProfile {
 }
 pub struct JoinProfileStore {
     root: PathBuf,
+    protection: Option<super::witness::platform::Protection>,
 }
 impl JoinProfileStore {
     pub fn new(root: PathBuf) -> Self {
-        Self { root }
+        Self {
+            root,
+            protection: None,
+        }
+    }
+    pub fn with_protection(
+        root: PathBuf,
+        protection: super::witness::platform::Protection,
+    ) -> Self {
+        Self {
+            root,
+            protection: Some(protection),
+        }
+    }
+    /// Only explicit isolated test configuration can address test targets.
+    /// No key files or SQLite contents are read and no credential enumeration occurs.
+    pub fn clear_isolated_witnesses(&self) -> Result<(), String> {
+        let protection = self.protection.as_ref().ok_or("未配置隔离安全存储")?;
+        if !protection.is_isolated() {
+            return Err("生产高水位不能清理或重置".into());
+        }
+        for id in self.ids()? {
+            let database = self.directory(&id)?.join("tasks.db");
+            if database.exists() {
+                plain_path(&database, false)?;
+                let _ = protection.witness(&database)?;
+            }
+        }
+        protection.clear_isolated()
     }
     fn ids(&self) -> Result<Vec<String>, String> {
         if !self.root.exists() {
@@ -302,7 +331,14 @@ impl JoinProfileStore {
         let database = self.bound_database(&id, true)?;
         let keys = profile.keys()?;
         let mut tasks = super::tasks::DeviceTaskStore::open(&database, profile.owner()?, &keys)?;
-        tasks.prepare_join_with_id(profile.task_id(), &profile.view().device_name, &keys)?;
+        if let Some(protection) = &self.protection {
+            tasks
+                .protect(protection.witness(&database)?)
+                .map_err(|error| format!("加入档案安全保护初始化失败：{error}"))?;
+        }
+        tasks
+            .prepare_join_with_id(profile.task_id(), &profile.view().device_name, &keys)
+            .map_err(|error| format!("加入档案原申请保存失败：{error}"))?;
         drop(tasks);
         tx.commit().map_err(|_| io_error())?;
         Ok(profile)
@@ -310,7 +346,13 @@ impl JoinProfileStore {
     /// Call only after all tasks are safely closed and their SQLite handles dropped.
     pub fn remove(&self, id: &str) -> Result<(), String> {
         let directory = self.directory(id)?;
-        let names = ["identity.bin", "tasks.db", "tasks.db-wal", "tasks.db-shm"];
+        let names = [
+            "identity.bin",
+            "tasks.db",
+            "tasks.db-wal",
+            "tasks.db-shm",
+            "tasks.device-state-journal.bin",
+        ];
         let mut files = fs::read_dir(&directory)
             .map_err(io)?
             .collect::<Result<Vec<_>, _>>()
@@ -331,7 +373,11 @@ impl JoinProfileStore {
         for entry in files {
             fs::remove_file(entry.path()).map_err(io)?;
         }
-        fs::remove_dir(directory).map_err(io)
+        fs::remove_dir(&directory).map_err(io)?;
+        if let Some(protection) = &self.protection {
+            protection.release_database(&directory.join("tasks.db"))?;
+        }
+        Ok(())
     }
     pub fn remove_empty(&self, id: &str) -> Result<(), String> {
         let directory = self.directory(id)?;

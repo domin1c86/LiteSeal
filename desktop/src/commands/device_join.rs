@@ -45,7 +45,7 @@ pub struct JoinSnapshot {
     pub messaging_enabled: bool,
 }
 fn store(state: &AppState) -> Result<JoinProfileStore, String> {
-    Ok(JoinProfileStore::new(state.device_join_directory()?))
+    state.device_join_store()
 }
 fn available(runtime: &Runtime) -> Result<(), String> {
     if runtime.suspended {
@@ -77,7 +77,12 @@ pub(crate) fn resume(state: &AppState) -> Result<(), String> {
     runtime.suspended = false;
     Ok(())
 }
-fn open(runtime: &mut Runtime, store: &JoinProfileStore, id: &str) -> Result<Context, String> {
+fn open(
+    state: &AppState,
+    runtime: &mut Runtime,
+    store: &JoinProfileStore,
+    id: &str,
+) -> Result<Context, String> {
     available(runtime)?;
     let profile = store.load(id)?;
     let keys = profile.keys()?;
@@ -88,8 +93,13 @@ fn open(runtime: &mut Runtime, store: &JoinProfileStore, id: &str) -> Result<Con
         }
         runtime.epoch = runtime.epoch.checked_add(1).ok_or("加入设备代次无效")?;
         let client = Arc::new(
-            DeviceCoordinator::open(&database, profile.owner()?, &keys)
-                .map_err(|e| e.to_string())?,
+            DeviceCoordinator::open_protected(
+                &database,
+                profile.owner()?,
+                &keys,
+                state.device_witness(&database)?,
+            )
+            .map_err(|e| e.to_string())?,
         );
         let tasks = client.tasks(&keys).map_err(|e| e.to_string())?;
         if tasks.len() != 1 || tasks[0].id != profile.task_id() {
@@ -112,7 +122,7 @@ fn context(state: &AppState, id: &str) -> Result<Context, String> {
         .device_join_runtime
         .lock()
         .map_err(|_| "加入设备锁不可用")?;
-    open(&mut runtime, &store(state)?, id)
+    open(state, &mut runtime, &store(state)?, id)
 }
 fn current(state: &AppState, ctx: &Context) -> Result<(), String> {
     let runtime = state
@@ -167,7 +177,7 @@ pub fn create(
     available(&runtime)?;
     let store = store(state)?;
     let profile = store.create(&origin, &username, &name)?;
-    let ctx = open(&mut runtime, &store, &profile.view().id)?;
+    let ctx = open(state, &mut runtime, &store, &profile.view().id)?;
     view(&ctx)
 }
 pub fn snapshot(state: &AppState, id: String) -> Result<JoinSnapshot, String> {
@@ -237,7 +247,7 @@ pub fn forget(state: &AppState, id: String) -> Result<(), String> {
     if store.load(&id).is_err() && runtime.cache.as_ref().is_none_or(|cache| cache.id != id) {
         return store.remove_empty(&id);
     }
-    let ctx = open(&mut runtime, &store, &id)?;
+    let ctx = open(state, &mut runtime, &store, &id)?;
     if !matches!(
         info(&ctx)?.task.phase,
         TaskPhase::Cancelled | TaskPhase::Expired | TaskPhase::Revoked

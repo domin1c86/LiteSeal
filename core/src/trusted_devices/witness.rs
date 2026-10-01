@@ -15,6 +15,7 @@ use std::{
 };
 use zeroize::Zeroize;
 
+pub mod platform;
 #[cfg(windows)]
 pub mod windows;
 

@@ -86,7 +86,18 @@ impl std::fmt::Display for CoordinatorError {
 }
 impl std::error::Error for CoordinatorError {}
 type Result<T> = std::result::Result<T, CoordinatorError>;
-fn local(_: String) -> CoordinatorError {
+fn local(error: String) -> CoordinatorError {
+    if matches!(
+        error.as_str(),
+        "设备安全状态已回退、缺失或损坏；未自动重置"
+            | "设备安全存储不可用，请保留原数据后重试"
+            | "Windows 设备安全存储不可用，未重置高水位"
+            | "此平台不支持设备外部安全存储"
+    ) {
+        return CoordinatorError {
+            message: "设备安全状态无法验证；请保留原数据后重试，不能重置或重新申请",
+        };
+    }
     CoordinatorError {
         message: "设备任务、身份或代次已变化，请重新查询",
     }
@@ -204,6 +215,21 @@ impl DeviceCoordinator {
             network: Default::default(),
             session: RwLock::new(String::new()),
         })
+    }
+    pub fn open_protected(
+        path: &Path,
+        owner: TaskOwner,
+        keys: &KeyPair,
+        witness: super::witness::Witness,
+    ) -> Result<Self> {
+        let coordinator = Self::open(path, owner, keys)?;
+        coordinator
+            .store
+            .lock()
+            .map_err(|_| invalid())?
+            .protect(witness)
+            .map_err(local)?;
+        Ok(coordinator)
     }
     /// Renewing a token invalidates in-flight results without unlocking a locked context.
     pub fn renew_session(&self, token: String) -> Result<()> {

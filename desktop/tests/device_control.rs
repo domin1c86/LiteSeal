@@ -25,9 +25,10 @@ async fn desktop_suspension_rejects_late_results_and_token_rotation_cannot_unloc
     let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let state = Arc::new(
-        AppState::with_keystore(
+        AppState::with_device_protection(
             work.0.join("test.db").to_str().unwrap(),
             Some(work.0.join("test.bin")),
+            liteseal_core::trusted_devices::witness::platform::Protection::isolated_test(),
         )
         .unwrap(),
     );

@@ -73,7 +73,13 @@ fn context(state: &AppState) -> Result<Context, String> {
         runtime.epoch = runtime.epoch.checked_add(1).ok_or("设备控制代次无效")?;
         let owner = TaskOwner::for_root(&anchor, &keys)?;
         let client = Arc::new(
-            DeviceCoordinator::open(&state.db_path, owner, &keys).map_err(|e| e.to_string())?,
+            DeviceCoordinator::open_protected(
+                &state.db_path,
+                owner,
+                &keys,
+                state.device_witness(&state.db_path)?,
+            )
+            .map_err(|e| e.to_string())?,
         );
         client
             .renew_session(saved.token)

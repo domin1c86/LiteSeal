@@ -200,15 +200,20 @@ test('Rust stream accepts fragmented requests, rejects unknown commands and exit
   assert.equal(await exit, 0);
 });
 
-test('real joining-profile IPC preserves normal identity and reopens original draft without normal login', async t => {
+test('native protected joining IPC survives forced process stop and rejects SQLite rollback without replacing identity', async t => {
   const directory=await fs.mkdtemp(path.join(os.tmpdir(),'liteseal-join-ipc-'));
   const requests=[];
   const server=http.createServer((request,response)=>{requests.push(request.method);response.writeHead(404,{'content-type':'application/json'});response.end('{}');});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   let bridge=new DesktopBridge(10000);
-  t.after(async()=>{await bridge.stop();await new Promise(resolve=>server.close(resolve));await fs.rm(directory,{recursive:true,force:true});});
   const database=path.join(directory,'normal.db'), keyfile=path.join(directory,'normal.bin');
-  const args=['--db-path',database,'--keystore-path',keyfile];
+  const args=['--db-path',database,'--keystore-path',keyfile,'--device-test-namespace',require('node:crypto').randomUUID()];
+  t.after(async()=>{
+    await bridge.stop();await new Promise(resolve=>server.close(resolve));
+    const cleaned= require('node:child_process').spawnSync(executable,[...args,'--cleanup-device-test-targets'],{windowsHide:true,encoding:'utf8'});
+    assert.equal(cleaned.status,0,cleaned.stderr);
+    await fs.rm(directory,{recursive:true,force:true});
+  });
   await bridge.start(executable,args);
   const normal=await bridge.call('prepare_identity',{});
   await bridge.call('save_session',{userId:'normal-synthetic',deviceId:'normal-device',token:'normal-isolated',refreshToken:'normal-refresh',serverUrl:`http://127.0.0.1:${server.address().port}`});
@@ -218,12 +223,34 @@ test('real joining-profile IPC preserves normal identity and reopens original dr
   for(const field of ['secret_key','ed25519_sk','token','password']) assert.equal(JSON.stringify(created).includes(field),false,field);
   assert.equal((await bridge.call('device_join_step',{profileId:created.profile.id,password:'synthetic-password'})).condition,'unsupported');
   assert.deepEqual(requests,['GET'],'unsupported server must never receive a password POST');
-  await bridge.stop();bridge=new DesktopBridge(10000);await bridge.start(executable,args);
+  const profileDb=path.join(directory,'join-profiles',created.profile.id,'tasks.db');
+  const child=bridge.child;
+  const closed=new Promise(resolve=>child.once('close',resolve));
+  assert.equal(child.kill(),true);await closed;await bridge.stop();
+  const oldProfile=path.join(directory,'old-profile.db');await fs.copyFile(profileDb,oldProfile);
+  bridge=new DesktopBridge(10000);await bridge.start(executable,args);
   const reopened=await bridge.call('get_device_join_profile',{profileId:created.profile.id});
   assert.equal(reopened.join.task.id,created.join.task.id);assert.equal(reopened.profile.encryption_fingerprint,created.profile.encryption_fingerprint);
   const loaded=await bridge.call('load_identity',{});assert.deepEqual(loaded.public_key,normal.public_key);assert.equal(loaded.token,'normal-isolated');
   await assert.rejects(bridge.call('forget_device_join_profile',{profileId:created.profile.id}),/先确认/);
   const abandoned=await bridge.call('abandon_device_join',{profileId:created.profile.id});assert.equal(abandoned.join.local_abandonment,true);
+  await bridge.stop();
+  const currentProfile=path.join(directory,'current-profile.db');await fs.copyFile(profileDb,currentProfile);
+  await fs.copyFile(oldProfile,profileDb);bridge=new DesktopBridge(10000);await bridge.start(executable,args);
+  await assert.rejects(bridge.call('get_device_join_profile',{profileId:created.profile.id}),/安全状态/);
+  await assert.rejects(bridge.call('forget_device_join_profile',{profileId:created.profile.id}),/安全状态/);
+  await bridge.stop();await fs.copyFile(currentProfile,profileDb);bridge=new DesktopBridge(10000);await bridge.start(executable,args);
+  assert.equal((await bridge.call('get_device_join_profile',{profileId:created.profile.id})).join.task.phase,'cancelled');
   await bridge.call('forget_device_join_profile',{profileId:created.profile.id});assert.deepEqual(await bridge.call('list_device_join_profiles',{}),[]);
   assert.deepEqual(await fs.readFile(keyfile),original);
+});
+
+test('native test namespace and cleanup require explicit isolated paths and never enter renderer IPC', () => {
+  const namespace=require('node:crypto').randomUUID();
+  const spawnSync=require('node:child_process').spawnSync;
+  for(const args of [['--device-test-namespace',namespace],['--cleanup-device-test-targets']]) {
+    const child=spawnSync(executable,args,{windowsHide:true,encoding:'utf8'});
+    assert.notEqual(child.status,0);assert.match(child.stderr,/explicit database, keystore and isolated namespace/);
+  }
+  assert.equal(commandNames.some(name=>name.includes('test_witness')||name.includes('cleanup_device_test')),false);
 });

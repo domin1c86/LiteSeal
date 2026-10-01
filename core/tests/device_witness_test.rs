@@ -365,3 +365,39 @@ fn root_confirmation_and_terminal_cleanup_are_atomic_protected_changes() {
     store.discard_terminal(&terminal, &keys).unwrap();
     assert!(store.views(&keys).unwrap().is_empty());
 }
+
+#[test]
+fn shared_database_other_scope_changes_do_not_look_like_rollback() {
+    let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
+    let (path, owner, keys, backend, mut one) = setup(&work);
+    let task_one = one.prepare_join("one", &keys).unwrap();
+    let keys_two = crypto::generate_keypair().unwrap();
+    let owner_two = TaskOwner::for_join(
+        "http://127.0.0.1:9",
+        "other-synthetic",
+        &uuid::Uuid::new_v4().to_string(),
+        &keys_two,
+    )
+    .unwrap();
+    let mut two = DeviceTaskStore::open(&path, owner_two.clone(), &keys_two).unwrap();
+    two.protect(Witness::new(&path, backend.clone())).unwrap();
+    let task_two = two.prepare_join("two", &keys_two).unwrap();
+    assert_eq!(one.views(&keys).unwrap().len(), 1);
+    assert!(one.get(&task_two.view().id, &keys).is_err());
+    one.request_cancel(&task_one, &keys).unwrap();
+    assert_eq!(
+        two.get(&task_two.view().id, &keys_two)
+            .unwrap()
+            .view()
+            .phase,
+        TaskPhase::Draft
+    );
+    drop(one);
+    drop(two);
+    let mut one = DeviceTaskStore::open(&path, owner, &keys).unwrap();
+    one.protect(Witness::new(&path, backend.clone())).unwrap();
+    let mut two = DeviceTaskStore::open(&path, owner_two, &keys_two).unwrap();
+    two.protect(Witness::new(&path, backend)).unwrap();
+    assert_eq!(one.views(&keys).unwrap()[0].phase, TaskPhase::Cancelling);
+    assert_eq!(two.views(&keys_two).unwrap()[0].phase, TaskPhase::Draft);
+}

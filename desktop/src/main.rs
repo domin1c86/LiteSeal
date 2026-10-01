@@ -38,6 +38,8 @@ async fn run() -> Result<(), String> {
     // These overrides are only accepted on the executable command line, never via renderer IPC.
     let mut db_path = None;
     let mut keystore_path = None;
+    let mut device_test_namespace = None;
+    let mut cleanup_device_test_targets = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -47,8 +49,42 @@ async fn run() -> Result<(), String> {
             "--keystore-path" if keystore_path.is_none() => {
                 keystore_path = Some(PathBuf::from(args.next().ok_or("Missing keystore path")?))
             }
+            "--device-test-namespace" if device_test_namespace.is_none() => {
+                device_test_namespace = Some(
+                    uuid::Uuid::parse_str(&args.next().ok_or("Missing test namespace")?)
+                        .map_err(|_| "Invalid test namespace")?,
+                );
+            }
+            "--cleanup-device-test-targets" if !cleanup_device_test_targets => {
+                cleanup_device_test_targets = true;
+            }
             _ => return Err("Unknown desktop argument".into()),
         }
+    }
+    if device_test_namespace.is_some() && (db_path.is_none() || keystore_path.is_none())
+        || cleanup_device_test_targets && device_test_namespace.is_none()
+    {
+        return Err(
+            "Device tests require explicit database, keystore and isolated namespace".into(),
+        );
+    }
+    let protection = device_test_namespace.map_or_else(
+        Default::default,
+        liteseal_core::trusted_devices::witness::platform::Protection::isolated_process,
+    );
+    if cleanup_device_test_targets {
+        let database = db_path.as_ref().unwrap();
+        let keyfile = keystore_path.as_ref().unwrap();
+        let _ = protection.witness(database)?;
+        let profiles = keyfile
+            .parent()
+            .ok_or("Invalid test directory")?
+            .join("join-profiles");
+        liteseal_core::trusted_devices::profiles::JoinProfileStore::with_protection(
+            profiles, protection,
+        )
+        .clear_isolated_witnesses()?;
+        return Ok(());
     }
     let db_path = match db_path {
         Some(path) => path,
@@ -60,9 +96,10 @@ async fn run() -> Result<(), String> {
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let state = Arc::new(AppState::with_keystore(
+    let state = Arc::new(AppState::with_device_protection(
         db_path.to_str().ok_or("Invalid database path")?,
         keystore_path,
+        protection,
     )?);
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(128);
     let mut writer = tokio::spawn(async move {
