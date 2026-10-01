@@ -189,6 +189,14 @@ fn generate_nonce() -> Result<[u8; 24], CryptoError> {
     Ok(nonce)
 }
 
+/// Fresh unpredictable challenge material. Initialization is required before RNG use.
+pub fn random_challenge() -> Result<[u8; 32], CryptoError> {
+    init_sodium()?;
+    let mut bytes = [0u8; 32];
+    unsafe { libsodium_sys::randombytes_buf(bytes.as_mut_ptr().cast(), bytes.len()) };
+    Ok(bytes)
+}
+
 /// Per-object random secretbox key. Nonce and MAC are included in the returned ciphertext.
 pub fn encrypt_attachment(plaintext: &[u8]) -> Result<(Vec<u8>, Vec<u8>), CryptoError> {
     init_sodium()?;
