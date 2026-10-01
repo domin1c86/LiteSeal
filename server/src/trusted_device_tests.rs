@@ -233,6 +233,99 @@ fn now() -> i64 {
 
 #[tokio::test]
 #[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn cancellation_after_authorization_confirms_verified_acceptance_on_both_clients() {
+    use liteseal_core::{
+        backup::WorkDirectory,
+        trusted_devices::{api::DeviceControlApi, coordinator::*, tasks::*},
+    };
+    let (f, lose) = Fixture::start_with_loss().await;
+    let root = f.account().await;
+    let keys = crypto::generate_keypair().unwrap();
+    let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
+    let owner = TaskOwner::for_join(
+        &f.url,
+        &root.username,
+        &uuid::Uuid::new_v4().to_string(),
+        &keys,
+    )
+    .unwrap();
+    let joining = DeviceCoordinator::open(&work.0.join("joining.db"), owner, &keys).unwrap();
+    let task = joining.prepare_join("second", &keys).unwrap();
+    joining
+        .step(&task.id, Some(&root.password), &keys)
+        .await
+        .unwrap();
+    let anchor = Anchor {
+        origin: f.url.clone(),
+        account: root.id.clone(),
+        root: DeviceIdentity::from_keys(root.device.clone(), &root.keys),
+    };
+    joining
+        .confirm_root(&task.id, &anchor_fingerprint(&anchor), &keys)
+        .unwrap();
+    joining.step(&task.id, None, &keys).await.unwrap();
+    let owner = TaskOwner::for_root(&anchor, &root.keys).unwrap();
+    let authority = DeviceCoordinator::open(&work.0.join("root.db"), owner, &root.keys).unwrap();
+    authority.renew_session(root.token.clone()).unwrap();
+    let inspected = authority.inspect_join(&task.id, &root.keys).await.unwrap();
+    let challenge = authority
+        .prepare_challenge(&task.id, &inspected.combined_fingerprint, &root.keys)
+        .await
+        .unwrap()
+        .unwrap();
+    *lose.lock().unwrap() = Some(format!("/devices/join_requests/{}/challenge", task.id));
+    assert_eq!(
+        authority
+            .step(&challenge.id, None, &root.keys)
+            .await
+            .unwrap()
+            .condition,
+        Condition::Retry
+    );
+    joining.step(&task.id, None, &keys).await.unwrap();
+    joining.step(&task.id, None, &keys).await.unwrap();
+    let api = DeviceControlApi::new(&f.url).unwrap();
+    let ready = api
+        .status(&root.token, &task.id, Some(&root.device))
+        .await
+        .unwrap();
+    let state = DeviceState::pin(anchor).unwrap();
+    let event = make_event(
+        &state,
+        uuid::Uuid::new_v4().to_string(),
+        DeviceAction::Grant {
+            intent: Box::new(ready.intent.unwrap()),
+            challenge: Box::new(ready.challenge.unwrap()),
+            proof: ready.proof.unwrap(),
+        },
+        now(),
+        &root.keys,
+    )
+    .unwrap();
+    api.submit(&root.token, &root.device, &event).await.unwrap();
+    joining.request_cancel(&task.id, &keys).unwrap();
+    authority.request_cancel(&challenge.id, &root.keys).unwrap();
+    for (client, id, identity) in [
+        (&joining, &task.id, &keys),
+        (&authority, &challenge.id, &root.keys),
+    ] {
+        let progress = client.step(id, None, identity).await.unwrap();
+        assert_eq!(progress.condition, Condition::Terminal);
+        assert_eq!(progress.task.phase, TaskPhase::Complete);
+        assert_eq!(
+            client.tasks(identity).unwrap()[0].phase,
+            TaskPhase::Complete
+        );
+    }
+    assert_eq!(
+        api.manifest(&root.token, &root.id, 0).await.unwrap().events,
+        vec![event]
+    );
+    assert_eq!(f.db.list_user_devices(&root.id).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
 async fn authorization_round_trip_manifest_pagination_and_revoke_are_isolated() {
     let f = Fixture::start(true).await;
     let root = f.account().await;

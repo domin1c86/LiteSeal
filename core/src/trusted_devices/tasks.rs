@@ -169,6 +169,8 @@ pub enum TaskKind {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct JoinData {
+    #[serde(default)]
+    local_abandonment: bool,
     username: String,
     name: String,
     credential: Option<String>,
@@ -236,6 +238,9 @@ pub fn anchor_fingerprint(anchor: &Anchor) -> String {
     hex::encode(anchor.hash())
 }
 impl ControlTask {
+    pub fn local_abandonment(&self) -> bool {
+        matches!(&self.inner.data, Data::Join(data) if data.local_abandonment)
+    }
     pub(super) fn same_ticket(&self, status: &JoinStatus) -> bool {
         self.ticket().is_some_and(|ticket| ticket == &status.ticket)
             && self
@@ -351,6 +356,68 @@ pub struct DeviceTaskStore {
     owner: TaskOwner,
 }
 impl DeviceTaskStore {
+    pub(super) fn abandon_unsigned_join(
+        &mut self,
+        task: &ControlTask,
+        keys: &KeyPair,
+    ) -> Result<ControlTask, String> {
+        let Data::Join(data) = &task.inner.data else {
+            return Err(invalid());
+        };
+        // No intent was ever signed: even a delayed begin cannot admit this device.
+        // This is local abandonment, not evidence that the remote row was removed.
+        if task.inner.phase != TaskPhase::Cancelling
+            || data.intent.is_some()
+            || data.confirmed
+            || data.challenge.is_some()
+            || data.proof.is_some()
+        {
+            return Err(invalid());
+        }
+        let mut next = task.inner.clone();
+        if let Data::Join(data) = &mut next.data {
+            data.local_abandonment = true;
+        }
+        next.phase = TaskPhase::Cancelled;
+        self.replace(task, next, keys)
+    }
+    pub(super) fn confirm_authorized_challenge(
+        &mut self,
+        task: &ControlTask,
+        status: &JoinStatus,
+        keys: &KeyPair,
+    ) -> Result<ControlTask, String> {
+        let Data::Challenge(data) = &task.inner.data else {
+            return Err(invalid());
+        };
+        if task.inner.phase != TaskPhase::Cancelling || status.phase != JoinPhase::Authorized {
+            return Err(invalid());
+        }
+        self.trust.load(&data.anchor, None)?;
+        let bytes: Vec<u8> = self.trust.conn.query_row(
+            "SELECT payload FROM trusted_device_events WHERE origin=?1 AND account=?2 AND event_id=?3",
+            params![data.anchor.origin, data.anchor.account, status.authorization_id.as_deref().ok_or_else(invalid)?],
+            |row| row.get(0),
+        ).map_err(db)?;
+        let event: DeviceEvent = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
+        let DeviceAction::Grant {
+            intent, challenge, ..
+        } = event.action
+        else {
+            return Err(invalid());
+        };
+        if *intent != data.intent
+            || *challenge != data.challenge
+            || !status.ticket.matches(&data.intent)
+            || status.intent.as_ref() != Some(&data.intent)
+            || status.challenge.as_ref() != Some(&data.challenge)
+        {
+            return Err(invalid());
+        }
+        let mut next = task.inner.clone();
+        next.phase = TaskPhase::Complete;
+        self.replace(task, next, keys)
+    }
     pub(super) fn challenge_terminal(
         &mut self,
         task: &ControlTask,
@@ -466,6 +533,12 @@ impl DeviceTaskStore {
         match &task.data {
             Data::Join(data) => {
                 if !self.owner.joining
+                    || data.local_abandonment
+                        && (task.phase != TaskPhase::Cancelled
+                            || data.confirmed
+                            || data.intent.is_some()
+                            || data.challenge.is_some()
+                            || data.proof.is_some())
                     || self.owner.profile != format!("join:{}", data.username)
                     || data.name.trim().is_empty()
                     || data.name.chars().count() > 80
@@ -688,6 +761,7 @@ impl DeviceTaskStore {
             .to_string();
         let task = self.new_task(
             Data::Join(Box::new(JoinData {
+                local_abandonment: false,
                 username,
                 name: name.into(),
                 credential: Some(hex::encode(

@@ -24,6 +24,7 @@ pub enum Condition {
     Unsupported,
     Conflict,
     Terminal,
+    UnsignedAbandoned,
 }
 #[derive(Debug, Serialize)]
 pub struct Progress {
@@ -537,6 +538,15 @@ impl DeviceCoordinator {
         let token = task.join_credential().map_err(local)?;
         let remote = match self.api.status(token, &id, None).await {
             Ok(status) => status,
+            Err(error)
+                if task.view().phase == TaskPhase::Cancelling
+                    && task.intent().is_none()
+                    && error.status == Some(401) =>
+            {
+                let abandoned =
+                    self.current(lease, &task, keys, |s| s.abandon_unsigned_join(&task, keys))?;
+                return Ok(Self::progress(&abandoned, Condition::UnsignedAbandoned));
+            }
             Err(error) if task.view().phase == TaskPhase::Draft && error.status == Some(401) => {
                 let Some(password) = password else {
                     return Ok(Self::progress(&task, Condition::NeedsPassword));
@@ -553,6 +563,25 @@ impl DeviceCoordinator {
             Err(error) => return self.remote(lease, &task, error, keys),
         };
         self.current(lease, &task, keys, |_| Ok(()))?;
+        if remote.phase == JoinPhase::Authorized {
+            if !task.same_ticket(&remote) {
+                return Err(invalid());
+            }
+            let anchor = task.ticket().ok_or_else(invalid)?.anchor.clone();
+            match self
+                .sync(lease, Some(&task), &anchor, token, Some(&id), keys)
+                .await
+            {
+                Ok(None) => return Ok(Self::progress(&task, Condition::Syncing)),
+                Err(error) => return self.remote(lease, &task, error, keys),
+                _ => {}
+            }
+            let event_id = remote.authorization_id.as_deref().ok_or_else(invalid)?;
+            let accepted = self.current(lease, &task, keys, |s| {
+                s.confirm_join_authorized(&task, event_id, keys)
+            })?;
+            return Ok(Self::progress(&accepted, Condition::Terminal));
+        }
         if task.view().phase == TaskPhase::Cancelling {
             let status = if remote.phase == JoinPhase::Cancelled {
                 remote
@@ -586,21 +615,6 @@ impl DeviceCoordinator {
             return Ok(Self::progress(&task, Condition::NeedsConfirmation));
         }
         let anchor = task.ticket().ok_or_else(invalid)?.anchor.clone();
-        if remote.phase == JoinPhase::Authorized {
-            match self
-                .sync(lease, Some(&task), &anchor, token, Some(&id), keys)
-                .await
-            {
-                Ok(None) => return Ok(Self::progress(&task, Condition::Syncing)),
-                Err(error) => return self.remote(lease, &task, error, keys),
-                _ => {}
-            }
-            let event_id = remote.authorization_id.as_deref().ok_or_else(invalid)?;
-            let accepted = self.current(lease, &task, keys, |s| {
-                s.confirm_join_authorized(&task, event_id, keys)
-            })?;
-            return Ok(Self::progress(&accepted, Condition::Terminal));
-        }
         if remote.intent.is_none() {
             let original = task.intent().ok_or_else(invalid)?;
             match self.api.intent(token, original).await {
@@ -711,6 +725,20 @@ impl DeviceCoordinator {
             Ok(status) => status,
             Err(error) => return self.remote(lease, &task, error, keys),
         };
+        if task.view().phase == TaskPhase::Cancelling && remote.phase == JoinPhase::Authorized {
+            match self
+                .sync(lease, Some(&task), &anchor, &token, None, keys)
+                .await
+            {
+                Ok(None) => return Ok(Self::progress(&task, Condition::Syncing)),
+                Err(error) => return self.remote(lease, &task, error, keys),
+                _ => {}
+            }
+            let finished = self.current(lease, &task, keys, |s| {
+                s.confirm_authorized_challenge(&task, &remote, keys)
+            })?;
+            return Ok(Self::progress(&finished, Condition::Terminal));
+        }
         if task.view().phase == TaskPhase::Cancelling {
             let cancelled = match self
                 .api

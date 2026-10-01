@@ -15,6 +15,7 @@ const conditions: Record<DeviceProgress["condition"], string> = {
   retry: "连接未完成，可继续原任务重试", session_required: "登录会话已失效，请在原设备重新登录",
   unsupported: "服务器尚未启用设备授权", conflict: "设备目录已变化，请取消原任务后重新核对",
   terminal: "任务状态已确认",
+  unsigned_abandoned: "未签署的本机申请已结束；未确认远端删除，可能需要等待原申请过期",
 };
 const terminal = (task: DeviceTask) => ["complete", "cancelled", "expired", "revoked"].includes(task.phase);
 

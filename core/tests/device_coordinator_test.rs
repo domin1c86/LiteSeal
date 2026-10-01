@@ -4,6 +4,95 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
 };
+
+#[tokio::test]
+async fn only_unsigned_join_may_be_abandoned_when_credential_is_unavailable() {
+    for signed in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let keys = crypto::generate_keypair().unwrap();
+        let root = crypto::generate_keypair().unwrap();
+        let owner = TaskOwner::for_join(&url, "isolated", &uuid::Uuid::new_v4().to_string(), &keys)
+            .unwrap();
+        let path =
+            std::env::temp_dir().join(format!("liteseal-cancel-{}.db", uuid::Uuid::new_v4()));
+        let mut store = DeviceTaskStore::open(&path, owner.clone(), &keys).unwrap();
+        let mut task = store.prepare_join("second", &keys).unwrap();
+        if signed {
+            let at = chrono::Utc::now().timestamp_millis();
+            let anchor = Anchor {
+                origin: url,
+                account: uuid::Uuid::new_v4().to_string(),
+                root: DeviceIdentity::from_keys(uuid::Uuid::new_v4().to_string(), &root),
+            };
+            let ticket = JoinTicket {
+                id: task.view().id.clone(),
+                anchor: anchor.clone(),
+                device: DeviceIdentity::from_keys(uuid::Uuid::new_v4().to_string(), &keys),
+                device_name: "second".into(),
+                server_challenge: vec![7; 32],
+                issued_at: at,
+                expires_at: at + JOIN_LIFETIME_MS,
+            };
+            let status = JoinStatus {
+                ticket,
+                phase: JoinPhase::Begun,
+                intent: None,
+                challenge: None,
+                proof: None,
+                authorization_id: None,
+            };
+            task = store.accept_ticket(&task, &status, &keys).unwrap();
+            task = store
+                .confirm_root(&task, &anchor, &anchor_fingerprint(&anchor), &keys)
+                .unwrap();
+        }
+        let original = task.intent().cloned();
+        task = store.request_cancel(&task, &keys).unwrap();
+        drop(store);
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = vec![];
+            let mut chunk = [0; 2048];
+            while !bytes.windows(4).any(|v| v == b"\r\n\r\n") {
+                let n = socket.read(&mut chunk).await.unwrap();
+                assert!(n > 0);
+                bytes.extend_from_slice(&chunk[..n]);
+            }
+            socket.write_all(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").await.unwrap();
+        });
+        let coordinator = DeviceCoordinator::open(&path, owner.clone(), &keys).unwrap();
+        let progress = coordinator
+            .step(&task.view().id, None, &keys)
+            .await
+            .unwrap();
+        assert_eq!(
+            progress.condition,
+            if signed {
+                Condition::SessionRequired
+            } else {
+                Condition::UnsignedAbandoned
+            }
+        );
+        assert_eq!(
+            progress.task.phase,
+            if signed {
+                TaskPhase::Cancelling
+            } else {
+                TaskPhase::Cancelled
+            }
+        );
+        server.await.unwrap();
+        drop(coordinator);
+        let mut store = DeviceTaskStore::open(&path, owner, &keys).unwrap();
+        let saved = store.get(&task.view().id, &keys).unwrap();
+        assert_eq!(saved.intent(), original.as_ref());
+        assert_eq!(saved.join_credential().is_ok(), signed);
+        assert_eq!(saved.local_abandonment(), !signed);
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
+}
 #[tokio::test]
 async fn session_rotation_preserves_lock_and_does_not_replace_saved_tasks() {
     let keys = crypto::generate_keypair().unwrap();
