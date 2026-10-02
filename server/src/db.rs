@@ -46,6 +46,7 @@ pub enum StoreOfflineOutcome {
     Conflict,
     RequestPending,
     Blocked,
+    UpgradeRequired,
 }
 
 pub struct AckedMessage {
@@ -78,6 +79,7 @@ fn migrations() -> &'static [(i64, &'static str)] {
         (15, crate::trusted_devices::MIGRATION),
         (16, crate::trusted_devices::CANCEL_MIGRATION),
         (17, crate::direct_messages::MIGRATION),
+        (18, crate::device_activation::MIGRATION),
     ]
 }
 
@@ -101,6 +103,9 @@ impl Db {
 
     pub fn pool(&self) -> &PgPool {
         &self.pool
+    }
+    pub async fn is_beta_device(&self, user: &str, device: &str) -> Result<bool, sqlx::Error> {
+        crate::device_activation::beta_device(&self.pool, user, device).await
     }
 
     pub async fn migrate(&self) -> Result<(), sqlx::Error> {
@@ -227,6 +232,15 @@ impl Db {
         access_token_hash: &str,
         refresh_token_hash: &str,
     ) -> Result<(), sqlx::Error> {
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query("SELECT id FROM users WHERE id=$1 FOR UPDATE")
+            .bind(user_id)
+            .fetch_one(&mut *transaction)
+            .await?;
+        let allowed:bool=sqlx::query_scalar("SELECT NOT EXISTS(SELECT 1 FROM device_messaging_modes WHERE user_id=$1) AND EXISTS(SELECT 1 FROM devices d WHERE d.user_id=$1 AND d.id=$2 AND d.revoked=false AND NOT EXISTS(SELECT 1 FROM device_authorizations a WHERE a.device_id=d.id))").bind(user_id).bind(device_id).fetch_one(&mut *transaction).await?;
+        if !allowed {
+            return Err(sqlx::Error::Protocol("设备需要独立激活会话".into()));
+        }
         sqlx::query(
             "INSERT INTO sessions
              (id, user_id, device_id, access_token_hash, refresh_token_hash, expires_at, refresh_expires_at, revoked, created_at)
@@ -237,8 +251,9 @@ impl Db {
         .bind(device_id)
         .bind(access_token_hash)
         .bind(refresh_token_hash)
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await?;
+        transaction.commit().await?;
         Ok(())
     }
 
@@ -248,33 +263,60 @@ impl Db {
         access_token_hash: &str,
         refresh_token_hash: &str,
     ) -> Result<Option<(String, String)>, sqlx::Error> {
-        let mut transaction = self.pool.begin().await?;
-        let consumed = sqlx::query(
-            "UPDATE sessions SET revoked = true
-             WHERE refresh_token_hash = $1 AND revoked = false AND refresh_expires_at > now()
-             RETURNING user_id, device_id",
-        )
-        .bind(old_refresh_token_hash)
-        .fetch_optional(&mut *transaction)
-        .await?;
+        let mut tx = self.pool.begin().await?;
+        let owner =
+            sqlx::query("SELECT user_id,device_id FROM sessions WHERE refresh_token_hash=$1")
+                .bind(old_refresh_token_hash)
+                .fetch_optional(&mut *tx)
+                .await?;
+        let Some(owner) = owner else { return Ok(None) };
+        let user: String = owner.get("user_id");
+        let device: String = owner.get("device_id");
+        sqlx::query("SELECT id FROM users WHERE id=$1 FOR UPDATE")
+            .bind(&user)
+            .fetch_one(&mut *tx)
+            .await?;
+        let active:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM devices d WHERE d.id=$1 AND d.user_id=$2 AND d.revoked=false AND (NOT EXISTS(SELECT 1 FROM device_authorizations a WHERE a.device_id=d.id) OR EXISTS(SELECT 1 FROM device_authorizations a WHERE a.device_id=d.id AND a.user_id=$2 AND a.revoked=false AND a.encryption_key=d.public_key AND a.signing_key=d.ed25519_pk)))").bind(&device).bind(&user).fetch_one(&mut *tx).await?;
+        if !active {
+            return Ok(None);
+        }
+        let consumed=sqlx::query("UPDATE sessions SET revoked=true WHERE refresh_token_hash=$1 AND revoked=false AND refresh_expires_at>now() RETURNING user_id,device_id,v3_authority").bind(old_refresh_token_hash).fetch_optional(&mut *tx).await?;
         let Some(consumed) = consumed else {
-            transaction.rollback().await?;
             return Ok(None);
         };
-        let user_id: String = consumed.get("user_id");
-        let device_id: String = consumed.get("device_id");
+        let authority: Option<Vec<u8>> = consumed.get("v3_authority");
+        if let Some(authority) = &authority {
+            let valid:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM device_messaging_modes m WHERE m.user_id=$1 AND ((m.root_device=$2 AND m.root_authority=$3) OR EXISTS(SELECT 1 FROM device_authorizations a WHERE a.user_id=$1 AND a.device_id=$2 AND a.revoked=false AND a.grant_hash=$3)))").bind(&user).bind(&device).bind(authority).fetch_one(&mut *tx).await?;
+            if !valid {
+                return Ok(None);
+            }
+        } else {
+            let root: bool = sqlx::query_scalar(
+                "SELECT NOT EXISTS(SELECT 1 FROM device_authorizations WHERE device_id=$1)",
+            )
+            .bind(&device)
+            .fetch_one(&mut *tx)
+            .await?;
+            if !root {
+                return Ok(None);
+            }
+        }
         insert_session(
-            &mut transaction,
-            &user_id,
-            &device_id,
+            &mut tx,
+            &user,
+            &device,
             access_token_hash,
             refresh_token_hash,
         )
         .await?;
-        transaction.commit().await?;
-        Ok(Some((user_id, device_id)))
+        sqlx::query("UPDATE sessions SET v3_authority=$2 WHERE access_token_hash=$1")
+            .bind(access_token_hash)
+            .bind(authority)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(Some((user, device)))
     }
-
     pub async fn validate_access_token(
         &self,
         access_token_hash: &str,
@@ -282,7 +324,7 @@ impl Db {
     ) -> Result<Option<String>, sqlx::Error> {
         let row = sqlx::query(
             "SELECT s.user_id FROM sessions s JOIN devices d ON d.id = s.device_id
-             WHERE s.access_token_hash = $1 AND s.device_id = $2 AND s.revoked = false AND s.expires_at > now() AND d.revoked = false",
+             WHERE s.access_token_hash = $1 AND s.device_id = $2 AND s.revoked = false AND s.expires_at > now() AND d.revoked = false AND d.user_id=s.user_id AND ((s.v3_authority IS NULL AND NOT EXISTS(SELECT 1 FROM device_authorizations a WHERE a.device_id=d.id)) OR (s.v3_authority IS NOT NULL AND EXISTS(SELECT 1 FROM device_messaging_modes m WHERE m.user_id=s.user_id AND ((m.root_device=d.id AND m.root_authority=s.v3_authority) OR EXISTS(SELECT 1 FROM device_authorizations a WHERE a.device_id=d.id AND a.user_id=s.user_id AND a.revoked=false AND a.grant_hash=s.v3_authority AND a.encryption_key=d.public_key AND a.signing_key=d.ed25519_pk)))))",
         )
         .bind(access_token_hash)
         .bind(device_id)
@@ -297,7 +339,7 @@ impl Db {
     ) -> Result<Option<String>, sqlx::Error> {
         let row = sqlx::query(
             "SELECT s.user_id FROM sessions s JOIN devices d ON d.id = s.device_id
-             WHERE s.access_token_hash = $1 AND s.revoked = false AND s.expires_at > now() AND d.revoked = false",
+             WHERE s.access_token_hash = $1 AND s.revoked = false AND s.expires_at > now() AND d.revoked = false AND d.user_id=s.user_id AND ((s.v3_authority IS NULL AND NOT EXISTS(SELECT 1 FROM device_authorizations a WHERE a.device_id=d.id)) OR (s.v3_authority IS NOT NULL AND EXISTS(SELECT 1 FROM device_messaging_modes m WHERE m.user_id=s.user_id AND ((m.root_device=d.id AND m.root_authority=s.v3_authority) OR EXISTS(SELECT 1 FROM device_authorizations a WHERE a.device_id=d.id AND a.user_id=s.user_id AND a.revoked=false AND a.grant_hash=s.v3_authority AND a.encryption_key=d.public_key AND a.signing_key=d.ed25519_pk)))))",
         )
         .bind(access_token_hash)
         .fetch_optional(&self.pool)
@@ -385,6 +427,21 @@ impl Db {
         msg: &OfflineMessageRecord,
     ) -> Result<StoreOfflineOutcome, sqlx::Error> {
         let mut transaction = self.pool.begin().await?;
+        crate::device_activation::lock_pair(
+            &mut transaction,
+            &msg.from_user_id,
+            &msg.recipient_user_id,
+        )
+        .await?;
+        if !crate::device_activation::beta_pair(
+            &mut transaction,
+            &msg.from_user_id,
+            &msg.recipient_user_id,
+        )
+        .await?
+        {
+            return Ok(StoreOfflineOutcome::UpgradeRequired);
+        }
         // Serialise quota checks for a recipient without locking unrelated
         // queues. This prevents concurrent sends from racing past the cap.
         sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")

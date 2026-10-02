@@ -3,7 +3,7 @@ import { runSuite } from './test-database.mjs';
 const started = Date.now();
 const report = runSuite(process.env, undefined, 'trusted_device_tests::direct_message_tests::');
 report.elapsed_ms = Date.now() - started;
-report.scope = 'synthetic HTTP/PostgreSQL v3 delivery; operational secondary sessions are test fixtures, not production activation';
+report.scope = 'synthetic HTTP/PostgreSQL v3 delivery with real signed mode enablement and dual-key activation; no production profiles or GUI activation';
 mkdirSync('target/test-results', { recursive: true });
 writeFileSync('target/test-results/direct-delivery-' + report.at.replace(/[:.]/g, '-') + '.json', JSON.stringify(report, null, 2) + '\n');
 console.log(JSON.stringify(report, null, 2));

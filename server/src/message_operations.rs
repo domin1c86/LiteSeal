@@ -46,6 +46,12 @@ pub(crate) async fn authorize(
     if !record.is_some_and(|record| !record.revoked) {
         return Err((StatusCode::UNAUTHORIZED, "设备已撤销".into()));
     }
+    if !crate::device_activation::root_device(state.db.pool(), &user, device)
+        .await
+        .map_err(database)?
+    {
+        return Err((StatusCode::FORBIDDEN, "此接口仅支持原设备".into()));
+    }
     Ok(user)
 }
 // Original messages are located through durable receipts: acknowledged
@@ -107,6 +113,20 @@ pub async fn submit(
         .try_into()
         .map_err(|_| reject("签名密钥无效"))?;
     let mut tx = state.db.pool().begin().await.map_err(database)?;
+    let peer:Option<String>=sqlx::query_scalar("SELECT recipient_user_id FROM beta_receipts WHERE message_id=$1 AND sender_user_id=$2 LIMIT 1").bind(&h.target_id).bind(&h.sender_id).fetch_optional(&mut *tx).await.map_err(database)?;
+    let peer = peer.ok_or_else(|| reject("原消息不可用"))?;
+    crate::device_activation::lock_pair(&mut tx, &h.sender_id, &peer)
+        .await
+        .map_err(database)?;
+    if !crate::device_activation::beta_pair(&mut tx, &h.sender_id, &peer)
+        .await
+        .map_err(database)?
+    {
+        return Err((
+            StatusCode::UPGRADE_REQUIRED,
+            "旧单聊变更需要后续 v3 操作接口".into(),
+        ));
+    }
     sqlx::query("SET LOCAL statement_timeout = '10s'")
         .execute(&mut *tx)
         .await

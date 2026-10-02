@@ -103,6 +103,15 @@ async fn authorize_tx(
     .map_err(unavailable)?
     .ok_or((StatusCode::UNAUTHORIZED, "设备不可用".into()))?;
     let user: String = record.get("user_id");
+    let secondary: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM device_authorizations WHERE device_id=$1)")
+            .bind(device)
+            .fetch_one(&mut **tx)
+            .await
+            .map_err(unavailable)?;
+    if secondary {
+        return Err((StatusCode::FORBIDDEN, "第二设备群聊尚未开放".into()));
+    }
     let valid:Option<String>=sqlx::query_scalar("SELECT user_id FROM sessions WHERE access_token_hash=$1 AND device_id=$2 AND revoked=false AND expires_at>now() FOR SHARE")
         .bind(token).bind(device).fetch_optional(&mut **tx).await.map_err(unavailable)?;
     if valid.as_deref() != Some(&user) {

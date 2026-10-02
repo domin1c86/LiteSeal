@@ -85,7 +85,7 @@ fn remote(error: ApiError) -> CoordinatorError {
 fn condition(status: Option<u16>) -> Condition {
     match status {
         Some(401 | 403) => Condition::SessionRequired,
-        Some(404) => Condition::Unsupported,
+        Some(404 | 426) => Condition::Unsupported,
         Some(409 | 410) => Condition::Conflict,
         _ => Condition::Retry,
     }

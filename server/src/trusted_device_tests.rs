@@ -1,4 +1,6 @@
 //! Synthetic accounts only; the dedicated marker is checked by the validation runner.
+#[path = "device_activation_tests.rs"]
+mod device_activation_tests;
 #[path = "direct_message_tests.rs"]
 mod direct_message_tests;
 use super::*;

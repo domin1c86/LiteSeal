@@ -69,7 +69,7 @@ pub async fn search_users(
     let rows = sqlx::query(
         r#"SELECT DISTINCT ON (u.id) u.id, u.username, d.public_key, d.ed25519_pk
          FROM users u
-         JOIN devices d ON d.user_id = u.id AND d.revoked = false
+         JOIN devices d ON d.user_id = u.id AND d.revoked = false AND NOT EXISTS(SELECT 1 FROM device_authorizations a WHERE a.device_id=d.id)
          WHERE lower(u.username) LIKE $1 ESCAPE '\' OR u.id LIKE $1 ESCAPE '\'
          ORDER BY u.id, d.created_at DESC
          LIMIT 50"#,
@@ -113,7 +113,18 @@ pub async fn get_public_key(
         .list_user_devices(&user_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    match rows.into_iter().rev().find(|device| !device.revoked) {
+    let mut root = None;
+    for device in rows {
+        if !device.revoked
+            && crate::device_activation::root_device(state.db.pool(), &user_id, &device.id)
+                .await
+                .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
+        {
+            root = Some(device);
+            break;
+        }
+    }
+    match root {
         Some(device) => Ok(Json(PublicKeyResponse {
             user_id,
             username,

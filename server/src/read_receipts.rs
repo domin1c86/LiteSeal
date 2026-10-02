@@ -71,6 +71,18 @@ pub async fn submit(
         ));
     }
     let mut tx = state.db.pool().begin().await.map_err(database)?;
+    crate::device_activation::lock_pair(&mut tx, &event.reader, &event.peer)
+        .await
+        .map_err(database)?;
+    if !crate::device_activation::beta_pair(&mut tx, &event.reader, &event.peer)
+        .await
+        .map_err(database)?
+    {
+        return Err((
+            StatusCode::UPGRADE_REQUIRED,
+            "旧阅读回执需要后续 v3 接口".into(),
+        ));
+    }
     sqlx::query("SELECT pg_advisory_xact_lock(1818850405,11)")
         .execute(&mut *tx)
         .await

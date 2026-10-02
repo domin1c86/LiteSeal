@@ -151,7 +151,7 @@ pub fn router() -> Router<AppState> {
         .route("/users/:user_id/device_manifest", get(manifest))
         .layer(DefaultBodyLimit::max(MAX_DEVICE_EVENT_BYTES))
 }
-async fn lock(tx: &mut Tx<'_>, user: &str) -> Result<(), Failure> {
+pub(crate) async fn lock(tx: &mut Tx<'_>, user: &str) -> Result<(), Failure> {
     sqlx::query("SET LOCAL lock_timeout='5s'")
         .execute(&mut **tx)
         .await
@@ -271,7 +271,7 @@ async fn save_root(tx: &mut Tx<'_>, state: &DeviceState) -> Result<(), Failure> 
     .map_err(unavailable)?;
     Ok(())
 }
-async fn root_session(
+pub(crate) async fn root_session(
     tx: &mut Tx<'_>,
     headers: &HeaderMap,
     state: &DeviceState,

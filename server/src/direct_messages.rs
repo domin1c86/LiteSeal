@@ -311,6 +311,18 @@ async fn publish(
     }
     let (peer, _) = current(&mut tx, &batch.header.peer, origin(&state)?).await?;
     batch.verify(&sender, &peer).map_err(codec)?;
+    if !crate::device_activation::enabled(&mut tx, &user)
+        .await
+        .map_err(storage)?
+        || !crate::device_activation::enabled(&mut tx, &batch.header.peer)
+            .await
+            .map_err(storage)?
+    {
+        return Err((
+            StatusCode::UPGRADE_REQUIRED,
+            "双方原设备需要明确启用 v3".into(),
+        ));
+    }
     // Media object authorization is a separate forthcoming integration.
     if batch.header.kind != Kind::Text {
         return Err((StatusCode::BAD_REQUEST, "v3 媒体投递尚未启用".into()));

@@ -54,6 +54,18 @@ pub async fn submit(
         return Err(invalid());
     }
     let mut tx = state.db.pool().begin().await.map_err(db)?;
+    crate::device_activation::lock_pair(&mut tx, &event.actor, &event.peer)
+        .await
+        .map_err(db)?;
+    if !crate::device_activation::beta_pair(&mut tx, &event.actor, &event.peer)
+        .await
+        .map_err(db)?
+    {
+        return Err((
+            StatusCode::UPGRADE_REQUIRED,
+            "旧回应需要后续 v3 操作接口".into(),
+        ));
+    }
     // Commit order equals cursor order; duplicate IDs return the original event.
     sqlx::query("SELECT pg_advisory_xact_lock(1818850405,10)")
         .execute(&mut *tx)

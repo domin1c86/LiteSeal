@@ -1,5 +1,6 @@
 pub mod backup_crypto;
 pub mod crypto;
+pub mod device_activation;
 pub mod direct_message;
 pub mod direct_transport;
 pub mod group;

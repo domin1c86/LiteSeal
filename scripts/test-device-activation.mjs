@@ -1,0 +1,10 @@
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { runSuite } from './test-database.mjs';
+const began = Date.now();
+const report = runSuite(process.env, undefined, 'trusted_device_tests::device_activation_tests::');
+report.elapsed_ms = Date.now() - began;
+report.scope = 'real HTTP/PostgreSQL activation, signed enablement and dual-key proof; synthetic identities only';
+mkdirSync('target/test-results', { recursive: true });
+writeFileSync('target/test-results/device-activation-' + report.at.replace(/[:.]/g, '-') + '.json', JSON.stringify(report, null, 2) + '\n');
+console.log(JSON.stringify(report, null, 2));
+process.exitCode = report.status === 'passed' ? 0 : 2;

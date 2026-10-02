@@ -7,6 +7,7 @@ use liteseal_shared::trusted_device::{
 use rusqlite::{params, Connection, TransactionBehavior};
 use std::{path::Path, time::Duration};
 
+pub mod activation;
 pub mod api;
 pub mod coordinator;
 pub mod messages;

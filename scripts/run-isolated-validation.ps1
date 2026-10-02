@@ -1,4 +1,4 @@
-param([switch]$GroupsOnly, [switch]$SoakSmoke, [switch]$StartSoak, [switch]$ExtensionsOnly, [switch]$DatabaseOnly, [switch]$DirectOnly)
+param([switch]$GroupsOnly, [switch]$SoakSmoke, [switch]$StartSoak, [switch]$ExtensionsOnly, [switch]$DatabaseOnly, [switch]$DirectOnly, [switch]$ActivationOnly)
 $ErrorActionPreference = 'Stop'
 Set-Location (Split-Path -Parent $PSScriptRoot)
 $validationSuffix = [guid]::NewGuid().ToString('N')
@@ -11,7 +11,10 @@ if ($LASTEXITCODE -ne 0) { throw '独立测试角色/数据库准备失败；未
 $previousTestUrl = $env:LITESEAL_TEST_DATABASE_URL
 try {
     $env:LITESEAL_TEST_DATABASE_URL = "postgres://$($validationRole):$($validationPassword)@127.0.0.1:5432/$validationDatabase"
-    if ($DirectOnly) {
+    if ($ActivationOnly) {
+        node scripts/test-device-activation.mjs
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    } elseif ($DirectOnly) {
         node scripts/test-direct-delivery.mjs
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     } elseif ($ExtensionsOnly) {

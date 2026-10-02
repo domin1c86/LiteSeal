@@ -1,4 +1,4 @@
-//! Real HTTP/PostgreSQL; synthetic operational secondary sessions are test-only.
+//! Real HTTP/PostgreSQL and activation APIs; all identities are synthetic.
 use super::*;
 use liteseal_shared::{
     direct_message::{Ack, Batch, Header, Kind, MessageSpec},
@@ -20,18 +20,109 @@ async fn grant(f: &Fixture, root: &Account, old: &DeviceState) -> (Join, DeviceS
     let next = old.apply(&event).unwrap();
     (join, next)
 }
+pub(super) async fn enable_mode(
+    f: &Fixture,
+    root: &Account,
+) -> liteseal_shared::device_activation::Enable {
+    let status = f
+        .client
+        .get(format!("{}/users/{}/device_messaging", f.url, root.id))
+        .bearer_auth(&root.token)
+        .send()
+        .await
+        .unwrap();
+    let status: serde_json::Value = status.json().await.unwrap();
+    if status["enabled"] == true {
+        return serde_json::from_value(status["event"].clone()).unwrap();
+    }
+    let page = f
+        .manifest(root, &root.id, 0, 100)
+        .await
+        .json::<DeviceManifestPage>()
+        .await
+        .unwrap();
+    let mut state = DeviceState::pin(page.anchor).unwrap();
+    for event in page.events {
+        state = state.apply(&event).unwrap();
+    }
+    let event = liteseal_shared::device_activation::Enable::make(
+        &state,
+        &uuid::Uuid::new_v4().to_string(),
+        &root.keys,
+    )
+    .unwrap();
+    let response = f
+        .client
+        .post(format!("{}/devices/messaging/enable", f.url))
+        .bearer_auth(&root.token)
+        .json(&event)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    response.json().await.unwrap()
+}
+pub(super) async fn verified_activation(
+    f: &Fixture,
+    root: &Account,
+    device: &str,
+    keys: &crypto::KeyPair,
+) -> liteseal_shared::device_activation::Session {
+    use liteseal_shared::device_activation::*;
+    let mode = enable_mode(f, root).await;
+    let page = f
+        .manifest(root, &root.id, 0, 100)
+        .await
+        .json::<DeviceManifestPage>()
+        .await
+        .unwrap();
+    let mut state = DeviceState::pin(page.anchor).unwrap();
+    for event in page.events {
+        state = state.apply(&event).unwrap();
+    }
+    let authorization = liteseal_shared::direct_message::Directory::from_state(&state)
+        .members
+        .into_iter()
+        .find(|m| m.device.device_id == device)
+        .unwrap()
+        .authorization_hash;
+    let input = Start {
+        id: uuid::Uuid::new_v4().to_string(),
+        request_token: hex::encode(crypto::random_challenge().unwrap()),
+        username: root.username.clone(),
+        password: root.password.clone(),
+        device: device.into(),
+        authorization,
+    };
+    let api = liteseal_core::trusted_devices::activation::ActivationApi::new(&f.url).unwrap();
+    assert_eq!(
+        api.status(&root.token, state.anchor())
+            .await
+            .unwrap()
+            .unwrap(),
+        mode
+    );
+    let challenge = api.begin(&input, &state, &mode).await.unwrap();
+    assert_eq!(
+        api.challenge(&input.request_token, &input.id, &state, &mode)
+            .await
+            .unwrap(),
+        challenge
+    );
+    let proof = challenge.answer(&state, &mode, now(), keys).unwrap();
+    api.prove(&input.request_token, &challenge, &proof, keys)
+        .await
+        .unwrap()
+}
 async fn synthetic_activation(f: &Fixture, root: &Account, join: &Join) -> String {
-    let device = &join.status.ticket.device.device_id;
-    let token = auth::service::generate_token();
-    let mut tx = f.db.pool().begin().await.unwrap();
-    sqlx::query("INSERT INTO devices(id,user_id,name,public_key,ed25519_pk,created_at,last_seen) VALUES($1,$2,'synthetic activated',$3,$4,now(),now())")
-        .bind(device).bind(&root.id).bind(join.keys.public_key.as_slice()).bind(join.keys.ed25519_pk.as_slice()).execute(&mut *tx).await.unwrap();
-    sqlx::query("INSERT INTO sessions(id,user_id,device_id,access_token_hash,refresh_token_hash,expires_at,refresh_expires_at,created_at) VALUES($1,$2,$3,$4,$5,now()+interval '1 hour',now()+interval '1 day',now())")
-        .bind(uuid::Uuid::new_v4().to_string()).bind(&root.id).bind(device).bind(auth::service::hash_token(&token)).bind(auth::service::generate_token()).execute(&mut *tx).await.unwrap();
-    tx.commit().await.unwrap();
-    token
+    verified_activation(f, root, &join.status.ticket.device.device_id, &join.keys)
+        .await
+        .access_token
+        .clone()
 }
 async fn accepted(f: &Fixture, sender: &Account, peer: &Account) {
+    enable_mode(f, sender).await;
+    enable_mode(f, peer).await;
     sqlx::query("INSERT INTO contact_policy(user_id,peer_id,status) VALUES($1,$2,'accepted') ON CONFLICT(user_id,peer_id) DO UPDATE SET status='accepted'")
         .bind(&peer.id).bind(&sender.id).execute(f.db.pool()).await.unwrap();
 }
@@ -743,7 +834,7 @@ async fn parallel_v3_and_legacy_queue_quota_cannot_accept_partial_audience() {
     };
     assert_eq!(
         f.db.store_offline_message(&legacy).await.unwrap(),
-        crate::db::StoreOfflineOutcome::QuotaExceeded
+        crate::db::StoreOfflineOutcome::UpgradeRequired
     );
     assert_eq!(
         ack(&f, &b.token, &winner_ack).await.status(),

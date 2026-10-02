@@ -79,6 +79,14 @@ impl AuthenticatedSession {
         if !state.is_current(&self.device_id, self.generation) {
             return false;
         }
+        if !state
+            .db
+            .is_beta_device(&self.user_id, &self.device_id)
+            .await
+            .unwrap_or(false)
+        {
+            return false;
+        }
         matches!(
             state.db.validate_access_token(&self.token_hash, &self.device_id).await,
             Ok(Some(user_id)) if user_id == self.user_id
@@ -111,7 +119,13 @@ async fn handle_socket(socket: WebSocket, state: AppState, remote_ip: std::net::
     else {
         return;
     };
-    if state.validate_auth(&token, &device_id).await.as_deref() != Some(&user_id) {
+    if state.validate_auth(&token, &device_id).await.as_deref() != Some(&user_id)
+        || !state
+            .db
+            .is_beta_device(&user_id, &device_id)
+            .await
+            .unwrap_or(false)
+    {
         let _ = writer
             .send(Message::Text(
                 serde_json::to_string(&ServerMessage::AuthFail {
@@ -345,6 +359,12 @@ async fn handle_v2_send(
         return Err((
             "message_conflict",
             "Message id or sequence conflicts with a stored envelope",
+        ));
+    }
+    if stored == StoreOfflineOutcome::UpgradeRequired {
+        return Err((
+            "messaging_upgrade_required",
+            "Both accounts must use the explicit v3 protocol",
         ));
     }
     if stored == StoreOfflineOutcome::QuotaExceeded {

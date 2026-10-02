@@ -144,6 +144,18 @@ pub async fn login(
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             match existing {
                 Some(device) if !device.revoked => {
+                    if !crate::device_activation::root_device(state.db.pool(), &user.id, &device.id)
+                        .await
+                        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
+                    {
+                        return Err(StatusCode::FORBIDDEN);
+                    }
+                    if !crate::device_activation::beta_device(state.db.pool(), &user.id, &device.id)
+                        .await
+                        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
+                    {
+                        return Err(StatusCode::UPGRADE_REQUIRED);
+                    }
                     // A login is not a key-rotation endpoint. Unexpected key
                     // changes must be resolved explicitly to preserve pinning.
                     if device.public_key != public_key || device.ed25519_pk != ed25519_pk {
@@ -365,6 +377,12 @@ pub async fn revoke_device(
     Path(device_id): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
     let user_id = user_from_bearer(&state, &headers).await?;
+    if !crate::device_activation::beta_device(state.db.pool(), &user_id, &device_id)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
+    {
+        return Err(StatusCode::FORBIDDEN);
+    }
     state
         .db
         .revoke_device(&user_id, &device_id)
