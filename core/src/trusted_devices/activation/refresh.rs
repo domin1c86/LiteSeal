@@ -2,6 +2,10 @@
 //! original request/challenge/proof before invoking each network step.
 use super::*;
 use liteseal_shared::{crypto::KeyPair, device_activation::refresh as r};
+pub mod jobs;
+pub struct ClosedFamily {
+    pub(crate) request: [u8; 32],
+}
 pub struct Observation {
     pub(crate) request: r::Start,
     pub(crate) reply: r::Reply,
@@ -19,6 +23,30 @@ impl Observation {
     }
 }
 impl ActivationApi {
+    pub async fn close_refresh_family(
+        &self,
+        request: &r::Start,
+        session: &Session,
+        state: &DeviceState,
+        mode: &Enable,
+        keys: &KeyPair,
+    ) -> Result<ClosedFamily, ActivationError> {
+        self.refresh_scope(request, session, state, mode, keys)?;
+        let http = self.body(
+            self.request(Method::POST, "/auth/logout", None)?,
+            &serde_json::json!({"access_token":session.access_token}),
+        )?;
+        let response = http.send().await.map_err(|_| network())?;
+        if response.status() != reqwest::StatusCode::NO_CONTENT {
+            return Err(ActivationError {
+                status: Some(response.status().as_u16()),
+                message: "原会话家族退出尚未确认，请继续原任务",
+            });
+        }
+        Ok(ClosedFamily {
+            request: request.digest().map_err(|_| invalid())?,
+        })
+    }
     fn refresh_scope(
         &self,
         request: &r::Start,

@@ -57,7 +57,7 @@ impl Owner {
         owner.keys(keys)?;
         Ok(owner)
     }
-    fn keys(&self, keys: &KeyPair) -> Result<(), String> {
+    pub(crate) fn keys(&self, keys: &KeyPair) -> Result<(), String> {
         if self.device != DeviceIdentity::from_keys(self.device.device_id.clone(), keys) {
             return Err(bad());
         }
@@ -75,7 +75,7 @@ impl Owner {
                 .expect("public owner"),
         ))
     }
-    fn member(&self, state: &DeviceState) -> Result<[u8; 32], String> {
+    pub(crate) fn member(&self, state: &DeviceState) -> Result<[u8; 32], String> {
         if state.anchor() != &self.anchor {
             return Err(bad());
         }
@@ -85,6 +85,12 @@ impl Owner {
             .find(|m| m.device == self.device)
             .map(|m| m.authorization_hash)
             .ok_or_else(bad)
+    }
+    pub(crate) fn anchor(&self) -> &Anchor {
+        &self.anchor
+    }
+    pub(crate) fn device(&self) -> &DeviceIdentity {
+        &self.device
     }
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -195,6 +201,21 @@ pub struct Task {
     stored: Stored,
 }
 impl Task {
+    pub(crate) fn initial_session(&self, owner: &Owner, keys: &KeyPair) -> Result<Session, String> {
+        owner.keys(keys)?;
+        if self.stored.owner != *owner || self.stored.stage != Stage::Complete {
+            return Err(bad());
+        }
+        let Data::Login(login) = &self.stored.data else {
+            return Err(bad());
+        };
+        login
+            .result
+            .as_ref()
+            .ok_or_else(bad)?
+            .open(login.challenge.as_ref().ok_or_else(bad)?, keys)
+            .map_err(|_| bad())
+    }
     pub fn view(&self) -> View {
         self.stored.view()
     }

@@ -1187,6 +1187,7 @@ impl TaskGate {
         callback()
     }
     pub fn new() -> Result<Self, String> {
+        // A fresh instance never revives leases of an earlier process.
         Ok(Self {
             state: Mutex::new(GateState {
                 id: crypto::random_challenge().map_err(|_| invalid())?,
@@ -1194,6 +1195,18 @@ impl TaskGate {
                 open: true,
             }),
         })
+    }
+    pub(super) fn rotate_current_with<T>(
+        &self,
+        lease: &TaskLease,
+        callback: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
+        let mut state = self.state.lock().map_err(|_| invalid())?;
+        if !state.open || state.id != lease.id || state.generation != lease.generation {
+            return Err("设备任务结果已失效".into());
+        }
+        state.generation = state.generation.checked_add(1).ok_or_else(invalid)?;
+        callback()
     }
     pub fn lease(&self) -> Result<TaskLease, String> {
         let state = self.state.lock().map_err(|_| invalid())?;
