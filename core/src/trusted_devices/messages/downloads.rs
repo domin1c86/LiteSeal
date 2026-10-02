@@ -34,6 +34,9 @@ fn visible(
     if hidden {
         return Err("原媒体消息已在本机隐藏".into());
     }
+    if super::super::operations::retracted(conn, owner, id, keys)? {
+        return Err("原媒体消息已撤回".into());
+    }
     let row = super::super::record(conn, &owner.scope(), id)?.ok_or_else(invalid)?;
     let (batch, local) = super::super::checked_record(conn, owner, &row, keys)?;
     if row.outcome != "processed" {

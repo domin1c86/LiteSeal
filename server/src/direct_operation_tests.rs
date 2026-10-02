@@ -1,6 +1,143 @@
 //! Isolated HTTP/PostgreSQL identities, including body release and old phases.
 use super::*;
 use liteseal_shared::direct_operation::{self as op, Action, Operation, Page};
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn core_imports_real_operation_page_before_root_reopens_and_projects_retraction() {
+    use liteseal_core::{
+        backup::WorkDirectory,
+        trusted_devices::{
+            messages::{api::DirectApi, Acceptance, Owner, Store},
+            witness::platform::Protection,
+        },
+    };
+    let f = Fixture::start(true).await;
+    let a = f.account().await;
+    let b = f.account().await;
+    accepted(&f, &a, &b).await;
+    let s = directory(&f, &a);
+    let p = directory(&f, &b);
+    let original = batch(
+        &s,
+        &p,
+        &a.device,
+        &a.keys,
+        None,
+        "原正文 中文 🦭".as_bytes(),
+    );
+    assert_eq!(send(&f, &a.token, &original).await.status(), StatusCode::OK);
+    let edit = make(
+        &original,
+        (&s, &p),
+        (&s, &p),
+        &a.keys,
+        0,
+        Action::Edit,
+        Some("网络补收 编辑 🦭"),
+    );
+    assert_eq!(submit(&f, &a.token, &edit).await.status(), StatusCode::OK);
+    let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
+    let protection = Protection::isolated_test();
+    let path = work.0.join("operation-recipient.db");
+    drop(liteseal_core::trusted_devices::DeviceTrustStore::open(&path).unwrap());
+    let owner = Owner::new(&f.url, &b.id, &b.device, &b.keys).unwrap();
+    let mut store = Store::open(&path, owner.clone(), protection.witness(&path).unwrap()).unwrap();
+    store.trust().pin(s.anchor()).unwrap();
+    store.trust().pin(p.anchor()).unwrap();
+    let api = DirectApi::new(&f.url).unwrap();
+    let page = api
+        .operations(&b.token, &b.id, &b.device, 0, 100)
+        .await
+        .unwrap();
+    assert_eq!(page.len(), 1);
+    assert!(!page.has_more());
+    let cursor = page.through();
+    let other_path = work.0.join("operation-wrong-recipient.db");
+    drop(liteseal_core::trusted_devices::DeviceTrustStore::open(&other_path).unwrap());
+    let other_owner = Owner::new(&f.url, &a.id, &a.device, &a.keys).unwrap();
+    let mut other = Store::open(
+        &other_path,
+        other_owner,
+        protection.witness(&other_path).unwrap(),
+    )
+    .unwrap();
+    other.trust().pin(s.anchor()).unwrap();
+    other.trust().pin(p.anchor()).unwrap();
+    assert!(other
+        .import_authenticated_operations(0, &page, &a.keys)
+        .is_err());
+    assert_eq!(other.operation_cursor(&a.keys).unwrap(), 0);
+    assert!(store
+        .import_authenticated_operations(1, &page, &b.keys)
+        .is_err());
+    store
+        .import_authenticated_operations(0, &page, &b.keys)
+        .unwrap();
+    assert!(store.history(None, 100, &b.keys).unwrap().is_empty());
+    drop(store);
+    let mut store = Store::open(&path, owner, protection.witness(&path).unwrap()).unwrap();
+    assert_eq!(store.operation_cursor(&b.keys).unwrap(), cursor);
+    let liteseal_shared::direct_transport::Result::Accepted { receipt, .. } =
+        lookup(&f, &a.token, &original).await.json().await.unwrap()
+    else {
+        panic!("original receipt missing")
+    };
+    let acceptance = Acceptance::from_authenticated_response(
+        &original,
+        &receipt.id,
+        receipt.digest,
+        receipt.accepted_at,
+    )
+    .unwrap();
+    store.receive(&original, &acceptance, &b.keys).unwrap();
+    assert_eq!(
+        store.body(&original.header.id, &b.keys).unwrap(),
+        "网络补收 编辑 🦭".as_bytes()
+    );
+    let retract = make(
+        &original,
+        (&s, &p),
+        (&s, &p),
+        &a.keys,
+        1,
+        Action::Retract,
+        None,
+    );
+    assert_eq!(
+        submit(&f, &a.token, &retract).await.status(),
+        StatusCode::OK
+    );
+    let next = api
+        .operations(&b.token, &b.id, &b.device, cursor, 100)
+        .await
+        .unwrap();
+    assert_eq!(next.len(), 1);
+    store
+        .import_authenticated_operations(cursor, &next, &b.keys)
+        .unwrap();
+    assert!(store.body(&original.header.id, &b.keys).is_err());
+    let history = store.history(None, 100, &b.keys).unwrap();
+    assert_eq!(history.len(), 1);
+    assert!(history[0].retracted);
+    assert_eq!(history[0].operation_revision, 2);
+    let empty = api
+        .operations(&b.token, &b.id, &b.device, next.through(), 100)
+        .await
+        .unwrap();
+    assert!(empty.is_empty());
+    store
+        .import_authenticated_operations(next.through(), &empty, &b.keys)
+        .unwrap();
+    assert_eq!(store.conversations(&b.keys).unwrap()[0].unread, 1);
+    assert!(api
+        .operations(&b.token, &a.id, &b.device, 0, 100)
+        .await
+        .is_err());
+    assert!(api
+        .operations(&b.token, &b.id, &b.device, -1, 100)
+        .await
+        .is_err());
+}
 async fn submit(f: &Fixture, token: &str, operation: &Operation) -> reqwest::Response {
     f.client
         .post(format!("{}/direct/v3/operations", f.url))

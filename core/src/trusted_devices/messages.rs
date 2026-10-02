@@ -17,6 +17,7 @@ pub mod conversations;
 pub mod coordinator;
 pub mod drafts;
 pub mod media;
+pub mod operations;
 mod ordering;
 const MAX_LOCAL: usize = 73768;
 const MAX_TASKS: usize = 128;
@@ -33,6 +34,9 @@ pub(crate) fn require_backup_support(
         .map_err(|_| invalid())?;
     let scope = Owner::new(&origin, &identity.user_id, &identity.device_id, &keys)?.scope();
     let task_table:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='device_control_tasks')",[],|r|r.get(0)).map_err(db)?;
+    if task_table&&conn.query_row("SELECT EXISTS(SELECT 1 FROM device_control_tasks WHERE scope IN (?1,?2) AND kind='direct_v3_operation')",params![format!("operation:{scope}"),format!("operation-wire:{scope}")],|r|r.get::<_,bool>(0)).map_err(db)?{
+        return Err("当前身份含单聊 v3 操作日志，本版备份尚不支持；未生成会遗漏编辑或撤回的备份".into());
+    }
     if task_table && conn.query_row("SELECT EXISTS(SELECT 1 FROM device_control_tasks WHERE scope=?1 AND kind='direct_v3_media')", [format!("media:{scope}")], |r|r.get::<_,bool>(0)).map_err(db)? {
         return Err("当前身份含单聊 v3 媒体任务或缓存，本版备份尚不支持；未生成会遗漏媒体的备份".into());
     }
@@ -220,6 +224,8 @@ pub struct RecordView {
     pub outcome: String,
     pub sent_at: i64,
     pub accepted_at: i64,
+    pub operation_revision: u64,
+    pub retracted: bool,
 }
 /// Metadata only, constructed by a bound authenticated transport, never by page
 /// IPC. This is not cryptographic evidence of remote acceptance on its own.
@@ -1097,7 +1103,9 @@ impl Store {
                 let row=record(conn,&scope,&id)?.ok_or_else(invalid)?;
                 let (batch,_)=checked_record(conn,&owner,&row,keys)?;
                 let other=if batch.header.sender==owner.account {batch.header.peer.clone()}else{batch.header.sender.clone()};
-                Ok(RecordView{cursor,id:row.id,sender:batch.header.sender,sender_device:batch.header.sender_device,peer:other,role:row.role,kind:batch.header.kind,outcome:row.outcome,sent_at:batch.header.sent_at,accepted_at:row.accepted_at})
+                let (operation_revision,action,_)=operations::projection(conn,&owner,&batch,keys)?;
+                let retracted=action==Some(liteseal_shared::direct_operation::Action::Retract);
+                Ok(RecordView{cursor,id:row.id,sender:batch.header.sender,sender_device:batch.header.sender_device,peer:other,role:row.role,kind:batch.header.kind,outcome:if retracted {"retracted".into()}else{row.outcome},sent_at:batch.header.sent_at,accepted_at:row.accepted_at,operation_revision,retracted})
             }).collect()
         })
     }
@@ -1119,11 +1127,20 @@ impl Store {
                 return Err("此消息已在本机隐藏".into());
             }
             let row = record(conn, &scope, id)?.ok_or_else(invalid)?;
-            let (_, local) = checked_record(conn, &owner, &row, keys)?;
+            let (batch, local) = checked_record(conn, &owner, &row, keys)?;
             if row.outcome != "processed" {
                 return Err("此消息正文认证失败，已隔离".into());
             }
-            Ok(local.body.clone())
+            match operations::projection(conn, &owner, &batch, keys)? {
+                (_, Some(liteseal_shared::direct_operation::Action::Retract), _) => {
+                    Err("此消息已撤回".into())
+                }
+                (_, Some(liteseal_shared::direct_operation::Action::Edit), Some(text)) => {
+                    Ok(text.into_bytes())
+                }
+                (_, None, None) => Ok(local.body.clone()),
+                _ => Err(invalid()),
+            }
         })
     }
 }

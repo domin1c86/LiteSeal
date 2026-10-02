@@ -1,5 +1,22 @@
 # P0/P1 验收记录（待执行）
 
+## 2026-10-03 T23 客户端操作日志与投影短测
+
+基线 `209633a` 加本轮工作树；合成账号、临时 SQLite/文件、隔离原生保护及已有标记专用 PostgreSQL，不操作真实资料、不启动新长期、不推送。当前完成日志/HTTP 读取和投影，持久发送操作任务、后台协调与桌面入口尚未接通。
+
+- 初轮 3 项存储专项通过（1.49 秒），随后加入旧备份与撤销设备边界。首次 Clippy 拒绝 `previous=*order` 的可疑赋值空格，修正为明确赋值后全 workspace/all-targets `-D warnings` 通过（16.17 秒），保留 `direct-operation-store-clippy-format-failure-2026-10-03.txt` 和最终 `direct-operation-store-clippy-final-2026-10-03.txt`；未放宽检查。
+- `target/test-results/direct-operation-store-focused-final-2026-10-03.txt`：5 项存储专项通过（2.44 秒），范围包括操作先到/重启/原消息后到、中文与 emoji 投影、原消息只计一次未读、隐藏后新编辑不恢复、坏页整页回滚、重复顺序/错游标/缺口、撤回终态、跨身份/密钥、超过 64 KiB 操作分块、原生写故障与 SQLite 回退拒绝，以及仅操作日志的备份拒绝和撤销设备离线可读/在线补收拒绝。
+- `target/test-results/direct-operation-store-media-2026-10-03.txt`：1 项媒体专项通过（0.61 秒），分别覆盖部分下载与完整缓存。撤回后原下载停止、迟到分块不推进，信息/任务列表/正文/重新下载/缓存预览拒绝；已有缓存字节不远程删除，重开仍不可读并允许本机清理。此为合成媒体及内存原生写夹具，不是系统麦克风或真实播放验收。
+- `direct-operation-store-delivery-2026-10-03.txt`：完整 `npm test` 为 **27 项 Node/372 项普通 Rust 通过，0 失败**，84 项 PostgreSQL 默认 ignored。之后补充 HTTP 响应的 origin/账号/设备/请求游标绑定，最终静态/相关短测与真实库按此最终源码复验并另记；不把默认 ignored 当实际库通过。
+- `direct-operation-store-build-2026-10-03.txt`：完整生产构建通过，Rust release 55.36 秒，包含最终响应绑定代码；既有链接警告保留。
+- `direct-operation-store-static-final-2026-10-03.txt`：按最终响应绑定源码复验格式、全 workspace/all-targets Clippy（-D warnings，16.78 秒）与核心 FFI（4.67 秒）通过；`direct-operation-store-final-scope-2026-10-03.txt` 的 5 项存储/12 项 API 短测通过（2.29 秒/0.09 秒）。原生见证覆盖和业务权限未通过测试专用豁免放宽。
+- 群 UI 兼容回归通过，`direct-operation-store-group-ui-2026-10-03.txt` / `group-ui-GZM445`；风格回归 72 张既有截图通过、无 renderer 错误，`direct-operation-store-style-2026-10-03.txt` / `ui-style-cEQomR`。尚未接新编辑按钮，这些结果不证明新操作 UI 端到端通过。
+- 首轮真实库为 **83 通过/1 失败**，`direct-operation-store-postgres-fixture-failure-2026-10-03.json`。新 HTTP 用例遗漏先初始化 SQLite 文件，Windows 原生保护对不存在的数据库路径执行 canonicalize 时拒绝，在打开存储阶段失败，未进入操作补收。按既有隔离用例顺序先建立数据库后修正，未改变生产路径/原生保护；`direct-operation-store-postgres-focused-2026-10-03.json` 的四项操作专项随后全部通过、0 失败/0 跳过、无失败诊断。实际验证新增 HTTP 到 Rust 日志的操作先到/重启/原消息后到/编辑投影/撤回终态、空页游标、一次未读，以及错身份/请求游标响应不能落入其他存储。
+- `target/test-results/direct-operation-store-postgres-2026-10-03.json`：修正后专用 PostgreSQL 16.14 完整复验 **84 项通过/0 失败/0 跳过**，四项操作专项均通过，脱敏失败诊断为空。最终一次运行按生产认证 IP 窗口计数 36/36 自然等待 24/26 秒（合计 50 秒），不删除计数、运行内不重试失败用例。运行脚本 `run-direct-operation-store-paced.mjs` / `run-local-direct-operation-store.ps1` 位于测试目录；首次失败及修正后的专项/整套结果分别保存，不混为一轮。
+- 修正夹具后的格式及服务端/all-targets Clippy（-D warnings）复验通过，`direct-operation-store-fixture-static-2026-10-03.txt`（6.99 秒）。`direct-operation-store-group-integration-2026-10-03.txt`：真实专用 PostgreSQL/服务端与同机三个隔离 Rust 桌面进程的 11 阶段全部通过，包括群文字/补收/丢 ACK/重启/重新加入、协作/投票、群附件/合成语音/活动及 T22 v2 离线缓存/草稿/隐藏历史。这是既有群功能兼容回归，不是新 v3 编辑按钮、真实双 Windows 或系统交互验收。
+
+现有服务端和 T22 格式未改变。HTTP 请求与本机日志不能代替完整设备协作、原设备发送编辑的 UI 操作或双 Windows；短测证据不关闭未执行的系统、独立审查或长期验收。
+
 ## 2026-10-03 T23 原设备编辑/撤回协议与服务端日志短测
 
 基线 `56f5978` 加本轮工作树；使用合成身份、隔离数据目录与已有标记专用 PostgreSQL，不操作真实用户资料、不启动新长期、不推送。本轮仅交付共享协议与服务端日志，客户端持久任务、认证补收游标、可见性投影及桌面入口尚未接通，不能据此关闭完整编辑/撤回功能。

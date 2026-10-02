@@ -536,9 +536,13 @@ impl Store {
             if ids.len() > 128 {
                 return Err(invalid());
             }
-            ids.into_iter()
-                .map(|id| {let job=load(conn,&owner,&id,keys)?;public_view(conn,&owner,&job,keys)})
-                .collect()
+            let mut views=Vec::new();
+            for id in ids {
+                if super::operations::retracted(conn,&owner,&id,keys)? {continue;}
+                let job=load(conn,&owner,&id,keys)?;
+                views.push(public_view(conn,&owner,&job,keys)?);
+            }
+            Ok(views)
         })
     }
     pub fn media_task(&mut self, id: &str, keys: &KeyPair) -> Result<View, String> {
@@ -554,6 +558,9 @@ impl Store {
                 .map_err(db)?;
             if hidden {
                 return Err("原媒体消息已在本机隐藏".into());
+            }
+            if super::operations::retracted(conn, &owner, id, keys)? {
+                return Err("原媒体消息已撤回".into());
             }
             let job = load(conn, &owner, id, keys)?;
             public_view(conn, &owner, &job, keys)

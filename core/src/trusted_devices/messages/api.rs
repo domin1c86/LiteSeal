@@ -65,6 +65,29 @@ impl AuthenticatedResult {
 pub struct AuthenticatedPage {
     pub(super) page: Page,
 }
+/// Private page contents bind this response to the requested account/device and
+/// origin. The store still verifies signatures, historical evidence and bodies.
+pub struct AuthenticatedOperations {
+    pub(super) page: liteseal_shared::direct_operation::Page,
+    pub(super) origin: String,
+    pub(super) account: String,
+    pub(super) device: String,
+    pub(super) after: i64,
+}
+impl AuthenticatedOperations {
+    pub fn len(&self) -> usize {
+        self.page.events.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.page.events.is_empty()
+    }
+    pub fn through(&self) -> i64 {
+        self.page.through
+    }
+    pub fn has_more(&self) -> bool {
+        self.page.has_more
+    }
+}
 impl AuthenticatedPage {
     pub fn len(&self) -> usize {
         self.page.items.len()
@@ -87,6 +110,64 @@ pub struct MediaObject<'a> {
     pub reference: &'a Reference,
 }
 impl DirectApi {
+    pub async fn operations(
+        &self,
+        token: &str,
+        account: &str,
+        device: &str,
+        after: i64,
+        limit: usize,
+    ) -> Result<AuthenticatedOperations, ApiError> {
+        use liteseal_shared::direct_operation as op;
+        id(account)?;
+        id(device)?;
+        if after < 0 || !(1..=op::MAX_PAGE).contains(&limit) {
+            return Err(invalid());
+        }
+        let page: op::Page = self
+            .json(
+                self.request(Method::GET, "/direct/v3/operations", token)?
+                    .query(&[
+                        ("device_id", device),
+                        ("after", &after.to_string()),
+                        ("limit", &limit.to_string()),
+                    ]),
+                op::MAX_PAGE_BYTES,
+            )
+            .await?;
+        if page.events.len() > limit
+            || page.events.is_empty() && (page.has_more || page.through != after)
+            || page.events.last().is_some_and(|e| e.order != page.through)
+        {
+            return Err(invalid());
+        }
+        let mut previous = after;
+        let mut ids = HashSet::new();
+        for event in &page.events {
+            self.bound_batch(&event.operation.original)?;
+            id(&event.operation.header.id)?;
+            event.operation.to_wire().map_err(|_| invalid())?;
+            if event.order <= previous
+                || !ids.insert(&event.operation.header.id)
+                || !(1..=8_640_000_000_000_000).contains(&event.accepted_at)
+                || !event
+                    .operation
+                    .payloads
+                    .iter()
+                    .any(|p| p.account == account && p.device == device)
+            {
+                return Err(invalid());
+            }
+            previous = event.order;
+        }
+        Ok(AuthenticatedOperations {
+            page,
+            origin: self.origin.clone(),
+            account: account.into(),
+            device: device.into(),
+            after,
+        })
+    }
     pub fn new(server: &str) -> Result<Self, ApiError> {
         let origin = canonical_origin(server).map_err(|_| invalid())?;
         let client = reqwest::Client::builder()

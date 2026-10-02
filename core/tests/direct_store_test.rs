@@ -1,4 +1,6 @@
 #![cfg(windows)]
+#[path = "support/direct_operation_cases.rs"]
+mod operations;
 use liteseal_core::{
     backup::WorkDirectory,
     trusted_devices::{

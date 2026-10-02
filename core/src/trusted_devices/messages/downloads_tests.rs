@@ -57,6 +57,95 @@ fn receive(f: &mut Fixture, plain: &[u8]) -> (String, Vec<u8>) {
     (id, cipher)
 }
 #[test]
+fn retracted_media_cancels_partial_download_and_blocks_complete_cache_without_erasing_bytes() {
+    use liteseal_shared::direct_operation::{Action, Event, Operation, Page};
+    for complete in [false, true] {
+        let mut f = Fixture::new();
+        let (id, cipher) = receive(&mut f, &b"original media".repeat(90_000));
+        let started = f.store.start_media_download(&id, &f.keys).unwrap();
+        let first = f
+            .store
+            .downloaded_chunk(&id, started.revision, &cipher[..CHUNK], &f.keys)
+            .unwrap();
+        let last = if complete {
+            f.store
+                .downloaded_chunk(&id, first.revision, &cipher[CHUNK..], &f.keys)
+                .unwrap()
+        } else {
+            first
+        };
+        let before = f.store.media_storage_stats(&f.keys).unwrap().cache_bytes;
+        let row = f
+            .store
+            .trust
+            .read_checked(|conn| {
+                super::super::super::record(conn, &f.owner.scope(), &id)?.ok_or_else(invalid)
+            })
+            .unwrap();
+        let original = Batch::from_wire(&row.wire).unwrap();
+        let own = DeviceState::pin(Anchor {
+            origin: f.owner.origin.clone(),
+            account: f.owner.account.clone(),
+            root: f.owner.device.clone(),
+        })
+        .unwrap();
+        let operation = Operation::make(
+            original.clone(),
+            (&f.peer, &own),
+            (&f.peer, &own),
+            &f.peer_keys,
+            liteseal_shared::direct_operation::Header {
+                version: 1,
+                id: uuid::Uuid::new_v4().to_string(),
+                original: original.digest().unwrap(),
+                action: Action::Retract,
+                base: 0,
+                revision: 1,
+                created_at: 300,
+            },
+            None,
+        )
+        .unwrap();
+        f.store
+            .import_operations(
+                0,
+                &Page {
+                    events: vec![Event {
+                        order: 1,
+                        accepted_at: 301,
+                        operation,
+                    }],
+                    through: 1,
+                    has_more: false,
+                },
+                &f.keys,
+            )
+            .unwrap();
+        assert!(f.store.media_info(&id, &f.keys).is_err());
+        assert!(f.store.media_plain(&id, &f.keys).is_err());
+        assert!(f.store.start_media_download(&id, &f.keys).is_err());
+        assert!(f.store.media_task(&id, &f.keys).is_err());
+        assert!(f.store.media_tasks(&f.keys).unwrap().is_empty());
+        assert!(f
+            .store
+            .downloaded_chunk(&id, last.revision, &cipher[CHUNK..], &f.keys)
+            .is_err());
+        assert_eq!(
+            f.store.media_storage_stats(&f.keys).unwrap().cache_bytes,
+            before
+        );
+        f.store = Store::open(
+            &f.path,
+            f.owner.clone(),
+            Witness::new(&f.path, f.native.clone()),
+        )
+        .unwrap();
+        assert!(f.store.media_plain(&id, &f.keys).is_err());
+        assert!(f.store.history(None, 100, &f.keys).unwrap()[0].retracted);
+        assert_eq!(f.store.clear_media(&id, &f.keys).unwrap(), before);
+    }
+}
+#[test]
 fn partial_download_reopens_and_full_authentication_precedes_every_read() {
     let mut f = Fixture::new();
     let plain = "原下载 中文 emoji 🦭".as_bytes().repeat(65_000);
