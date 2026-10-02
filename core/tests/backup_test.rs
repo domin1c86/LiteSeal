@@ -384,6 +384,7 @@ fn portable_round_trip_preserves_history_and_excludes_jobs_other_scopes_and_cred
     device_jobs
         .prepare_join("pending-device", &task_keys)
         .unwrap();
+    device_jobs.trust().enable_direct_messages().unwrap();
     conn.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE secret_session(token TEXT); INSERT INTO secret_session VALUES('must-never-be-exported'); INSERT INTO locally_deleted_messages VALUES('alice','msg-0'); INSERT INTO scheduled_messages VALUES('alice','alice-device','task','bob',123,X'00','scheduled',''); INSERT INTO typing_preferences VALUES('alice',1); INSERT INTO typing_preferences VALUES('mallory',1);").unwrap();
     let output = dir.0.join("test.lseal");
     let cancel = AtomicBool::new(false);
@@ -425,6 +426,11 @@ fn portable_round_trip_preserves_history_and_excludes_jobs_other_scopes_and_cred
         "trusted_device_anchors",
         "trusted_device_events",
         "join_identity_binding",
+        "direct_v3_tasks",
+        "direct_v3_heads",
+        "direct_v3_records",
+        "direct_v3_ack",
+        "direct_v3_hidden",
     ] {
         assert_eq!(
             archived

@@ -33,7 +33,7 @@ pub struct Witness {
     store: Arc<dyn SecureStore>,
     journal: PathBuf,
 }
-const MARKER_SQL:&str="CREATE TABLE IF NOT EXISTS device_state_witness(id INTEGER PRIMARY KEY CHECK(id=1),marker TEXT NOT NULL,binding BLOB NOT NULL CHECK(length(binding)=32),generation INTEGER NOT NULL CHECK(generation>=0))";
+const MARKER_SQL:&str="CREATE TABLE IF NOT EXISTS device_state_witness(id INTEGER PRIMARY KEY CHECK(id=1),marker TEXT NOT NULL,binding BLOB NOT NULL CHECK(length(binding)=32),generation INTEGER NOT NULL CHECK(generation>=0),coverage INTEGER NOT NULL DEFAULT 1 CHECK(coverage IN (1,2)))";
 const MAX_JOURNAL: usize = 4 * 1024 * 1024;
 const MAX_STATE: u64 = 512 * 1024 * 1024;
 const MAX_GENERATION: u64 = 1_000_000_000;
@@ -42,6 +42,17 @@ const MAX_GENERATION: u64 = 1_000_000_000;
 struct Point {
     generation: u64,
     hash: [u8; 32],
+    #[serde(
+        default = "legacy_coverage",
+        skip_serializing_if = "is_legacy_coverage"
+    )]
+    coverage: u8,
+}
+fn legacy_coverage() -> u8 {
+    1
+}
+fn is_legacy_coverage(value: &u8) -> bool {
+    *value == 1
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -62,6 +73,7 @@ struct Record {
 struct Marker {
     id: String,
     generation: u64,
+    coverage: u8,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
@@ -116,7 +128,7 @@ struct Table {
     old: &'static str,
     new: &'static str,
 }
-const TABLES: [Table; 4] = [
+const TABLES: [Table; 9] = [
     Table {
         tag: "anchor",
         name: "trusted_device_anchors",
@@ -153,6 +165,51 @@ const TABLES: [Table; 4] = [
         old: "'','',old.id",
         new: "'','',new.id",
     },
+    Table {
+        tag: "msg_task",
+        name: "direct_v3_tasks",
+        columns: "scope,id,revision,state,peer,epoch,wire,local",
+        keys: "scope,id",
+        condition: "scope=?1 AND id=?2 AND ?3=0",
+        old: "old.scope,old.id,0",
+        new: "new.scope,new.id,0",
+    },
+    Table {
+        tag: "msg_head",
+        name: "direct_v3_heads",
+        columns: "scope,stream,sequence,digest",
+        keys: "scope,stream",
+        condition: "scope=?1 AND stream=?2 AND ?3=0",
+        old: "old.scope,old.stream,0",
+        new: "new.scope,new.stream,0",
+    },
+    Table {
+        tag: "msg_record",
+        name: "direct_v3_records",
+        columns: "scope,id,stream,sequence,wire,digest,local,role,outcome,accepted_at",
+        keys: "scope,id",
+        condition: "scope=?1 AND id=?2 AND ?3=0",
+        old: "old.scope,old.id,0",
+        new: "new.scope,new.id,0",
+    },
+    Table {
+        tag: "msg_ack",
+        name: "direct_v3_ack",
+        columns: "scope,id,wire,pending",
+        keys: "scope,id",
+        condition: "scope=?1 AND id=?2 AND ?3=0",
+        old: "old.scope,old.id,0",
+        new: "new.scope,new.id,0",
+    },
+    Table {
+        tag: "msg_hidden",
+        name: "direct_v3_hidden",
+        columns: "scope,id",
+        keys: "scope,id",
+        condition: "scope=?1 AND id=?2 AND ?3=0",
+        old: "old.scope,old.id,0",
+        new: "new.scope,new.id,0",
+    },
 ];
 fn invalid() -> String {
     "设备安全状态已回退、缺失或损坏；未自动重置".into()
@@ -171,25 +228,52 @@ fn exists(conn: &Connection, table: &str) -> Result<bool, String> {
     ))
 }
 fn marker(conn: &Connection, binding: [u8; 32]) -> Result<Option<Marker>, String> {
-    let row: Option<(String, Vec<u8>, u64)> = sql(conn
-        .query_row(
-            "SELECT marker,binding,generation FROM device_state_witness WHERE id=1",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
+    let query = if has_coverage(conn)? {
+        "SELECT marker,binding,generation,coverage FROM device_state_witness WHERE id=1"
+    } else {
+        "SELECT marker,binding,generation,1 FROM device_state_witness WHERE id=1"
+    };
+    let row: Option<(String, Vec<u8>, u64, u8)> = sql(conn
+        .query_row(query, [], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
         .optional())?;
-    row.map(|(id, stored, generation)| {
+    row.map(|(id, stored, generation, coverage)| {
         if stored != binding
             || generation > MAX_GENERATION
+            || !(1..=2).contains(&coverage)
             || uuid::Uuid::parse_str(&id)
                 .ok()
                 .is_none_or(|id2| id2.to_string() != id)
         {
             return Err(invalid());
         }
-        Ok(Marker { id, generation })
+        Ok(Marker {
+            id,
+            generation,
+            coverage,
+        })
     })
     .transpose()
+}
+fn has_coverage(conn: &Connection) -> Result<bool, String> {
+    let mut query = sql(conn.prepare("PRAGMA table_info(device_state_witness)"))?;
+    let names = sql(query.query_map([], |row| row.get::<_, String>(1)))?
+        .collect::<rusqlite::Result<Vec<_>>>();
+    Ok(sql(names)?.iter().any(|name| name == "coverage"))
+}
+fn schema_two(conn: &Connection) -> Result<(), String> {
+    // Only fresh tables are accepted by this exact whitelist migration. Never
+    // adopt pre-existing unprotected message rows as a trusted baseline.
+    for table in &TABLES[4..] {
+        if exists(conn, table.name)? {
+            return Err(invalid());
+        }
+    }
+    if !has_coverage(conn)? {
+        sql(conn.execute_batch("ALTER TABLE device_state_witness ADD COLUMN coverage INTEGER NOT NULL DEFAULT 1 CHECK(coverage IN (1,2))"))?;
+    }
+    sql(conn.execute_batch(super::messages::SCHEMA))
 }
 fn feed(hash: &mut Sha256, meter: &mut u64, bytes: &[u8]) -> Result<(), String> {
     *meter = meter.checked_add(bytes.len() as u64).ok_or_else(invalid)?;
@@ -203,11 +287,19 @@ fn feed(hash: &mut Sha256, meter: &mut u64, bytes: &[u8]) -> Result<(), String> 
 fn digest(conn: &Connection, binding: [u8; 32], mark: &Marker) -> Result<Point, String> {
     let mut hash = Sha256::new();
     let mut meter = 0;
-    feed(&mut hash, &mut meter, b"LiteSeal/device-state-snapshot/v1")?;
+    feed(
+        &mut hash,
+        &mut meter,
+        if mark.coverage == 1 {
+            b"LiteSeal/device-state-snapshot/v1"
+        } else {
+            b"LiteSeal/device-state-snapshot/v2"
+        },
+    )?;
     feed(&mut hash, &mut meter, &binding)?;
     feed(&mut hash, &mut meter, mark.id.as_bytes())?;
     feed(&mut hash, &mut meter, &mark.generation.to_le_bytes())?;
-    for table in &TABLES {
+    for table in &TABLES[..if mark.coverage == 1 { 4 } else { 9 }] {
         feed(&mut hash, &mut meter, table.tag.as_bytes())?;
         let present = exists(conn, table.name)?;
         feed(&mut hash, &mut meter, &[u8::from(present)])?;
@@ -255,7 +347,13 @@ fn digest(conn: &Connection, binding: [u8; 32], mark: &Marker) -> Result<Point, 
                         feed(&mut hash, &mut meter, v)?;
                     }
                     ValueRef::Blob(v) => {
-                        if v.len() > 65576 {
+                        if v.len()
+                            > if table.tag.starts_with("msg_") {
+                                262144
+                            } else {
+                                65576
+                            }
+                        {
                             return Err(invalid());
                         }
                         feed(&mut hash, &mut meter, b"blob")?;
@@ -271,6 +369,7 @@ fn digest(conn: &Connection, binding: [u8; 32], mark: &Marker) -> Result<Point, 
     Ok(Point {
         generation: mark.generation,
         hash: hash.finalize().into(),
+        coverage: mark.coverage,
     })
 }
 fn parse_record(bytes: &[u8], binding: [u8; 32]) -> Result<Record, String> {
@@ -287,8 +386,20 @@ fn parse_record(bytes: &[u8], binding: [u8; 32]) -> Result<Record, String> {
             .committed
             .as_ref()
             .is_some_and(|point| point.generation > MAX_GENERATION)
+        || record
+            .committed
+            .as_ref()
+            .is_some_and(|point| !(1..=2).contains(&point.coverage))
         || record.pending.as_ref().is_some_and(|pending| {
             pending.point.generation > MAX_GENERATION
+                || !(1..=2).contains(&pending.point.coverage)
+                || record
+                    .committed
+                    .as_ref()
+                    .map_or(pending.point.coverage != 1, |before| {
+                        pending.point.coverage != before.coverage
+                            && !(before.coverage == 1 && pending.point.coverage == 2)
+                    })
                 || pending.point.generation
                     != record
                         .committed
@@ -408,6 +519,7 @@ impl Witness {
                 let mark = Marker {
                     id: uuid::Uuid::new_v4().to_string(),
                     generation: 0,
+                    coverage: 1,
                 };
                 let point = digest(&tx, binding, &mark)?;
                 let mut record = Record {
@@ -435,6 +547,7 @@ impl Witness {
             let proposed = Marker {
                 id: record.marker.clone(),
                 generation: 0,
+                coverage: 1,
             };
             if digest(&tx, binding, &proposed)? != pending.point {
                 return Err(invalid());
@@ -456,6 +569,10 @@ impl Witness {
                     return Err(invalid());
                 }
                 let journal = self.journal(&record)?;
+                if journal.before.coverage == 1 && journal.after.coverage == 2 {
+                    schema_two(&tx)?;
+                    sql(tx.execute("UPDATE device_state_witness SET coverage=2 WHERE id=1", []))?;
+                }
                 replay(&tx, &journal.patches)?;
                 sql(tx.execute(
                     "UPDATE device_state_witness SET generation=?1 WHERE id=1",
@@ -464,6 +581,7 @@ impl Witness {
                 let after = Marker {
                     id: record.marker.clone(),
                     generation: journal.after.generation,
+                    coverage: journal.after.coverage,
                 };
                 if digest(&tx, binding, &after)? != journal.after {
                     return Err(invalid());
@@ -488,6 +606,54 @@ impl Witness {
         sql(conn.execute_batch(MARKER_SQL))?;
         let mut slot = self.store.lock()?;
         self.reconcile(conn, slot.as_mut()).map(|_| ())
+    }
+    pub(super) fn upgrade_messages(&self, conn: &mut Connection) -> Result<(), String> {
+        let mut slot = self.store.lock()?;
+        let mut record = self.reconcile(conn, slot.as_mut())?;
+        if record.committed.as_ref().ok_or_else(invalid)?.coverage == 2 {
+            return Ok(());
+        }
+        let tx = sql(conn.transaction_with_behavior(TransactionBehavior::Immediate))?;
+        let before = record.committed.clone().ok_or_else(invalid)?;
+        let mark = marker(&tx, record.binding)?.ok_or_else(invalid)?;
+        if digest(&tx, record.binding, &mark)? != before {
+            return Err(invalid());
+        }
+        schema_two(&tx)?;
+        let generation = mark
+            .generation
+            .checked_add(1)
+            .filter(|n| *n <= MAX_GENERATION)
+            .ok_or_else(invalid)?;
+        sql(tx.execute(
+            "UPDATE device_state_witness SET generation=?1,coverage=2 WHERE id=1",
+            [generation],
+        ))?;
+        let next = Marker {
+            id: mark.id,
+            generation,
+            coverage: 2,
+        };
+        let after = digest(&tx, record.binding, &next)?;
+        let journal = Journal {
+            domain: "LiteSeal/device-state-journal/v1".into(),
+            binding: record.binding,
+            marker: record.marker.clone(),
+            before,
+            after: after.clone(),
+            patches: vec![],
+        };
+        let journal_hash = self.save_journal(&journal)?;
+        record.pending = Some(Pending {
+            point: after,
+            journal_hash: Some(journal_hash),
+        });
+        write_record(slot.as_mut(), &record)?;
+        sql(tx.commit())?;
+        record.committed = record.pending.take().map(|pending| pending.point);
+        write_record(slot.as_mut(), &record)?;
+        let _ = self.clear_journal();
+        Ok(())
     }
     pub(super) fn read<T>(
         &self,
@@ -537,6 +703,7 @@ impl Witness {
         let next = Marker {
             id: mark.id,
             generation,
+            coverage: mark.coverage,
         };
         let after = digest(&tx, record.binding, &next)?;
         let journal = Journal {
@@ -571,15 +738,15 @@ fn tracking(conn: &Connection) -> Result<(), String> {
             ("DELETE", table.old),
             ("UPDATE", table.old),
         ] {
-            let mut body = format!(
-                "INSERT OR IGNORE INTO __device_witness_changes VALUES('{}',{});",
-                table.tag, values
-            );
+            // An outer UPSERT can override a trigger's OR IGNORE policy.
+            // Explicitly skip existing keys so old/new equal PKs remain one patch.
+            let insert = |values: &str| {
+                let keys = values.split(',').collect::<Vec<_>>();
+                format!("INSERT INTO __device_witness_changes SELECT '{}',{} WHERE NOT EXISTS(SELECT 1 FROM __device_witness_changes WHERE tag='{}' AND k1={} AND k2={} AND k3={});",table.tag,values,table.tag,keys[0],keys[1],keys[2])
+            };
+            let mut body = insert(values);
             if operation == "UPDATE" {
-                body.push_str(&format!(
-                    "INSERT OR IGNORE INTO __device_witness_changes VALUES('{}',{});",
-                    table.tag, table.new
-                ));
+                body.push_str(&insert(table.new));
             }
             sql(conn.execute_batch(&format!("CREATE TEMP TRIGGER IF NOT EXISTS __witness_{}_{} AFTER {} ON main.{} BEGIN {} END;",table.tag,operation,operation,table.name,body)))?;
         }

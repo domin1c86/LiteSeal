@@ -9,6 +9,7 @@ use std::{path::Path, time::Duration};
 
 pub mod api;
 pub mod coordinator;
+pub mod messages;
 pub mod profiles;
 pub mod tasks;
 pub mod witness;
@@ -107,6 +108,21 @@ impl DeviceTrustStore {
             .execute_batch(tasks::SCHEMA)
             .map_err(|_| "设备任务存储不可用")?;
         witness.initialize(&mut self.conn)
+    }
+    pub fn enable_direct_messages(&mut self) -> Result<(), String> {
+        self.witness
+            .clone()
+            .ok_or("单聊 v3 必须启用外部保护")?
+            .upgrade_messages(&mut self.conn)
+    }
+    /// Derive a proven historical prefix without lowering the durable current
+    /// head. A wire-supplied root is never installed by this read.
+    pub fn at_checkpoint(
+        &mut self,
+        anchor: &Anchor,
+        checkpoint: &Checkpoint,
+    ) -> Result<DeviceState, String> {
+        self.read_checked(|conn| read_at(conn, anchor, checkpoint))
     }
     pub(super) fn read_checked<T>(
         &mut self,
@@ -298,6 +314,51 @@ fn read(
     }
     if revision != state.revision() || head != state.head() || !matches_minimum {
         return Err("device directory is incomplete, rolled back, or divergent".into());
+    }
+    Ok(state)
+}
+fn resolve(conn: &Connection, origin: &str, account: &str) -> Result<Anchor, String> {
+    let bytes: Vec<u8> = conn
+        .query_row(
+            "SELECT anchor FROM trusted_device_anchors WHERE origin=?1 AND account=?2",
+            params![origin, account],
+            |row| row.get(0),
+        )
+        .map_err(|_| "设备根尚未独立确认")?;
+    if bytes.len() > 2048 {
+        return Err("设备根数据无效".into());
+    }
+    let anchor: Anchor = serde_json::from_slice(&bytes).map_err(|_| "设备根数据无效")?;
+    anchor.validate().map_err(|_| "设备根数据无效")?;
+    if anchor.origin != origin || anchor.account != account {
+        return Err("设备根数据不匹配".into());
+    }
+    Ok(anchor)
+}
+fn read_at(
+    conn: &Connection,
+    anchor: &Anchor,
+    checkpoint: &Checkpoint,
+) -> Result<DeviceState, String> {
+    read(conn, anchor, Some(checkpoint))?;
+    let mut state = DeviceState::pin(anchor.clone()).map_err(|_| "设备根数据无效")?;
+    let mut query=conn.prepare("SELECT payload FROM trusted_device_events WHERE origin=?1 AND account=?2 AND revision<=?3 ORDER BY revision").map_err(|_|"设备目录不可用")?;
+    let rows = query
+        .query_map(
+            params![anchor.origin, anchor.account, checkpoint.revision],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .map_err(|_| "设备目录不可用")?;
+    for row in rows {
+        let bytes = row.map_err(|_| "设备目录不可用")?;
+        if bytes.len() > MAX_EVENT_BYTES {
+            return Err("设备历史事件超限".into());
+        }
+        let event: DeviceEvent = serde_json::from_slice(&bytes).map_err(|_| "设备历史事件无效")?;
+        state = state.apply(&event).map_err(|_| "设备历史事件无效")?;
+    }
+    if Checkpoint::from_state(&state) != *checkpoint {
+        return Err("设备历史前缀不匹配".into());
     }
     Ok(state)
 }

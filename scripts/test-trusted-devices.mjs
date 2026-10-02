@@ -42,6 +42,7 @@ try {
   report.steps.push({ name: 'original-device typed IPC, DPAPI, suspension and late result rejection', passed: Number(desktopCounts?.[1] ?? 0), command: ['cargo', ...desktopArgs], status: desktop.code === 0 && desktopCounts ? 'passed' : 'failed' });
   if (desktop.code || !desktopCounts) throw new Error('desktop device controls tests failed');
   for(const [crate,target,label] of [
+    ['liteseal-core','direct_store_test','immutable message tasks, atomic inbox/ACK, native coverage upgrade and history paging'],
     ['liteseal-shared','direct_message_test','complete device audience, private content binding, epochs and per-device signed ACK'],
     ['liteseal-core','device_witness_test','external state, journal commit gaps, rollback and corruption refusal'],
     ['liteseal-core','device_witness_windows_test','isolated native Windows credentials and parent/child mutex'],

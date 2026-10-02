@@ -366,6 +366,7 @@ fn rebuild(
     restoring: bool,
 ) -> Result<Summary> {
     validate_identity(identity)?;
+    crate::trusted_devices::messages::require_backup_support(source, identity)?;
     let scope = clean_schema(path, identity)?;
     let target = Connection::open(path).map_err(db)?;
     target

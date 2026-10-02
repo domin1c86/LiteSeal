@@ -401,3 +401,109 @@ fn shared_database_other_scope_changes_do_not_look_like_rollback() {
     assert_eq!(one.views(&keys).unwrap()[0].phase, TaskPhase::Cancelling);
     assert_eq!(two.views(&keys_two).unwrap()[0].phase, TaskPhase::Draft);
 }
+
+#[test]
+fn legacy_coverage_upgrade_keeps_old_root_rows_and_rejects_rollback() {
+    let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
+    let (path, owner, keys, backend, mut tasks) = setup(&work);
+    let task = tasks.prepare_join("original", &keys).unwrap();
+    drop(tasks);
+    assert!(serde_json::from_slice::<serde_json::Value>(
+        backend.state.lock().unwrap().bytes.as_ref().unwrap()
+    )
+    .unwrap()["committed"]
+        .get("coverage")
+        .is_none());
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch("ALTER TABLE device_state_witness DROP COLUMN coverage")
+        .unwrap();
+    drop(conn);
+    let old = work.0.join("old.db");
+    fs::copy(&path, &old).unwrap();
+    let mut tasks = DeviceTaskStore::open(&path, owner.clone(), &keys).unwrap();
+    tasks.protect(Witness::new(&path, backend.clone())).unwrap();
+    tasks.trust().enable_direct_messages().unwrap();
+    assert_eq!(
+        tasks.get(&task.view().id, &keys).unwrap().view().id,
+        task.view().id
+    );
+    tasks.trust().enable_direct_messages().unwrap();
+    drop(tasks);
+    fs::copy(&old, &path).unwrap();
+    let mut old = DeviceTaskStore::open(&path, owner, &keys).unwrap();
+    assert!(old.protect(Witness::new(&path, backend)).is_err());
+}
+
+#[test]
+fn pending_coverage_upgrade_recovers_before_or_after_sqlite_commit() {
+    for before in [false, true] {
+        let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
+        let (path, owner, keys, backend, mut tasks) = setup(&work);
+        drop(tasks);
+        let old = work.0.join("before.db");
+        fs::copy(&path, &old).unwrap();
+        tasks = DeviceTaskStore::open(&path, owner.clone(), &keys).unwrap();
+        tasks.protect(Witness::new(&path, backend.clone())).unwrap();
+        {
+            let mut state = backend.state.lock().unwrap();
+            state.fail_at = Some(state.writes + 2);
+        }
+        assert!(tasks.trust().enable_direct_messages().is_err());
+        drop(tasks);
+        if before {
+            fs::copy(&old, &path).unwrap();
+        }
+        let mut tasks = DeviceTaskStore::open(&path, owner, &keys).unwrap();
+        tasks.protect(Witness::new(&path, backend.clone())).unwrap();
+        tasks.trust().enable_direct_messages().unwrap();
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        assert_eq!(
+            conn.query_row(
+                "SELECT coverage FROM device_state_witness WHERE id=1",
+                [],
+                |r| r.get::<_, u8>(0)
+            )
+            .unwrap(),
+            2
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name LIKE 'direct_v3_%' AND type='table'",
+                [],
+                |r| r.get::<_, usize>(0)
+            )
+            .unwrap(),
+            5
+        );
+        assert!(!Witness::new(&path, backend).journal_path().exists());
+    }
+}
+
+#[test]
+fn coverage_upgrade_refuses_unprotected_tables_and_missing_pending_log() {
+    let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
+    let (path, owner, keys, backend, mut tasks) = setup(&work);
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch("CREATE TABLE direct_v3_tasks(untrusted TEXT)")
+        .unwrap();
+    drop(conn);
+    assert!(tasks.trust().enable_direct_messages().is_err());
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch("DROP TABLE direct_v3_tasks").unwrap();
+    drop(conn);
+    drop(tasks);
+    let old = work.0.join("before.db");
+    fs::copy(&path, &old).unwrap();
+    let mut tasks = DeviceTaskStore::open(&path, owner.clone(), &keys).unwrap();
+    tasks.protect(Witness::new(&path, backend.clone())).unwrap();
+    {
+        let mut state = backend.state.lock().unwrap();
+        state.fail_at = Some(state.writes + 2);
+    }
+    assert!(tasks.trust().enable_direct_messages().is_err());
+    drop(tasks);
+    fs::copy(&old, &path).unwrap();
+    fs::remove_file(Witness::new(&path, backend.clone()).journal_path()).unwrap();
+    let mut tasks = DeviceTaskStore::open(&path, owner, &keys).unwrap();
+    assert!(tasks.protect(Witness::new(&path, backend)).is_err());
+}
