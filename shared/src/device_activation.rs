@@ -148,6 +148,170 @@ impl Enable {
         Ok(hash(&data))
     }
 }
+/// Separate signatures authorize cancellation; publishing an enable event does
+/// not itself authorize its cancellation.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct EnableCancel {
+    pub event: Enable,
+    pub signature: Vec<u8>,
+}
+impl EnableCancel {
+    fn signing(&self) -> Result<Vec<u8>> {
+        if self.signature.len() != 64 {
+            return Err(bad());
+        }
+        Ok(bytes(&(
+            "LiteSeal/cancel-enable-direct/v1",
+            self.event.digest()?,
+        )))
+    }
+    pub fn make(event: Enable, anchor: &Anchor, keys: &KeyPair) -> Result<Self> {
+        event.verify_root(anchor)?;
+        key_check(keys, &anchor.root)?;
+        let mut cancel = Self {
+            event,
+            signature: vec![0; 64],
+        };
+        cancel.signature = crypto::sign(&cancel.signing()?, &keys.ed25519_sk).map_err(|_| bad())?;
+        cancel.verify(anchor)?;
+        Ok(cancel)
+    }
+    pub fn verify(&self, anchor: &Anchor) -> Result<()> {
+        self.event.verify_root(anchor)?;
+        if !crypto::verify_with_public_key(
+            &self.signing()?,
+            &self.signature,
+            &anchor.root.signing_key,
+        )
+        .unwrap_or(false)
+        {
+            return Err(bad());
+        }
+        Ok(())
+    }
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ActivationCancel {
+    pub version: u8,
+    pub id: String,
+    pub origin: String,
+    pub account: String,
+    pub device: DeviceIdentity,
+    pub authorization: [u8; 32],
+    pub mode: [u8; 32],
+    pub token_hash: [u8; 32],
+    pub signature: Vec<u8>,
+}
+impl ActivationCancel {
+    fn signing(&self) -> Result<Vec<u8>> {
+        if self.version != 1
+            || !id(&self.id)
+            || !id(&self.account)
+            || !id(&self.device.device_id)
+            || !realm(&self.origin)
+            || self.authorization == [0; 32]
+            || self.mode == [0; 32]
+            || self.token_hash == [0; 32]
+            || self.device.encryption_key == [0; 32]
+            || self.device.signing_key == [0; 32]
+            || self.signature.len() != 64
+        {
+            return Err(bad());
+        }
+        Ok(bytes(&(
+            "LiteSeal/cancel-device-session/v3",
+            self.version,
+            &self.id,
+            &self.origin,
+            &self.account,
+            &self.device,
+            self.authorization,
+            self.mode,
+            self.token_hash,
+        )))
+    }
+    pub fn make(
+        state: &DeviceState,
+        mode: &Enable,
+        id_: &str,
+        token: &str,
+        device: &str,
+        keys: &KeyPair,
+    ) -> Result<Self> {
+        mode.verify_root(state.anchor())?;
+        if token.len() < 32 || token.len() > 256 || token.bytes().any(|b| !b.is_ascii_graphic()) {
+            return Err(bad());
+        }
+        let member = Directory::from_state(state)
+            .members
+            .into_iter()
+            .find(|m| m.device.device_id == device)
+            .ok_or_else(bad)?;
+        key_check(keys, &member.device)?;
+        let mut cancel = Self {
+            version: 1,
+            id: id_.into(),
+            origin: state.anchor().origin.clone(),
+            account: state.anchor().account.clone(),
+            device: member.device,
+            authorization: member.authorization_hash,
+            mode: mode.digest()?,
+            token_hash: hash(token.as_bytes()),
+            signature: vec![0; 64],
+        };
+        cancel.signature = crypto::sign(&cancel.signing()?, &keys.ed25519_sk).map_err(|_| bad())?;
+        cancel.verify(state, mode, token)?;
+        Ok(cancel)
+    }
+    pub fn verify(&self, state: &DeviceState, mode: &Enable, token: &str) -> Result<()> {
+        mode.verify_root(state.anchor())?;
+        if self.origin != state.anchor().origin
+            || self.account != state.anchor().account
+            || self.mode != mode.digest()?
+            || self.token_hash != hash(token.as_bytes())
+            || token.len() < 32
+            || token.len() > 256
+            || token.bytes().any(|b| !b.is_ascii_graphic())
+            || !Directory::from_state(state)
+                .members
+                .iter()
+                .any(|m| m.device == self.device && m.authorization_hash == self.authorization)
+            || !crypto::verify_with_public_key(
+                &self.signing()?,
+                &self.signature,
+                &self.device.signing_key,
+            )
+            .unwrap_or(false)
+        {
+            return Err(bad());
+        }
+        Ok(())
+    }
+    pub fn digest(&self) -> Result<[u8; 32]> {
+        let mut data = self.signing()?;
+        data.extend_from_slice(&self.signature);
+        Ok(hash(&data))
+    }
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum EnableCancelResult {
+    Cancelled { event: [u8; 32] },
+    Accepted { event: Enable },
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ActivationCancelResult {
+    Cancelled {
+        cancellation: [u8; 32],
+    },
+    Accepted {
+        challenge: Box<Challenge>,
+        envelope: Envelope,
+    },
+}
 // This private request is never a renderer DTO and must not be logged.
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

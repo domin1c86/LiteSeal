@@ -195,3 +195,78 @@ fn session_tokens_are_encrypted_to_exact_device_and_bound_context() {
     let other = Challenge::make(&f.joined, &f.mode, REQUEST, SECOND, 2000).unwrap();
     assert!(envelope.open(&other, &f.second).is_err());
 }
+#[test]
+fn enable_cancellation_has_a_separate_signature_and_exact_original_digest() {
+    let f = Fixture::new();
+    let cancel = EnableCancel::make(f.mode.clone(), f.joined.anchor(), &f.root).unwrap();
+    cancel.verify(f.joined.anchor()).unwrap();
+    let mut wrong = cancel.clone();
+    wrong.signature = wrong.event.signature.clone();
+    assert!(wrong.verify(f.joined.anchor()).is_err());
+    wrong = cancel.clone();
+    wrong.event.id = REQUEST.into();
+    assert!(wrong.verify(f.joined.anchor()).is_err());
+    assert!(EnableCancel::make(f.mode, f.joined.anchor(), &f.second).is_err());
+}
+#[test]
+fn activation_cancellation_binds_all_fields_credential_and_original_phase() {
+    let f = Fixture::new();
+    let token = "synthetic-credential-at-least-thirty-two-characters";
+    let cancel =
+        ActivationCancel::make(&f.joined, &f.mode, REQUEST, token, SECOND, &f.second).unwrap();
+    cancel.verify(&f.joined, &f.mode, token).unwrap();
+    assert!(cancel
+        .verify(
+            &f.joined,
+            &f.mode,
+            "synthetic-different-credential-at-least-thirty-two"
+        )
+        .is_err());
+    for field in [
+        "version",
+        "id",
+        "origin",
+        "account",
+        "device",
+        "authorization",
+        "mode",
+        "token_hash",
+        "signature",
+    ] {
+        let mut value = serde_json::to_value(&cancel).unwrap();
+        match field {
+            "version" => value[field] = serde_json::json!(2),
+            "id" | "account" => value[field] = serde_json::json!(MODE),
+            "origin" => value[field] = serde_json::json!("https://other.invalid"),
+            "device" => value[field]["device_id"] = serde_json::json!(ROOT),
+            _ => {
+                let n = value[field][0].as_u64().unwrap();
+                value[field][0] = serde_json::json!((n + 1) % 256);
+            }
+        }
+        let changed: ActivationCancel = serde_json::from_value(value).unwrap();
+        assert!(
+            changed.verify(&f.joined, &f.mode, token).is_err(),
+            "{field}"
+        );
+    }
+    let revoke = make_event(
+        &f.joined,
+        "cancel-revoke".into(),
+        DeviceAction::Revoke {
+            device_id: SECOND.into(),
+            grant_hash: f.joined.grant_hash().unwrap().to_vec(),
+        },
+        2000,
+        &f.root,
+    )
+    .unwrap();
+    let revoked = f.joined.apply(&revoke).unwrap();
+    assert!(cancel.verify(&revoked, &f.mode, token).is_err());
+    assert!(ActivationCancel::make(&f.joined, &f.mode, REQUEST, token, SECOND, &f.root).is_err());
+    assert!(
+        ActivationCancel::make(&f.joined, &f.mode, REQUEST, "short", SECOND, &f.second).is_err()
+    );
+    let wire = serde_json::to_string(&cancel).unwrap();
+    assert!(!wire.contains(token));
+}

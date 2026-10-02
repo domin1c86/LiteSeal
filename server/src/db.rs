@@ -80,6 +80,7 @@ fn migrations() -> &'static [(i64, &'static str)] {
         (16, crate::trusted_devices::CANCEL_MIGRATION),
         (17, crate::direct_messages::MIGRATION),
         (18, crate::device_activation::MIGRATION),
+        (19, crate::device_activation::CANCEL_MIGRATION),
     ]
 }
 

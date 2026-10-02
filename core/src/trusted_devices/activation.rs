@@ -1,7 +1,10 @@
 //! Typed activation transport. Private request/proof/session values stay in
 //! Rust; shell-facing activation jobs must retain originals before calling it.
 use liteseal_shared::{
-    device_activation::{self as a, Challenge, Enable, Envelope, Proof, Session, Start},
+    device_activation::{
+        self as a, ActivationCancel, ActivationCancelResult, Challenge, Enable, EnableCancel,
+        EnableCancelResult, Envelope, Proof, Session, Start,
+    },
     trusted_device::{canonical_origin, Anchor, DeviceState},
 };
 use reqwest::{Method, RequestBuilder};
@@ -194,6 +197,84 @@ impl ActivationApi {
             .map_err(|_| invalid())?;
         Ok(challenge)
     }
+    /// Only a matching durable fence or the original accepted event is a
+    /// terminal result. HTTP failures leave cancellation unconfirmed.
+    pub async fn cancel_enable(
+        &self,
+        token: &str,
+        cancel: &EnableCancel,
+        anchor: &Anchor,
+    ) -> Result<EnableCancelResult, ActivationError> {
+        self.root(anchor)?;
+        cancel.verify(anchor).map_err(|_| invalid())?;
+        let result: EnableCancelResult = self
+            .send(self.body(
+                self.request(Method::POST, "/devices/messaging/cancel", Some(token))?,
+                cancel,
+            )?)
+            .await?;
+        match &result {
+            EnableCancelResult::Cancelled { event }
+                if *event == cancel.event.digest().map_err(|_| invalid())? => {}
+            EnableCancelResult::Accepted { event } if *event == cancel.event => {}
+            _ => return Err(invalid()),
+        }
+        Ok(result)
+    }
+    /// This method returns ciphertext for local persistence. Session credentials
+    /// can only be opened with the authorized device keys inside Rust.
+    pub async fn cancel(
+        &self,
+        token: &str,
+        cancel: &ActivationCancel,
+        state: &DeviceState,
+        mode: &Enable,
+        keys: &liteseal_shared::crypto::KeyPair,
+    ) -> Result<ActivationCancelResult, ActivationError> {
+        self.root(state.anchor())?;
+        cancel.verify(state, mode, token).map_err(|_| invalid())?;
+        if keys.public_key != cancel.device.encryption_key
+            || keys.ed25519_pk != cancel.device.signing_key
+        {
+            return Err(invalid());
+        }
+        liteseal_shared::backup_crypto::validate_identity(
+            &keys.public_key,
+            &keys.secret_key,
+            &keys.ed25519_pk,
+            &keys.ed25519_sk,
+        )
+        .map_err(|_| invalid())?;
+        let result: ActivationCancelResult = self
+            .send(self.body(
+                self.request(Method::POST, "/auth/v3/cancel", Some(token))?,
+                cancel,
+            )?)
+            .await?;
+        match &result {
+            ActivationCancelResult::Cancelled { cancellation }
+                if *cancellation == cancel.digest().map_err(|_| invalid())? => {}
+            ActivationCancelResult::Accepted {
+                challenge,
+                envelope,
+            } => {
+                if challenge.id != cancel.id
+                    || challenge.device != cancel.device
+                    || challenge.authorization != cancel.authorization
+                    || challenge.mode != cancel.mode
+                {
+                    return Err(invalid());
+                }
+                // Acceptance can be retried after the challenge expired.
+                challenge
+                    .verify_state(state, mode, challenge.issued_at)
+                    .map_err(|_| invalid())?;
+                envelope.open(challenge, keys).map_err(|_| invalid())?;
+            }
+            _ => return Err(invalid()),
+        }
+        Ok(result)
+    }
     pub async fn challenge(
         &self,
         token: &str,
@@ -226,6 +307,18 @@ impl ActivationApi {
         proof: &Proof,
         keys: &liteseal_shared::crypto::KeyPair,
     ) -> Result<Session, ActivationError> {
+        self.prove_envelope(token, challenge, proof, keys)
+            .await?
+            .open(challenge, keys)
+            .map_err(|_| invalid())
+    }
+    pub async fn prove_envelope(
+        &self,
+        token: &str,
+        challenge: &Challenge,
+        proof: &Proof,
+        keys: &liteseal_shared::crypto::KeyPair,
+    ) -> Result<Envelope, ActivationError> {
         if challenge.origin != self.origin {
             return Err(invalid());
         }
@@ -252,6 +345,7 @@ impl ActivationApi {
                 proof,
             )?)
             .await?;
-        envelope.open(challenge, keys).map_err(|_| invalid())
+        envelope.open(challenge, keys).map_err(|_| invalid())?;
+        Ok(envelope)
     }
 }

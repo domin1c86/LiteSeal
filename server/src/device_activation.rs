@@ -11,7 +11,10 @@ use axum::{
     Json, Router,
 };
 use liteseal_shared::{
-    device_activation::{self as a, Challenge, Enable, Envelope, Proof, Session, Start},
+    device_activation::{
+        self as a, ActivationCancel, ActivationCancelResult, Challenge, Enable, EnableCancel,
+        EnableCancelResult, Envelope, Proof, Session, Start,
+    },
     direct_message::Directory,
 };
 use serde::Serialize;
@@ -31,6 +34,18 @@ CREATE TABLE device_session_attempts (
  CHECK((proof_hash IS NULL AND response IS NULL AND session_id IS NULL) OR (proof_hash IS NOT NULL AND response IS NOT NULL AND session_id IS NOT NULL))
 );
 CREATE INDEX device_session_live ON device_session_attempts(user_id,expires_at);
+";
+pub const CANCEL_MIGRATION: &str = "
+CREATE TABLE device_mode_cancellations (
+ id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),
+ digest BYTEA NOT NULL CHECK(octet_length(digest)=32)
+);
+CREATE INDEX device_mode_cancel_user ON device_mode_cancellations(user_id);
+CREATE TABLE device_session_cancellations (
+ id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),device_id TEXT NOT NULL,
+ token_hash TEXT NOT NULL,digest BYTEA NOT NULL CHECK(octet_length(digest)=32)
+);
+CREATE INDEX device_session_cancel_user ON device_session_cancellations(user_id);
 ";
 fn storage(_: sqlx::Error) -> Failure {
     (
@@ -98,8 +113,10 @@ fn encode(value: &impl Serialize) -> Result<Vec<u8>, Failure> {
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/devices/messaging/enable", post(enable))
+        .route("/devices/messaging/cancel", post(cancel_enable))
         .route("/users/:user/device_messaging", get(status))
         .route("/auth/v3/begin", post(begin))
+        .route("/auth/v3/cancel", post(cancel_activation))
         .route("/auth/v3/:id", get(challenge))
         .route("/auth/v3/:id/proof", post(prove))
         .layer(DefaultBodyLimit::max(a::MAX_WIRE))
@@ -217,6 +234,9 @@ async fn enable(
         return Ok(Json(old));
     }
     event.verify_current(&directory).map_err(|_| denied())?;
+    if fenced(&mut tx, "device_mode_cancellations", &event.id).await? {
+        return Err(gone());
+    }
     let pending:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM offline_messages WHERE acked=false AND (from_user_id=$1 OR recipient_user_id=$1)) OR EXISTS(SELECT 1 FROM operation_deliveries d JOIN message_operations m ON m.id=d.operation_id WHERE d.acked=false AND (d.device_id=$2 OR m.request::jsonb->'header'->>'sender_id'=$1))")
         .bind(&user).bind(&event.root).fetch_one(&mut *tx).await.map_err(storage)?;
     if pending {
@@ -258,6 +278,174 @@ async fn live(
     }
     Ok((directory, event))
 }
+async fn fenced(tx: &mut Tx<'_>, table: &str, id: &str) -> Result<bool, Failure> {
+    let sql = match table {
+        "device_mode_cancellations" => {
+            "SELECT EXISTS(SELECT 1 FROM device_mode_cancellations WHERE id=$1)"
+        }
+        "device_session_cancellations" => {
+            "SELECT EXISTS(SELECT 1 FROM device_session_cancellations WHERE id=$1)"
+        }
+        _ => return Err(bad()),
+    };
+    sqlx::query_scalar(sql)
+        .bind(id)
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(storage)
+}
+async fn cancel_enable(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(cancel): Json<EnableCancel>,
+) -> Result<Json<EnableCancelResult>, Failure> {
+    let user = handlers::user_from_bearer(&state, &headers)
+        .await
+        .map_err(|_| unauthorized())?;
+    let realm = origin(&state)?;
+    if user != cancel.event.account {
+        return Err(denied());
+    }
+    let mut tx = state.db.pool().begin().await.map_err(storage)?;
+    trusted_devices::lock(&mut tx, &user).await?;
+    let (directory, _) = trusted_devices::directory(&mut tx, &user, realm).await?;
+    trusted_devices::root_session(&mut tx, &headers, &directory, &cancel.event.root).await?;
+    cancel.verify(directory.anchor()).map_err(|_| denied())?;
+    let digest = cancel.event.digest().map_err(|_| bad())?;
+    let old = sqlx::query("SELECT user_id,digest FROM device_mode_cancellations WHERE id=$1")
+        .bind(&cancel.event.id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(storage)?;
+    if let Some(old) = old {
+        if old.get::<String, _>("user_id") != user || old.get::<Vec<u8>, _>("digest") != digest {
+            return Err(conflict());
+        }
+        tx.commit().await.map_err(storage)?;
+        return Ok(Json(EnableCancelResult::Cancelled { event: digest }));
+    }
+    if enabled(&mut tx, &user).await.map_err(storage)? {
+        let old = mode(&mut tx, &directory).await?;
+        if old != cancel.event {
+            return Err(conflict());
+        }
+        tx.commit().await.map_err(storage)?;
+        return Ok(Json(EnableCancelResult::Accepted { event: old }));
+    }
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM device_mode_cancellations WHERE user_id=$1")
+            .bind(&user)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(storage)?;
+    if count >= 4096 {
+        return Err((StatusCode::TOO_MANY_REQUESTS, "启用取消记录达到上限".into()));
+    }
+    sqlx::query("INSERT INTO device_mode_cancellations(id,user_id,digest) VALUES($1,$2,$3)")
+        .bind(&cancel.event.id)
+        .bind(user)
+        .bind(digest.as_slice())
+        .execute(&mut *tx)
+        .await
+        .map_err(storage)?;
+    tx.commit().await.map_err(storage)?;
+    Ok(Json(EnableCancelResult::Cancelled { event: digest }))
+}
+async fn cancel_activation(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(cancel): Json<ActivationCancel>,
+) -> Result<Json<ActivationCancelResult>, Failure> {
+    let realm = origin(&state)?;
+    uuid(&cancel.id)?;
+    let token = bearer(&headers)?;
+    let mut tx = state.db.pool().begin().await.map_err(storage)?;
+    trusted_devices::lock(&mut tx, &cancel.account).await?;
+    let (directory, event) = live(
+        &mut tx,
+        &cancel.account,
+        &cancel.device.device_id,
+        cancel.authorization,
+        realm,
+    )
+    .await?;
+    cancel
+        .verify(&directory, &event, token)
+        .map_err(|_| denied())?;
+    let digest = cancel.digest().map_err(|_| bad())?;
+    let token_hash = service::hash_token(token);
+    let old = sqlx::query(
+        "SELECT user_id,device_id,token_hash,digest FROM device_session_cancellations WHERE id=$1",
+    )
+    .bind(&cancel.id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(storage)?;
+    if let Some(old) = old {
+        if old.get::<String, _>("user_id") != cancel.account
+            || old.get::<String, _>("device_id") != cancel.device.device_id
+            || old.get::<String, _>("token_hash") != token_hash
+            || old.get::<Vec<u8>, _>("digest") != digest
+        {
+            return Err(conflict());
+        }
+        tx.commit().await.map_err(storage)?;
+        return Ok(Json(ActivationCancelResult::Cancelled {
+            cancellation: digest,
+        }));
+    }
+    let attempt = sqlx::query("SELECT a.*,u.password_hash FROM device_session_attempts a JOIN users u ON u.id=a.user_id WHERE a.id=$1 FOR UPDATE OF a")
+        .bind(&cancel.id).fetch_optional(&mut *tx).await.map_err(storage)?;
+    if let Some(row) = attempt {
+        if row.get::<String, _>("user_id") != cancel.account
+            || row.get::<String, _>("device_id") != cancel.device.device_id
+            || row.get::<String, _>("token_hash") != token_hash
+        {
+            return Err(conflict());
+        }
+        let challenge: Challenge =
+            serde_json::from_slice(&row.get::<Vec<u8>, _>("challenge")).map_err(|_| denied())?;
+        if challenge.authorization != cancel.authorization
+            || challenge.mode != cancel.mode
+            || challenge.device != cancel.device
+        {
+            return Err(conflict());
+        }
+        if row.get::<Option<Vec<u8>>, _>("proof_hash").is_some() {
+            if row.get::<String, _>("password_state") != row.get::<String, _>("password_hash") {
+                return Err(unauthorized());
+            }
+            let valid: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM sessions WHERE id=$1 AND revoked=false AND refresh_expires_at>now())")
+                .bind(row.get::<String,_>("session_id")).fetch_one(&mut *tx).await.map_err(storage)?;
+            if !valid {
+                return Err(gone());
+            }
+            let envelope =
+                serde_json::from_slice(&row.get::<Vec<u8>, _>("response")).map_err(|_| denied())?;
+            tx.commit().await.map_err(storage)?;
+            return Ok(Json(ActivationCancelResult::Accepted {
+                challenge: Box::new(challenge),
+                envelope,
+            }));
+        }
+    }
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM device_session_cancellations WHERE user_id=$1")
+            .bind(&cancel.account)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(storage)?;
+    if count >= 4096 {
+        return Err((StatusCode::TOO_MANY_REQUESTS, "激活取消记录达到上限".into()));
+    }
+    sqlx::query("INSERT INTO device_session_cancellations(id,user_id,device_id,token_hash,digest) VALUES($1,$2,$3,$4,$5)")
+        .bind(&cancel.id).bind(&cancel.account).bind(&cancel.device.device_id).bind(token_hash).bind(digest.as_slice())
+        .execute(&mut *tx).await.map_err(storage)?;
+    tx.commit().await.map_err(storage)?;
+    Ok(Json(ActivationCancelResult::Cancelled {
+        cancellation: digest,
+    }))
+}
 async fn begin(
     State(state): State<AppState>,
     ConnectInfo(remote): ConnectInfo<std::net::SocketAddr>,
@@ -298,6 +486,9 @@ async fn begin(
     }
     let (directory, event) =
         live(&mut tx, &user.id, &input.device, input.authorization, realm).await?;
+    if fenced(&mut tx, "device_session_cancellations", &input.id).await? {
+        return Err(gone());
+    }
     let old=sqlx::query("SELECT user_id,device_id,token_hash,password_state,challenge,expires_at FROM device_session_attempts WHERE id=$1").bind(&input.id).fetch_optional(&mut *tx).await.map_err(storage)?;
     let challenge = if let Some(row) = old {
         if row.get::<String, _>("user_id") != user.id
@@ -323,7 +514,7 @@ async fn begin(
                 .fetch_one(&mut *tx)
                 .await
                 .map_err(storage)?;
-        let pending:i64=sqlx::query_scalar("SELECT COUNT(*) FROM device_session_attempts WHERE user_id=$1 AND expires_at>$2 AND proof_hash IS NULL").bind(&user.id).bind(now()).fetch_one(&mut *tx).await.map_err(storage)?;
+        let pending:i64=sqlx::query_scalar("SELECT COUNT(*) FROM device_session_attempts a WHERE user_id=$1 AND expires_at>$2 AND proof_hash IS NULL AND NOT EXISTS(SELECT 1 FROM device_session_cancellations c WHERE c.id=a.id)").bind(&user.id).bind(now()).fetch_one(&mut *tx).await.map_err(storage)?;
         if count >= 4096 || pending >= 8 {
             return Err((
                 StatusCode::TOO_MANY_REQUESTS,
@@ -356,6 +547,9 @@ async fn attempt<'a>(
     .ok_or_else(unauthorized)?;
     let mut tx = state.db.pool().begin().await.map_err(storage)?;
     trusted_devices::lock(&mut tx, &user).await?;
+    if fenced(&mut tx, "device_session_cancellations", id).await? {
+        return Err(gone());
+    }
     let row=sqlx::query("SELECT a.*,u.password_hash FROM device_session_attempts a JOIN users u ON u.id=a.user_id WHERE a.id=$1 AND a.token_hash=$2 FOR UPDATE OF a").bind(id).bind(service::hash_token(bearer(headers)?)).fetch_optional(&mut *tx).await.map_err(storage)?.ok_or_else(unauthorized)?;
     if row.get::<String, _>("password_state") != row.get::<String, _>("password_hash") {
         return Err(unauthorized());

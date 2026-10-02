@@ -1,7 +1,8 @@
 use super::direct_message_tests::enable_mode;
 use super::*;
 use liteseal_shared::device_activation::{
-    Challenge as SessionChallenge, Enable, Envelope, Proof, Start,
+    ActivationCancel, ActivationCancelResult, Challenge as SessionChallenge, Enable, EnableCancel,
+    EnableCancelResult, Envelope, Proof, Start,
 };
 async fn state(f: &Fixture, root: &Account) -> DeviceState {
     let page = f
@@ -61,6 +62,361 @@ async fn authorized(f: &Fixture, root: &Account) -> (Join, DeviceState) {
     let event = f.prove(root, &join, &old).await;
     assert_eq!(f.submit(root, &event).await.status(), StatusCode::OK);
     (join, old.apply(&event).unwrap())
+}
+async fn cancel(f: &Fixture, input: &Start, packet: &ActivationCancel) -> reqwest::Response {
+    f.client
+        .post(format!("{}/auth/v3/cancel", f.url))
+        .bearer_auth(&input.request_token)
+        .json(packet)
+        .send()
+        .await
+        .unwrap()
+}
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn enable_cancel_lost_response_fences_late_submit_and_accepted_is_irreversible() {
+    let (f, lose) = Fixture::start_with_loss().await;
+    let root = f.account().await;
+    let current = state(&f, &root).await;
+    let mode = Enable::make(&current, &uuid::Uuid::new_v4().to_string(), &root.keys).unwrap();
+    let packet = EnableCancel::make(mode.clone(), current.anchor(), &root.keys).unwrap();
+    let api = liteseal_core::trusted_devices::activation::ActivationApi::new(&f.url).unwrap();
+    *lose.lock().unwrap() = Some("/devices/messaging/cancel".into());
+    assert_eq!(
+        api.cancel_enable(&root.token, &packet, current.anchor())
+            .await
+            .unwrap_err()
+            .status,
+        Some(503)
+    );
+    assert_eq!(
+        api.cancel_enable(&root.token, &packet, current.anchor())
+            .await
+            .unwrap(),
+        EnableCancelResult::Cancelled {
+            event: mode.digest().unwrap()
+        }
+    );
+    assert_eq!(
+        api.enable(&root.token, &mode, current.anchor())
+            .await
+            .unwrap_err()
+            .status,
+        Some(410)
+    );
+    assert!(api
+        .status(&root.token, current.anchor())
+        .await
+        .unwrap()
+        .is_none());
+    let original_cancel = packet;
+    let mode = Enable::make(&current, &uuid::Uuid::new_v4().to_string(), &root.keys).unwrap();
+    assert_eq!(
+        api.enable(&root.token, &mode, current.anchor())
+            .await
+            .unwrap(),
+        mode
+    );
+    let packet = EnableCancel::make(mode.clone(), current.anchor(), &root.keys).unwrap();
+    assert_eq!(
+        api.cancel_enable(&root.token, &packet, current.anchor())
+            .await
+            .unwrap(),
+        EnableCancelResult::Accepted {
+            event: mode.clone()
+        }
+    );
+    assert_eq!(
+        api.status(&root.token, current.anchor()).await.unwrap(),
+        Some(mode)
+    );
+    assert!(
+        matches!(api.cancel_enable(&root.token, &original_cancel, current.anchor()).await.unwrap(),
+        EnableCancelResult::Cancelled { event } if event == original_cancel.event.digest().unwrap())
+    );
+}
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn activation_cancel_before_begin_survives_lost_response_and_fences_late_password_request() {
+    let (f, lose) = Fixture::start_with_loss().await;
+    let root = f.account().await;
+    let (join, _) = authorized(&f, &root).await;
+    let (input, state, mode) = attempt(&f, &root, &join.status.ticket.device.device_id).await;
+    let packet = ActivationCancel::make(
+        &state,
+        &mode,
+        &input.id,
+        &input.request_token,
+        &input.device,
+        &join.keys,
+    )
+    .unwrap();
+    let api = liteseal_core::trusted_devices::activation::ActivationApi::new(&f.url).unwrap();
+    *lose.lock().unwrap() = Some("/auth/v3/cancel".into());
+    assert_eq!(
+        api.cancel(&input.request_token, &packet, &state, &mode, &join.keys)
+            .await
+            .unwrap_err()
+            .status,
+        Some(503)
+    );
+    assert_eq!(
+        api.cancel(&input.request_token, &packet, &state, &mode, &join.keys)
+            .await
+            .unwrap(),
+        ActivationCancelResult::Cancelled {
+            cancellation: packet.digest().unwrap()
+        }
+    );
+    assert_eq!(begin(&f, &input).await.status(), StatusCode::GONE);
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM device_session_attempts WHERE id=$1")
+        .bind(&input.id)
+        .fetch_one(f.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+}
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn activation_cancel_and_proof_race_preserves_one_terminal_result_and_original_ciphertext() {
+    let f = Fixture::start(true).await;
+    let root = f.account().await;
+    let (join, _) = authorized(&f, &root).await;
+    // Two short races use independent IDs; no long load test is implied.
+    for _ in 0..2 {
+        let (input, state, mode) = attempt(&f, &root, &join.status.ticket.device.device_id).await;
+        let challenge: SessionChallenge = begin(&f, &input).await.json().await.unwrap();
+        let proof = challenge.answer(&state, &mode, now(), &join.keys).unwrap();
+        let packet = ActivationCancel::make(
+            &state,
+            &mode,
+            &input.id,
+            &input.request_token,
+            &input.device,
+            &join.keys,
+        )
+        .unwrap();
+        let (sent, cancelled) =
+            tokio::join!(prove(&f, &input, &proof), cancel(&f, &input, &packet));
+        assert_eq!(cancelled.status(), StatusCode::OK);
+        let result: ActivationCancelResult = cancelled.json().await.unwrap();
+        match result {
+            ActivationCancelResult::Cancelled { cancellation } => {
+                assert_eq!(cancellation, packet.digest().unwrap());
+                assert_eq!(sent.status(), StatusCode::GONE);
+                assert_eq!(prove(&f, &input, &proof).await.status(), StatusCode::GONE);
+                assert_eq!(begin(&f, &input).await.status(), StatusCode::GONE);
+                assert_eq!(
+                    f.client
+                        .get(format!("{}/auth/v3/{}", f.url, input.id))
+                        .bearer_auth(&input.request_token)
+                        .send()
+                        .await
+                        .unwrap()
+                        .status(),
+                    StatusCode::GONE
+                );
+            }
+            ActivationCancelResult::Accepted {
+                challenge: accepted,
+                envelope,
+            } => {
+                assert_eq!(*accepted, challenge);
+                assert_eq!(sent.status(), StatusCode::OK);
+                assert_eq!(sent.json::<Envelope>().await.unwrap(), envelope);
+                let api =
+                    liteseal_core::trusted_devices::activation::ActivationApi::new(&f.url).unwrap();
+                assert_eq!(
+                    api.prove_envelope(&input.request_token, &challenge, &proof, &join.keys)
+                        .await
+                        .unwrap(),
+                    envelope
+                );
+                assert!(
+                    matches!(api.cancel(&input.request_token, &packet, &state, &mode, &join.keys).await.unwrap(),
+                    ActivationCancelResult::Accepted { envelope: original, .. } if original == envelope)
+                );
+            }
+        }
+        let issued: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions WHERE id=(SELECT session_id FROM device_session_attempts WHERE id=$1)")
+            .bind(&input.id).fetch_one(f.db.pool()).await.unwrap();
+        assert_eq!(issued, i64::from(sent_status_accepted(&f, &input).await));
+    }
+}
+async fn sent_status_accepted(f: &Fixture, input: &Start) -> bool {
+    sqlx::query_scalar("SELECT proof_hash IS NOT NULL FROM device_session_attempts WHERE id=$1")
+        .bind(&input.id)
+        .fetch_one(f.db.pool())
+        .await
+        .unwrap()
+}
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn accepted_activation_cancel_after_lost_proof_returns_original_envelope_even_after_expiry() {
+    let (f, lose) = Fixture::start_with_loss().await;
+    let root = f.account().await;
+    let (join, _) = authorized(&f, &root).await;
+    let (input, state, mode) = attempt(&f, &root, &join.status.ticket.device.device_id).await;
+    let challenge: SessionChallenge = begin(&f, &input).await.json().await.unwrap();
+    let proof = challenge.answer(&state, &mode, now(), &join.keys).unwrap();
+    *lose.lock().unwrap() = Some(format!("/auth/v3/{}/proof", input.id));
+    assert_eq!(
+        prove(&f, &input, &proof).await.status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    let original: Envelope = prove(&f, &input, &proof).await.json().await.unwrap();
+    sqlx::query("UPDATE device_session_attempts SET expires_at=$2 WHERE id=$1")
+        .bind(&input.id)
+        .bind(now() - 1)
+        .execute(f.db.pool())
+        .await
+        .unwrap();
+    let packet = ActivationCancel::make(
+        &state,
+        &mode,
+        &input.id,
+        &input.request_token,
+        &input.device,
+        &join.keys,
+    )
+    .unwrap();
+    let api = liteseal_core::trusted_devices::activation::ActivationApi::new(&f.url).unwrap();
+    let accepted = api
+        .cancel(&input.request_token, &packet, &state, &mode, &join.keys)
+        .await
+        .unwrap();
+    assert_eq!(
+        accepted,
+        ActivationCancelResult::Accepted {
+            challenge: Box::new(challenge.clone()),
+            envelope: original.clone()
+        }
+    );
+    assert_eq!(
+        api.prove_envelope(&input.request_token, &challenge, &proof, &join.keys)
+            .await
+            .unwrap(),
+        original
+    );
+    let session = original.open(&challenge, &join.keys).unwrap();
+    assert!(f
+        .db
+        .validate_access_token(
+            &auth::service::hash_token(&session.access_token),
+            &session.device
+        )
+        .await
+        .unwrap()
+        .is_some());
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM device_session_cancellations WHERE id=$1")
+            .bind(&input.id)
+            .fetch_one(f.db.pool())
+            .await
+            .unwrap();
+    assert_eq!(count, 0);
+}
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn cancellation_quota_is_bounded_and_retry_remains_available_at_limit() {
+    let f = Fixture::start(true).await;
+    let root = f.account().await;
+    let (input, state, mode) = attempt(&f, &root, &root.device).await;
+    let packet = ActivationCancel::make(
+        &state,
+        &mode,
+        &input.id,
+        &input.request_token,
+        &root.device,
+        &root.keys,
+    )
+    .unwrap();
+    assert_eq!(cancel(&f, &input, &packet).await.status(), StatusCode::OK);
+    // Synthetic SQL rows exercise the hard storage limit without 4095 HTTP requests.
+    sqlx::query("INSERT INTO device_session_cancellations(id,user_id,device_id,token_hash,digest) SELECT $1 || ':' || n::TEXT,$1,$2,'synthetic',decode(repeat('11',32),'hex') FROM generate_series(1,4095) n")
+        .bind(&root.id).bind(&root.device).execute(f.db.pool()).await.unwrap();
+    assert_eq!(cancel(&f, &input, &packet).await.status(), StatusCode::OK);
+    let mut next: Start = serde_json::from_slice(&serde_json::to_vec(&input).unwrap()).unwrap();
+    next.id = uuid::Uuid::new_v4().to_string();
+    let packet = ActivationCancel::make(
+        &state,
+        &mode,
+        &next.id,
+        &next.request_token,
+        &root.device,
+        &root.keys,
+    )
+    .unwrap();
+    assert_eq!(
+        cancel(&f, &next, &packet).await.status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    let other = f.account().await;
+    let current = self::state(&f, &other).await;
+    sqlx::query("INSERT INTO device_mode_cancellations(id,user_id,digest) SELECT $1 || ':' || n::TEXT,$1,decode(repeat('11',32),'hex') FROM generate_series(1,4096) n")
+        .bind(&other.id).execute(f.db.pool()).await.unwrap();
+    let event = Enable::make(&current, &uuid::Uuid::new_v4().to_string(), &other.keys).unwrap();
+    let packet = EnableCancel::make(event, current.anchor(), &other.keys).unwrap();
+    let api = liteseal_core::trusted_devices::activation::ActivationApi::new(&f.url).unwrap();
+    assert_eq!(
+        api.cancel_enable(&other.token, &packet, current.anchor())
+            .await
+            .unwrap_err()
+            .status,
+        Some(429)
+    );
+}
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn cancellation_rejects_wrong_signature_token_account_mode_and_duplicate_scope() {
+    let f = Fixture::start(true).await;
+    let root = f.account().await;
+    let (join, _) = authorized(&f, &root).await;
+    let (input, state, mode) = attempt(&f, &root, &join.status.ticket.device.device_id).await;
+    let challenge: SessionChallenge = begin(&f, &input).await.json().await.unwrap();
+    let proof = challenge.answer(&state, &mode, now(), &join.keys).unwrap();
+    let packet = ActivationCancel::make(
+        &state,
+        &mode,
+        &input.id,
+        &input.request_token,
+        &input.device,
+        &join.keys,
+    )
+    .unwrap();
+    for field in ["signature", "token_hash", "mode", "account"] {
+        let mut altered = packet.clone();
+        match field {
+            "signature" => altered.signature[0] ^= 1,
+            "token_hash" => altered.token_hash[0] ^= 1,
+            "mode" => altered.mode[0] ^= 1,
+            _ => altered.account = uuid::Uuid::new_v4().to_string(),
+        }
+        assert!(!cancel(&f, &input, &altered).await.status().is_success());
+    }
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM device_session_cancellations WHERE id=$1")
+            .bind(&input.id)
+            .fetch_one(f.db.pool())
+            .await
+            .unwrap();
+    assert_eq!(count, 0);
+    assert_eq!(cancel(&f, &input, &packet).await.status(), StatusCode::OK);
+    assert_eq!(prove(&f, &input, &proof).await.status(), StatusCode::GONE);
+    assert!(!sent_status_accepted(&f, &input).await);
+    let different = ActivationCancel::make(
+        &state,
+        &mode,
+        &input.id,
+        &input.request_token,
+        &root.device,
+        &root.keys,
+    )
+    .unwrap();
+    assert_eq!(
+        cancel(&f, &input, &different).await.status(),
+        StatusCode::CONFLICT
+    );
 }
 #[tokio::test]
 #[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
