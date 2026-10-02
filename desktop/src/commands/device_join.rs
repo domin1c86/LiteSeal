@@ -66,7 +66,8 @@ pub(crate) fn invalidate(state: &AppState, suspend: bool) -> Result<(), String> 
     if let Some(cache) = runtime.cache.take() {
         retire(&mut runtime, cache)?;
     }
-    Ok(())
+    drop(runtime);
+    super::device_activation::invalidate(state, suspend)
 }
 pub(crate) fn resume(state: &AppState) -> Result<(), String> {
     let mut runtime = state
@@ -75,7 +76,8 @@ pub(crate) fn resume(state: &AppState) -> Result<(), String> {
         .map_err(|_| "加入设备锁不可用")?;
     runtime.epoch = runtime.epoch.checked_add(1).ok_or("加入设备代次无效")?;
     runtime.suspended = false;
-    Ok(())
+    drop(runtime);
+    super::device_activation::resume(state)
 }
 fn open(
     state: &AppState,
@@ -88,6 +90,7 @@ fn open(
     let keys = profile.keys()?;
     let database = store.database(id)?;
     if runtime.cache.as_ref().is_none_or(|cache| cache.id != id) {
+        super::device_activation::invalidate(state, false)?;
         if let Some(cache) = runtime.cache.take() {
             retire(runtime, cache)?;
         }
@@ -267,6 +270,7 @@ pub fn forget(state: &AppState, id: String) -> Result<(), String> {
     }
     runtime.epoch = runtime.epoch.checked_add(1).ok_or("加入设备代次无效")?;
     drop(ctx);
+    super::device_activation::release_profile(state, &id)?;
     store.remove(&id)
 }
 pub fn abandon(state: &AppState, id: String) -> Result<JoinSnapshot, String> {

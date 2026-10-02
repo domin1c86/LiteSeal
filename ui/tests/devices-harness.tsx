@@ -1,5 +1,6 @@
 import { root } from "./device-harness-root";
 import "./joining-harness";
+import "./activation-harness";
 import DeviceControlPanel from "../src/components/DeviceControlPanel";
 import type { DeviceControlSnapshot, DeviceRequest, DeviceTask } from "../../electron/contracts";
 import "../src/theme.css";

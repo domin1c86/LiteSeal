@@ -1,5 +1,16 @@
 # P0/P1 验收记录（待执行）
 
+## 2026-10-02 加入端正式激活桌面接线短测
+
+汇总 `join-activation-summary-2026-10-02.json` 记录测试前提交 `213fc30` 与有改动工作树，保留工程、最终桌面、界面和构建证据；报告均在 `target/test-results/`，不包含真实凭据。
+
+- 完整 `npm test`：`join-activation-engineering-2026-10-02.txt` 为 18 Node/Electron、278 普通 Rust、0 失败，69 数据库用例默认 ignored。新增 `desktop/tests/device_activation.rs` 四项，随机隔离 DPAPI/SQLite/原生目标和合成 HTTP：八命令拒绝密钥/令牌/路径/mode 注入及未确认档案；准备/取消/整理保留原编号与原账号/加入身份文件；锁定后解锁、切加入档案或清除会话均拒绝迟到引导，不创建激活任务；接受原结果后只保存独立正常档案，清除会话阻止迟到保存，不恢复凭据。
+- 四项最后专项复跑见 `join-activation-final-desktop-2026-10-02.txt`，临时目录在缓存 SQLite 句柄及隔离原生记录释放后清理。原加入 3 项、原生保护 2 项回归通过。测试夹具先修正 Accepted 的 Box 类型后执行成功；此前无通过记录替代失败。保存/检查 HTTP 使用合成响应，不代表真实 PostgreSQL 服务验收。
+- Electron 主进程最终补验 2/2、0.37 秒：新八命令都受系统锁门禁限制，并在离线档案窗口拒绝；这两项与 18 项工程入口重叠，不重复累加。Rust 协调器和主进程双重失效保护，无页面解锁底层入口。API 继续使用已有 60 秒 Rust dispatch / 65 秒桥超时，超时保留原任务；未新增秘密或文件字节的桥传输。
+- `devices-ui-1DuQ5z/result.json`：实际 Electron Chromium，模拟业务接口、47 秒，深浅色/宽窄四配置各 8 原设备、11 加入、7 正式激活用例，0 renderer 错误/横向溢出。验证父面板入口的档案范围、明确准备、原编号继续、口令清除、接受后单独保存、终态事实/整理、取消竞争、冲突/unknown 不重建、系统暂停与关闭丢弃迟到结果。两张同版激活宽深/窄浅截图已核对；此前 `devices-ui-jHPha4` 报告保留，最终报告增加实际组件入口检查，不将模拟界面当作服务联调。
+- `group-ui-NTeikv` 宽窄各 16 项和 `ui-style-s4kO18` 72 张截图回归入口通过。`join-activation-build-2026-10-02.txt` 生产构建完成，Rust release 48.69 秒；格式、全 workspace/all-targets Clippy、核心 FFI 和两专项脚本语法检查通过。既有 LNK4098/LNK4099 保留；首次受沙箱限制的 esbuild spawn EPERM 后在批准的本地构建执行环境成功，不计首次失败为通过。
+- 本轮服务器没有新增迁移；新增桌面命令依赖已实现的原激活/会话验证。专用库和真实多人联调因 Docker 引擎启动故障未执行，69 ignored 不计通过。没有新长期测试，没有操作真实用户资料/业务库/后台测试或纳入原未跟踪预览和 `src-tauri/`，不推送。正常档案选择、原设备明确切换、刷新和消息后台尚未开放，实机/双 Windows/独立审查继续待验。
+
 ## 2026-10-02 首次激活配置引导短测
 
 - 最终完整工程 `activation-bootstrap-engineering-2026-10-02.txt`：18 Node/Electron、274 普通 Rust、0 失败；69 数据库用例 ignored，不计通过。生产构建 `activation-bootstrap-build-2026-10-02.txt` 完成，Rust release 1 分 47 秒；格式、全 workspace/all-targets Clippy、核心 FFI 通过，既有链接警告保留。再次执行专用激活入口，仍在测试库准备阶段失败；Docker 引擎管道仍不可用，未修改业务数据或运行长期测试。

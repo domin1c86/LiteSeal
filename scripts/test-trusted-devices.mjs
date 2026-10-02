@@ -54,6 +54,7 @@ try {
     ['liteseal-core','device_witness_windows_test','isolated native Windows credentials and parent/child mutex'],
     ['liteseal-core','device_profiles_test','isolated DPAPI profiles, binding, quota and safe cleanup'],
     ['liteseal-desktop','device_join','joining IPC, password invalidation, pause and retired handles'],
+    ['liteseal-desktop','device_activation','accepted profile activation IPC, original tasks, pause and immutable ordinary identity'],
     ['liteseal-desktop','device_protection','native protection in original/join commands, rollback and preserved identity'],
   ]) {
     const args=['test','--locked','-p',crate,'--test',target];const tested=execute('cargo',args);

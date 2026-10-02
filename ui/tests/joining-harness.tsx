@@ -14,6 +14,7 @@ function fixture(id:string,phase:DeviceTaskPhase="draft"):DeviceJoinSnapshot {
 }
 const listing=():DeviceJoinListing[]=>corrupt?[{id:"empty-or-corrupt",profile:null,error:"档案不可用"}]:[...profiles.values()].map(row=>({id:row.profile.id,profile:row.profile,error:null}));
 const api={
+  get_join_activation:async({profileId}:{profileId:string})=>{calls.push({name:"activation-get",args:{profileId}});return {profile_id:profileId,tasks:[],normal:null};},
   list_device_join_profiles:async()=>listing(),
   create_device_join_profile:async(args:any)=>{calls.push({name:"create",args});const view=fixture(`profile-${++serial}`);view.profile.origin=args.origin;view.profile.username=args.username;view.profile.device_name=args.deviceName;profiles.set(view.profile.id,view);return structuredClone(view);},
   get_device_join_profile:async({profileId}:{profileId:string})=>{calls.push({name:"get",args:{profileId}});return delayGet===profileId?new Promise<DeviceJoinSnapshot>(resolve=>{getDeferred=resolve;}):structuredClone(profiles.get(profileId)!);},
@@ -57,7 +58,8 @@ const open=async()=>{panel();await sleep();await click("打开申请档案");};
   await fill("核对原设备指纹",fingerprint);check(button("确认原设备并继续")!.disabled,"root unchecked accepted");document.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click();await sleep();await click("确认原设备并继续");
   check(calls.find(row=>row.name==="confirm")!.args.confirmedFingerprint===fingerprint,"candidate auto-confirmed");results.push("independent full original fingerprint and explicit confirmation");
   await click("查询或继续原申请");await click("查询或继续原申请");check(document.body.textContent!.includes("授权已验签确认"),"accepted evidence not displayed");
-  check(!button("整理已结束档案")&&document.body.textContent!.includes("聊天激活尚未开放"),"authorized key can be erased or activated");results.push("verified authorization retains key without normal activation");
+  check(!button("整理已结束档案")&&document.body.textContent!.includes("消息界面尚未开放")&&button("管理正式激活申请"),"authorized key can be erased or missing formal activation entry");results.push("verified authorization retains key and offers explicit activation management without messaging");
+  await click("管理正式激活申请");check(document.querySelector('section[aria-label="正式激活申请"]'),"parent did not open activation management");check(calls.find(c=>c.name==="activation-get")!.args.profileId==="profile-1","parent activated wrong profile");await click("收起正式激活");results.push("accepted joining panel opens scoped activation view without ordinary identity selection");
   panel();await sleep();await click("打开申请档案");check(calls.filter(row=>row.name==="create").length===1,"resume created another identity");check(document.body.textContent!.includes("授权已验签确认"),"resume lost original state");results.push("existing profile resume without new identity");
   reset();profiles.set("first",fixture("first","awaiting_authorization"));await open();delayStep=true;button("查询或继续原申请")!.click();await sleep();
   check(!button("请求取消申请")!.disabled,"cannot cancel pending network step");await click("请求取消申请");const old=structuredClone(profiles.get("first")!.join.task);old.phase="complete";stepDeferred!({task:old,condition:"terminal",http_status:null});await sleep();

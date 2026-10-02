@@ -16,6 +16,52 @@ pub struct Request {
 #[derive(Deserialize)]
 #[serde(tag = "name", content = "args", deny_unknown_fields)]
 pub enum Command {
+    #[serde(rename = "get_join_activation")]
+    GetJoinActivation {
+        #[serde(rename = "profileId")]
+        profile_id: String,
+    },
+    #[serde(rename = "prepare_join_activation")]
+    PrepareJoinActivation {
+        #[serde(rename = "profileId")]
+        profile_id: String,
+    },
+    #[serde(rename = "join_activation_step")]
+    JoinActivationStep {
+        #[serde(rename = "profileId")]
+        profile_id: String,
+        id: String,
+        password: Option<String>,
+    },
+    #[serde(rename = "inspect_join_activation")]
+    InspectJoinActivation {
+        #[serde(rename = "profileId")]
+        profile_id: String,
+        id: String,
+    },
+    #[serde(rename = "cancel_join_activation")]
+    CancelJoinActivation {
+        #[serde(rename = "profileId")]
+        profile_id: String,
+        id: String,
+    },
+    #[serde(rename = "forget_join_activation")]
+    ForgetJoinActivation {
+        #[serde(rename = "profileId")]
+        profile_id: String,
+        id: String,
+    },
+    #[serde(rename = "save_join_activation")]
+    SaveJoinActivation {
+        #[serde(rename = "profileId")]
+        profile_id: String,
+        id: String,
+    },
+    #[serde(rename = "clear_join_activation_session")]
+    ClearJoinActivationSession {
+        #[serde(rename = "profileId")]
+        profile_id: String,
+    },
     #[serde(rename = "list_device_join_profiles")]
     ListDeviceJoinProfiles {},
     #[serde(rename = "create_device_join_profile")]
@@ -839,6 +885,34 @@ impl Response {
 
 pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, String> {
     let result = match command {
+        Command::GetJoinActivation { profile_id } => {
+            serde_json::to_value(commands::device_activation::snapshot(state, profile_id)?)
+        }
+        Command::PrepareJoinActivation { profile_id } => {
+            serde_json::to_value(commands::device_activation::prepare(state, profile_id).await?)
+        }
+        Command::JoinActivationStep {
+            profile_id,
+            id,
+            password,
+        } => serde_json::to_value(
+            commands::device_activation::step(state, profile_id, id, password).await?,
+        ),
+        Command::InspectJoinActivation { profile_id, id } => {
+            serde_json::to_value(commands::device_activation::inspect(state, profile_id, id).await?)
+        }
+        Command::CancelJoinActivation { profile_id, id } => {
+            serde_json::to_value(commands::device_activation::cancel(state, profile_id, id)?)
+        }
+        Command::ForgetJoinActivation { profile_id, id } => {
+            serde_json::to_value(commands::device_activation::forget(state, profile_id, id)?)
+        }
+        Command::SaveJoinActivation { profile_id, id } => {
+            serde_json::to_value(commands::device_activation::save(state, profile_id, id).await?)
+        }
+        Command::ClearJoinActivationSession { profile_id } => serde_json::to_value(
+            commands::device_activation::clear_session(state, profile_id)?,
+        ),
         Command::ListDeviceJoinProfiles {} => {
             serde_json::to_value(commands::device_join::list(state)?)
         }

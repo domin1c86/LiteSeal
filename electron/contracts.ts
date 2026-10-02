@@ -13,6 +13,14 @@ export interface GroupPoll { id: string; creator: string; question: string; opti
 export interface GroupCollaboration { polls: GroupPoll[]; pin: string | null; pin_unavailable: boolean; pin_revision: number; pending: boolean; conflict: boolean; pending_message: string | null }
 export type CollaborationCommand = { kind: "mention"; text: string; mentions: CollaborationMember[] } | { kind: "poll"; question: string; options: string[] } | { kind: "vote"; poll: string; option: string; revision: number } | { kind: "close"; poll: string; revision: number } | { kind: "pin"; message: string | null; revision: number };
 export interface CommandMap {
+  get_join_activation: { args: { profileId: string }; result: JoinActivationSnapshot };
+  prepare_join_activation: { args: { profileId: string }; result: ActivationTask };
+  join_activation_step: { args: { profileId: string; id: string; password?: string }; result: ActivationProgress };
+  inspect_join_activation: { args: { profileId: string; id: string }; result: ActivationProgress };
+  cancel_join_activation: { args: { profileId: string; id: string }; result: ActivationTask };
+  forget_join_activation: { args: { profileId: string; id: string }; result: void };
+  save_join_activation: { args: { profileId: string; id: string }; result: NormalJoinProfile };
+  clear_join_activation_session: { args: { profileId: string }; result: void };
   list_device_join_profiles: { args: {}; result: DeviceJoinListing[] };
   create_device_join_profile: { args: { origin: string; username: string; deviceName: string }; result: DeviceJoinSnapshot };
   get_device_join_profile: { args: { profileId: string }; result: DeviceJoinSnapshot };
@@ -174,6 +182,10 @@ export interface CommandMap {
   clear_expired_messages: { args: {  }; result: number };
   clear_downloaded_attachments: { args: {  }; result: number };
 }
+export interface ActivationTask { id: string; revision: number; kind: "enable" | "login"; stage: "prepared" | "started" | "proving" | "conflict" | "complete" | "cancelled" | "ineligible" | "ended"; cancel_requested: boolean; closed?: { reason: "cancelled" | "expired" | "directory_changed" | "credentials_changed" | "session_ended"; accepted: boolean } }
+export interface ActivationProgress { task: ActivationTask; condition: "complete" | "cancelled" | "ineligible" | "needs_password" | "session_required" | "retry" | "conflict" | "pending" | "ended"; http_status: number | null }
+export interface NormalJoinProfile { id: string; origin: string; username: string; device_name: string; account: string; device: string; root_fingerprint: string; encryption_fingerprint: string; signing_fingerprint: string; revision: number; has_saved_session: boolean; access_expired: boolean; eligible: boolean }
+export interface JoinActivationSnapshot { profile_id: string; tasks: ActivationTask[]; normal: NormalJoinProfile | null }
 export type CommandName = keyof CommandMap;
 export interface DeviceJoinProfile { id: string; origin: string; username: string; device_name: string; local_device_id: string; encryption_fingerprint: string; signing_fingerprint: string }
 export interface DeviceJoinListing { id: string; profile: DeviceJoinProfile | null; error: string | null }
@@ -204,6 +216,7 @@ export interface GroupActivity { id:string;creator:string;title:string;start_at:
 export interface GroupExtensions { attachments:{id:string;blob:string;name:string;size:number;mime:string;duration_ms:number|null}[];activities:GroupActivity[];pending:boolean;conflict:boolean;pending_root:string|null }
 export type GroupExtensionCommand={kind:"activity";title:string;start_at:number;timezone:string;location:string;description:string}|{kind:"respond";activity:string;answer:GroupAnswer;revision:number}|{kind:"close"|"cancel";activity:string;revision:number};
 export const commandNames = [
+  "get_join_activation", "prepare_join_activation", "join_activation_step", "inspect_join_activation", "cancel_join_activation", "forget_join_activation", "save_join_activation", "clear_join_activation_session",
   "list_device_join_profiles", "create_device_join_profile", "get_device_join_profile", "confirm_device_join_root", "device_join_step", "cancel_device_join", "abandon_device_join", "forget_device_join_profile",
   "get_device_control", "inspect_device_request", "prepare_device_challenge", "prepare_device_grant", "prepare_device_revoke", "device_task_step", "cancel_device_task", "discard_device_task",
   "get_group_extensions", "sync_group_extensions", "submit_group_extension", "retry_group_extension", "cancel_group_extension", "select_group_attachment", "stage_group_attachment_file", "stage_group_recorded_audio", "stage_group_clipboard_image", "group_attachment_tasks", "group_attachment_step", "publish_group_attachment", "cancel_group_attachment", "begin_group_attachment_download", "export_group_attachment", "clear_group_attachment_cache",

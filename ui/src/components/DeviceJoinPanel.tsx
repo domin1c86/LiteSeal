@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import PanelDialog from "./PanelDialog";
+import JoinActivationPanel from "./JoinActivationPanel";
 import { getDesktopApi } from "../lib/desktopApi";
 import type { DeviceJoinListing, DeviceJoinSnapshot, DeviceProgress, DeviceTaskPhase } from "../../../electron/contracts";
 
@@ -13,6 +14,7 @@ export default function DeviceJoinPanel({ onClose, initialOrigin="http://localho
   const [origin,setOrigin]=useState(initialOrigin),[username,setUsername]=useState(initialUsername),[name,setName]=useState("第二台 Windows");
   const [password,setPassword]=useState(""),[rootInput,setRootInput]=useState(""),[rootConfirmed,setRootConfirmed]=useState(false);
   const [busy,setBusy]=useState(false),[error,setError]=useState(""),[status,setStatus]=useState("");
+  const [showActivation,setShowActivation]=useState(false);
   const mounted=useRef(false),paused=useRef(false),epoch=useRef(0),operation=useRef<number|null>(null),active=useRef<DeviceJoinSnapshot|null>(null);
   function apply(view:DeviceJoinSnapshot|null) { active.current=view;setSnapshot(view); }
   async function run(work:()=>Promise<void>, replace=false) {
@@ -25,6 +27,7 @@ export default function DeviceJoinPanel({ onClose, initialOrigin="http://localho
   const current=(generation:number)=>mounted.current&&!paused.current&&epoch.current===generation;
   async function refreshList() {const generation=epoch.current;const rows=await getDesktopApi().list_device_join_profiles({});if(current(generation))setProfiles(rows);}
   async function select(id:string) {
+    setShowActivation(false);
     setPassword("");setRootInput("");setRootConfirmed(false);setStatus("");apply(null);
     await run(async()=>{const generation=epoch.current;const view=await getDesktopApi().get_device_join_profile({profileId:id});if(current(generation))apply(view);},true);
   }
@@ -51,7 +54,7 @@ export default function DeviceJoinPanel({ onClose, initialOrigin="http://localho
   const normalized=rootInput.trim().toLowerCase();
   const correctRoot=!!task?.root_fingerprint&&/^[a-f0-9]{64}$/.test(normalized)&&normalized===task.root_fingerprint;
   return <PanelDialog label="加入另一台 Windows" wide onClose={onClose}>
-    <p>生成独立设备密钥，由此 Windows 用户保护。当前只完成原设备授权流程，聊天激活尚未开放；已有身份与历史保留。</p>
+    <p>生成独立设备密钥，由此 Windows 用户保护。完成原设备授权后可管理正式激活和本机会话档案；消息界面尚未开放，已有身份与历史保留。</p>
     <h3>本机加入档案</h3>
     <button disabled={busy||paused.current} onClick={()=>void run(refreshList)}>刷新加入档案</button>
     {profiles.map(row=><div key={row.id}><span>{row.profile?`${row.profile.device_name} · ${row.profile.username} · ${row.profile.origin}`:"档案不可用，数据已保留"}</span>
@@ -95,7 +98,8 @@ export default function DeviceJoinPanel({ onClose, initialOrigin="http://localho
         }}>仅放弃未签署申请</button>}
       </>}
       {snapshot.join.local_abandonment&&<p role="status">仅结束未签署的本机申请，没有确认远端删除；已有开始申请可能需要等待过期。</p>}
-      {task.phase==="complete"&&<p role="status">原设备授权已验签确认。聊天激活尚未开放，此档案保留独立密钥，不会登录或连接消息服务。需要撤销时请在原设备操作。</p>}
+      {task.phase==="complete"&&<><p role="status">原设备授权已验签确认。此档案保留独立密钥，可管理正式激活申请；消息界面尚未开放。需要撤销时请在原设备操作。</p>
+        {!showActivation?<button disabled={paused.current} onClick={()=>setShowActivation(true)}>管理正式激活申请</button>:<JoinActivationPanel key={snapshot.profile.id} profileId={snapshot.profile.id} onClose={()=>setShowActivation(false)}/>}</>}
       {["cancelled","expired","revoked"].includes(task.phase)&&<button disabled={busy} onClick={()=>{
         if(!window.confirm("删除这个已结束的本机加入档案和独立密钥？不会删除原身份或历史，也不代替远端撤销。"))return;
         void run(async()=>{const generation=epoch.current;await getDesktopApi().forget_device_join_profile({profileId:snapshot.profile.id});if(current(generation)){apply(null);setStatus("已整理结束的本机档案");}await refreshList();});

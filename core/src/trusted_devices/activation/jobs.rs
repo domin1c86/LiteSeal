@@ -978,6 +978,24 @@ impl Coordinator {
     pub fn resume(&self) -> Result<(), String> {
         self.gate.unlock()
     }
+    pub async fn discover_mode(&self, keys: &KeyPair) -> Result<Option<Enable>, String> {
+        self.owner.keys(keys)?;
+        let lease = self.gate.lease()?;
+        let _network = self.network.lock().await;
+        let state = self.with(&lease, |s| s.state(keys))?;
+        let authority = self.owner.member(&state)?;
+        let mode = self
+            .api
+            .discover_mode(&state, &self.owner.device.device_id, keys)
+            .await
+            .map_err(|e| e.to_string())?;
+        self.with(&lease, |s| {
+            if self.owner.member(&s.state(keys)?)? != authority {
+                return Err(bad());
+            }
+            Ok(mode)
+        })
+    }
     pub fn prepare_enable(&self, keys: &KeyPair) -> Result<View, String> {
         let lease = self.gate.lease()?;
         self.with(&lease, |s| s.prepare_enable(keys).map(|t| t.view()))
