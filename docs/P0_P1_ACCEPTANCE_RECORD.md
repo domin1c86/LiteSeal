@@ -1,5 +1,16 @@
 # P0/P1 验收记录（待执行）
 
+## 2026-10-02 v3 消息协调器短测
+
+- `direct_api_test` 6/6（0.06 秒）：原点/编号/摘要/时间及 ACK 受众绑定，unknown 只可作为查询结果，取消返回 unknown 拒绝；错字段/重复 ACK/非法页/越界、32 KiB 声明及分块累计、截断均失败。真实本机 TCP 返回 307 后另一个监听器未收到请求，ACK 非 204 不清队列。均为合成服务响应，不是伪造实际服务器接受证明。
+- `direct_coordinator_test` 4/4（1.38 秒）：原生保护临时 SQLite、真实本机 TCP/同步屏障；查询期间取消增加修订，旧接受回包不覆盖意图；令牌轮换和锁定后解锁仍拒绝旧租约，原任务保留，续步只处理原包。未发布取消本机幂等，无消息查询/提交。另旧加密封套缺取消字段的兼容用例通过。不是 Windows 原生锁屏、强制终止或内存取证。
+- 设备专项 `trusted-devices-2026-10-02T01-17-33-115Z.json` passed，89 项及原离线示例，235 秒包含构建/竞争等待；仅随机系统目标和隔离资料。专用 PostgreSQL 16.14 `database-2026-10-02T01-16-39-858Z.json` 为 48/48、0 失败/跳过；普通 ignored 不算通过。无业务库读写、凭据输出或仓库保存。
+- v3 实际专项 `direct-delivery-2026-10-02T01-13-11-637Z.json` 初批 11/11、49.84 秒；最后 `direct-delivery-2026-10-02T01-30-28-064Z.json` 11/11、37.43 秒。两新增协调器用例使用真实 HTTP/PostgreSQL及四份 Windows 原生保护 SQLite：丢接受回包后本机请求取消，重开查询确认实际已经接受；独立 ACK 成功回包丢失后原 ACK 重试，自己的副本及第二端回复通过。未钉源根时不解密/不落记录，错误指纹拒绝；独立确认后继续原队列。SQL 仅一条原接受记录，未重新签发副本。
+- 目录前进后旧包冲突仍保留原 wire；持久取消后重开，取消 fence 回包丢失再查原结果完成；旧包迟到仍 cancelled、无受众队列，显式新建才有新编号。处理最后一个包仍提示本机 ACK 工作，发送并确认后队列可空。第二设备 operational 会话由 SQL 夹具写入，不是正式激活、普通登录或四个实际 Windows 客户端；poll 包计数不被称为新增未读或通知。
+- 首轮工程 `message-coordinator-engineering-2026-10-02.txt` 在并行执行专用入口时，服务器测试 EXE 因 OS error 32 未启动，按失败保留；相关进程完成后单独复跑 `message-coordinator-engineering-final-2026-10-02.txt` 18 Node/Electron、235 Rust 通过。最后 ACK 工作标记修改后，顺序完整复跑 `message-coordinator-engineering-complete-2026-10-02.txt` 18/235、0 失败，随后生产构建 `message-coordinator-final-build-2026-10-02.txt` 通过；此前构建日志同样保留，既有 LNK4098/LNK4099 不隐藏。
+- 初次编译错误的指纹函数引用、同步锁解引用和后续 Clippy 测试模块位置已修正。最终格式/全 workspace/all-targets Clippy/FFI `message-coordinator-final-static-2026-10-02.txt` 通过；初版静态日志另存 `message-coordinator-static-2026-10-02.txt`。没有把未启动的服务器测试当作通过，也没有改变旧 SQLite/服务器迁移。
+- 本轮无页面/群协议/原产品网络入口变更，不重复群模拟 UI、风格截图或三客户端演示；原产品 PostgreSQL 回归在上述 48 项实际执行，前批三 Rust 客户端证据保留。没有运行新长期测试、推送、安装或签名。正式激活、应用后台及 IPC/页面、旧操作/媒体、新备份/历史授权仍待实现；双 Windows、真实系统场景及独立审查继续待验，T23 全体验不勾选。
+
 ## 2026-10-02 v3 HTTP 原子投递短测
 
 - 新随机标记 PostgreSQL 16.14、真实 Axum/reqwest HTTP、合成隔离身份；`database-2026-10-02T00-51-27-925Z.json` 全量 45/45、0 失败/跳过（原 37 + 初批 8）。新增联调修复后 `direct-delivery-2026-10-02T00-55-54-010Z.json` 专项 9/9、47.17 秒含构建/锁等待；最后发送方拉黑/媒体拒绝反例复跑 `direct-delivery-2026-10-02T00-58-39-505Z.json` 为 9/9、0 失败/跳过，24.32 秒。新增真实本机存储联调单独执行，重叠项不重复计数。普通 npm 的 ignored 只表示另行测试，不算通过。

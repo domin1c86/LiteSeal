@@ -937,3 +937,247 @@ async fn maximum_text_page_respects_wire_budget_and_byte_quota() {
         Outcome::Unknown { .. }
     ));
 }
+
+#[tokio::test]
+#[cfg(windows)]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn message_coordinator_drives_four_stores_lost_acceptance_and_ack_without_resigning() {
+    use liteseal_core::{
+        backup::WorkDirectory,
+        trusted_devices::{
+            messages::{
+                coordinator::{Condition, MessageCoordinator},
+                Owner,
+            },
+            tasks::anchor_fingerprint,
+            witness::platform::Protection,
+        },
+    };
+    let (f, lose) = Fixture::start_with_loss().await;
+    let a = f.account().await;
+    let b = f.account().await;
+    let (aj, as_) = grant(&f, &a, &directory(&f, &a)).await;
+    let (bj, bs) = grant(&f, &b, &directory(&f, &b)).await;
+    let at = synthetic_activation(&f, &a, &aj).await;
+    let bt = synthetic_activation(&f, &b, &bj).await;
+    accepted(&f, &a, &b).await;
+    accepted(&f, &b, &a).await;
+    let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
+    let protection = Protection::isolated_test();
+    let open = |name: &str, account: &str, device: &str, keys: &crypto::KeyPair, token: &str| {
+        let actor = MessageCoordinator::open_with_protection(
+            &work.0.join(format!("{name}.db")),
+            Owner::new(&f.url, account, device, keys).unwrap(),
+            keys,
+            protection.clone(),
+        )
+        .unwrap();
+        for root in [as_.anchor(), bs.anchor()] {
+            actor
+                .confirm_root(root, &anchor_fingerprint(root), keys)
+                .unwrap();
+        }
+        actor.renew_session(token.into()).unwrap();
+        actor
+    };
+    let sender = open("root-a", &a.id, &a.device, &a.keys, &a.token);
+    let prepared = sender
+        .prepare_text(&b.id, "协调器原包🙂", &a.keys)
+        .await
+        .unwrap();
+    assert_eq!(prepared.condition, Condition::Prepared);
+    let id = prepared.task.unwrap().id;
+    *lose.lock().unwrap() = Some("/direct/v3/batches".into());
+    let progress = sender.step(&id, &a.keys).await.unwrap();
+    assert_eq!(progress.condition, Condition::Retry);
+    assert!(sender.history(None, 100, &a.keys).unwrap().is_empty());
+    assert!(
+        sender
+            .request_cancel(&id, &a.keys)
+            .unwrap()
+            .cancel_requested
+    );
+    drop(sender);
+    let sender = open("root-a", &a.id, &a.device, &a.keys, &a.token);
+    let resolved = sender.step(&id, &a.keys).await.unwrap();
+    assert_eq!(resolved.condition, Condition::Accepted);
+    assert!(resolved.task.cancel_requested);
+    assert_eq!(sender.text(&id, &a.keys).unwrap(), "协调器原包🙂");
+    let own = open(
+        "second-a",
+        &a.id,
+        &aj.status.ticket.device.device_id,
+        &aj.keys,
+        &at,
+    );
+    let peer = MessageCoordinator::open_with_protection(
+        &work.0.join("root-b.db"),
+        Owner::new(&f.url, &b.id, &b.device, &b.keys).unwrap(),
+        &b.keys,
+        protection.clone(),
+    )
+    .unwrap();
+    peer.confirm_root(bs.anchor(), &anchor_fingerprint(bs.anchor()), &b.keys)
+        .unwrap();
+    peer.renew_session(b.token.clone()).unwrap();
+    assert_eq!(
+        peer.poll(&b.keys).await.unwrap().condition,
+        Condition::NeedsTrust
+    );
+    assert!(peer.history(None, 100, &b.keys).unwrap().is_empty());
+    assert!(peer
+        .confirm_root(
+            as_.anchor(),
+            "wrong independently checked fingerprint",
+            &b.keys
+        )
+        .is_err());
+    peer.confirm_root(as_.anchor(), &anchor_fingerprint(as_.anchor()), &b.keys)
+        .unwrap();
+    let second = open(
+        "second-b",
+        &b.id,
+        &bj.status.ticket.device.device_id,
+        &bj.keys,
+        &bt,
+    );
+    for (actor, keys) in [(&own, &aj.keys), (&peer, &b.keys), (&second, &bj.keys)] {
+        let received = actor.poll(keys).await.unwrap();
+        assert_eq!(received.received, 1);
+        assert!(received.has_more);
+        assert_eq!(actor.text(&id, keys).unwrap(), "协调器原包🙂");
+        *lose.lock().unwrap() = Some("/direct/v3/ack".into());
+        assert_eq!(actor.poll(keys).await.unwrap().condition, Condition::Retry);
+        let drained = actor.poll(keys).await.unwrap();
+        assert_eq!(drained.acknowledged, 1);
+        assert!(!drained.has_more);
+        assert_eq!(actor.history(None, 100, keys).unwrap().len(), 1);
+    }
+    peer.hide(&id, &b.keys).unwrap();
+    assert!(peer.text(&id, &b.keys).is_err());
+    assert!(peer.history(None, 100, &b.keys).unwrap().is_empty());
+    let prepared = second
+        .prepare_text(&a.id, "第二端回复", &bj.keys)
+        .await
+        .unwrap()
+        .task
+        .unwrap();
+    assert_eq!(
+        second.step(&prepared.id, &bj.keys).await.unwrap().condition,
+        Condition::Accepted
+    );
+    assert_eq!(sender.poll(&a.keys).await.unwrap().received, 1);
+    assert_eq!(sender.text(&prepared.id, &a.keys).unwrap(), "第二端回复");
+    let accepted: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM direct_v3_batches WHERE sender=$1 AND state='accepted'",
+    )
+    .bind(&a.id)
+    .fetch_one(f.db.pool())
+    .await
+    .unwrap();
+    assert_eq!(accepted, 1);
+}
+
+#[tokio::test]
+#[cfg(windows)]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn message_coordinator_keeps_stale_wire_and_durable_cancel_after_lost_fence() {
+    use liteseal_core::{
+        backup::WorkDirectory,
+        trusted_devices::{
+            messages::{
+                coordinator::{Condition, MessageCoordinator},
+                Owner, Store, TaskState,
+            },
+            tasks::anchor_fingerprint,
+            witness::platform::Protection,
+        },
+    };
+    let (f, lose) = Fixture::start_with_loss().await;
+    let a = f.account().await;
+    let b = f.account().await;
+    accepted(&f, &a, &b).await;
+    let as_ = directory(&f, &a);
+    let bs = directory(&f, &b);
+    let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
+    let path = work.0.join("message.db");
+    let protection = Protection::isolated_test();
+    let owner = Owner::new(&f.url, &a.id, &a.device, &a.keys).unwrap();
+    let open = || {
+        let actor = MessageCoordinator::open_with_protection(
+            &path,
+            owner.clone(),
+            &a.keys,
+            protection.clone(),
+        )
+        .unwrap();
+        for root in [as_.anchor(), bs.anchor()] {
+            actor
+                .confirm_root(root, &anchor_fingerprint(root), &a.keys)
+                .unwrap();
+        }
+        actor.renew_session(a.token.clone()).unwrap();
+        actor
+    };
+    let actor = open();
+    let task = actor
+        .prepare_text(&b.id, "过时待发", &a.keys)
+        .await
+        .unwrap()
+        .task
+        .unwrap();
+    let original = {
+        let mut s = Store::open(&path, owner.clone(), protection.witness(&path).unwrap()).unwrap();
+        s.original(&task.id, &a.keys).unwrap()
+    };
+    grant(&f, &b, &bs).await;
+    assert_eq!(
+        actor.step(&task.id, &a.keys).await.unwrap().condition,
+        Condition::Conflict
+    );
+    let cancelling = actor.request_cancel(&task.id, &a.keys).unwrap();
+    assert!(cancelling.cancel_requested);
+    drop(actor);
+    let actor = open();
+    assert!(actor.tasks(&a.keys).unwrap()[0].cancel_requested);
+    *lose.lock().unwrap() = Some("/direct/v3/cancel".into());
+    assert_eq!(
+        actor.step(&task.id, &a.keys).await.unwrap().condition,
+        Condition::Retry
+    );
+    drop(actor);
+    let actor = open();
+    let cancelled = actor.step(&task.id, &a.keys).await.unwrap();
+    assert_eq!(cancelled.condition, Condition::Cancelled);
+    assert_eq!(cancelled.task.state, TaskState::Cancelled);
+    let saved = {
+        let mut s = Store::open(&path, owner, protection.witness(&path).unwrap()).unwrap();
+        s.original(&task.id, &a.keys).unwrap()
+    };
+    assert_eq!(saved.to_wire().unwrap(), original.to_wire().unwrap());
+    assert!(matches!(
+        send(&f, &a.token, &original)
+            .await
+            .json::<Outcome>()
+            .await
+            .unwrap(),
+        Outcome::Cancelled { .. }
+    ));
+    let fresh = actor
+        .prepare_text(&b.id, "过时待发", &a.keys)
+        .await
+        .unwrap()
+        .task
+        .unwrap();
+    assert_ne!(fresh.id, task.id);
+    assert_eq!(
+        actor.step(&fresh.id, &a.keys).await.unwrap().condition,
+        Condition::Accepted
+    );
+    let stale: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM direct_v3_deliveries WHERE batch=$1")
+        .bind(task.id)
+        .fetch_one(f.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(stale, 0);
+}

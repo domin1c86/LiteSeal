@@ -1,0 +1,316 @@
+//! Bound HTTP receipts, no redirect/credential forwarding or unbounded JSON.
+use super::Acceptance;
+use liteseal_shared::{
+    direct_message::{self as d, Ack, Batch},
+    direct_transport::{self as t, Page, Result as Outcome},
+    trusted_device::canonical_origin,
+};
+use reqwest::{Method, RequestBuilder};
+use serde::de::DeserializeOwned;
+use std::collections::HashSet;
+#[derive(Debug)]
+pub struct ApiError {
+    pub status: Option<u16>,
+    pub message: &'static str,
+}
+impl std::fmt::Display for ApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.message)
+    }
+}
+impl std::error::Error for ApiError {}
+fn invalid() -> ApiError {
+    ApiError {
+        status: None,
+        message: "单聊 v3 参数、范围或响应无法验证",
+    }
+}
+fn network() -> ApiError {
+    ApiError {
+        status: None,
+        message: "单聊 v3 结果未确认，请保留原批次",
+    }
+}
+fn id(value: &str) -> Result<(), ApiError> {
+    if uuid::Uuid::parse_str(value)
+        .ok()
+        .is_none_or(|id| id.to_string() != value)
+    {
+        Err(invalid())
+    } else {
+        Ok(())
+    }
+}
+#[derive(Debug, PartialEq, Eq)]
+pub enum RemoteState {
+    Unknown,
+    Cancelled,
+    Accepted,
+}
+/// Only this client can construct a response bound to the request/origin. This
+/// wrapper proves the transport binding, not local persistence or a server signature.
+pub struct AuthenticatedResult {
+    pub(super) outcome: Outcome,
+}
+impl AuthenticatedResult {
+    pub fn state(&self) -> RemoteState {
+        match self.outcome {
+            Outcome::Unknown { .. } => RemoteState::Unknown,
+            Outcome::Cancelled { .. } => RemoteState::Cancelled,
+            Outcome::Accepted { .. } => RemoteState::Accepted,
+        }
+    }
+}
+pub struct AuthenticatedPage {
+    pub(super) page: Page,
+}
+impl AuthenticatedPage {
+    pub fn len(&self) -> usize {
+        self.page.items.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.page.items.is_empty()
+    }
+    pub fn has_more(&self) -> bool {
+        self.page.has_more
+    }
+}
+pub struct DirectApi {
+    origin: String,
+    client: reqwest::Client,
+}
+impl DirectApi {
+    pub fn new(server: &str) -> Result<Self, ApiError> {
+        let origin = canonical_origin(server).map_err(|_| invalid())?;
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(std::time::Duration::from_secs(20))
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .build()
+            .map_err(|_| network())?;
+        Ok(Self { origin, client })
+    }
+    fn request(&self, method: Method, path: &str, token: &str) -> Result<RequestBuilder, ApiError> {
+        if token.is_empty() || token.len() > 256 || token.bytes().any(|b| !b.is_ascii_graphic()) {
+            return Err(invalid());
+        }
+        Ok(self
+            .client
+            .request(method, format!("{}{path}", self.origin))
+            .bearer_auth(token))
+    }
+    async fn json<T: DeserializeOwned>(
+        &self,
+        request: RequestBuilder,
+        max: usize,
+    ) -> Result<T, ApiError> {
+        let mut response = request.send().await.map_err(|_| network())?;
+        if response.status() != reqwest::StatusCode::OK {
+            return Err(ApiError {
+                status: Some(response.status().as_u16()),
+                message: "单聊 v3 请求被拒绝，请查询原结果",
+            });
+        }
+        if response.content_length().is_some_and(|n| n > max as u64) {
+            return Err(invalid());
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(|_| network())? {
+            if bytes.len().saturating_add(chunk.len()) > max {
+                return Err(invalid());
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        serde_json::from_slice(&bytes).map_err(|_| invalid())
+    }
+    fn bound_batch(&self, batch: &Batch) -> Result<Vec<u8>, ApiError> {
+        if batch.header.origin != self.origin {
+            return Err(invalid());
+        }
+        for value in [
+            &batch.header.id,
+            &batch.header.sender,
+            &batch.header.peer,
+            &batch.header.sender_device,
+        ] {
+            id(value)?;
+        }
+        batch.to_wire().map_err(|_| invalid())
+    }
+    fn bind_result(
+        &self,
+        batch: &Batch,
+        outcome: Outcome,
+        allow_unknown: bool,
+    ) -> Result<AuthenticatedResult, ApiError> {
+        let digest = batch.digest().map_err(|_| invalid())?;
+        match &outcome {
+            Outcome::Unknown {
+                id,
+                digest: digest_,
+            } if allow_unknown && *id == batch.header.id && *digest_ == digest => {}
+            Outcome::Cancelled {
+                id,
+                digest: digest_,
+            } if *id == batch.header.id && *digest_ == digest => {}
+            Outcome::Accepted {
+                receipt,
+                acknowledgements,
+            } => {
+                Acceptance::from_authenticated_response(
+                    batch,
+                    &receipt.id,
+                    receipt.digest,
+                    receipt.accepted_at,
+                )
+                .map_err(|_| invalid())?;
+                if acknowledgements.len() > d::MAX_TARGETS {
+                    return Err(invalid());
+                }
+                let mut targets = HashSet::new();
+                for ack in acknowledgements {
+                    if ack.to_wire().is_err()
+                        || ack.origin != self.origin
+                        || ack.id != batch.header.id
+                        || ack.batch != digest
+                        || !targets.insert((&ack.account, &ack.device))
+                        || !batch
+                            .payloads
+                            .iter()
+                            .any(|p| p.account == ack.account && p.device == ack.device)
+                    {
+                        return Err(invalid());
+                    }
+                }
+            }
+            _ => return Err(invalid()),
+        }
+        Ok(AuthenticatedResult { outcome })
+    }
+    pub async fn lookup(
+        &self,
+        token: &str,
+        batch: &Batch,
+    ) -> Result<AuthenticatedResult, ApiError> {
+        self.bound_batch(batch)?;
+        let outcome = self
+            .json(
+                self.request(
+                    Method::GET,
+                    &format!("/direct/v3/batches/{}", batch.header.id),
+                    token,
+                )?
+                .query(&[
+                    ("device_id", batch.header.sender_device.as_str()),
+                    (
+                        "digest",
+                        &hex::encode(batch.digest().map_err(|_| invalid())?),
+                    ),
+                ]),
+                32 * 1024,
+            )
+            .await?;
+        self.bind_result(batch, outcome, true)
+    }
+    async fn submit(
+        &self,
+        token: &str,
+        batch: &Batch,
+        path: &str,
+    ) -> Result<AuthenticatedResult, ApiError> {
+        let wire = self.bound_batch(batch)?;
+        let outcome = self
+            .json(
+                self.request(Method::POST, path, token)?
+                    .header("content-type", "application/json")
+                    .body(wire),
+                32 * 1024,
+            )
+            .await?;
+        self.bind_result(batch, outcome, false)
+    }
+    pub async fn publish(
+        &self,
+        token: &str,
+        batch: &Batch,
+    ) -> Result<AuthenticatedResult, ApiError> {
+        self.submit(token, batch, "/direct/v3/batches").await
+    }
+    pub async fn cancel(
+        &self,
+        token: &str,
+        batch: &Batch,
+    ) -> Result<AuthenticatedResult, ApiError> {
+        self.submit(token, batch, "/direct/v3/cancel").await
+    }
+    pub async fn pending(
+        &self,
+        token: &str,
+        account: &str,
+        device: &str,
+        limit: usize,
+    ) -> Result<AuthenticatedPage, ApiError> {
+        id(account)?;
+        id(device)?;
+        if !(1..=t::MAX_PAGE_ITEMS).contains(&limit) {
+            return Err(invalid());
+        }
+        let page: Page = self
+            .json(
+                self.request(Method::GET, "/direct/v3/pending", token)?
+                    .query(&[("device_id", device), ("limit", &limit.to_string())]),
+                t::MAX_PAGE_BYTES,
+            )
+            .await?;
+        if page.items.len() > limit || page.items.is_empty() && page.has_more {
+            return Err(invalid());
+        }
+        let mut previous = 0;
+        let mut ids = HashSet::new();
+        for item in &page.items {
+            self.bound_batch(&item.batch)?;
+            if item.order <= previous
+                || !ids.insert(&item.batch.header.id)
+                || !item
+                    .batch
+                    .payloads
+                    .iter()
+                    .any(|p| p.account == account && p.device == device)
+            {
+                return Err(invalid());
+            }
+            previous = item.order;
+            Acceptance::from_authenticated_response(
+                &item.batch,
+                &item.receipt.id,
+                item.receipt.digest,
+                item.receipt.accepted_at,
+            )
+            .map_err(|_| invalid())?;
+        }
+        Ok(AuthenticatedPage { page })
+    }
+    pub async fn ack(&self, token: &str, ack: &Ack) -> Result<(), ApiError> {
+        id(&ack.id)?;
+        id(&ack.account)?;
+        id(&ack.device)?;
+        if ack.origin != self.origin {
+            return Err(invalid());
+        }
+        let wire = ack.to_wire().map_err(|_| invalid())?;
+        let response = self
+            .request(Method::POST, "/direct/v3/ack", token)?
+            .header("content-type", "application/json")
+            .body(wire)
+            .send()
+            .await
+            .map_err(|_| network())?;
+        if response.status() != reqwest::StatusCode::NO_CONTENT {
+            return Err(ApiError {
+                status: Some(response.status().as_u16()),
+                message: "单聊 v3 ACK 尚未确认，保留原签名",
+            });
+        }
+        Ok(())
+    }
+}
