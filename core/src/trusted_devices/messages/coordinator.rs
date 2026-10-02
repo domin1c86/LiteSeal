@@ -758,9 +758,77 @@ impl MessageCoordinator {
             }
         }
     }
+    async fn restore_media(
+        &self,
+        lease: &TaskLease,
+        task: &TaskView,
+        keys: &KeyPair,
+    ) -> Result<Progress> {
+        let _media = self.media_network.lock().await;
+        let job = self.current(lease, task, keys, |s| s.media_job(&task.id, keys))?;
+        let Some(part) = job.reupload else {
+            return self.failed(lease, task, keys, None);
+        };
+        let original = job.view();
+        let reference = job
+            .descriptor
+            .reference()
+            .map_err(|_| local("media".into()))?;
+        let object = MediaObject {
+            device: &self.owner.device.device_id,
+            id: &task.id,
+            reference: &reference,
+        };
+        if part == 0 {
+            let result = self
+                .api
+                .create_media(
+                    &self.token(lease)?,
+                    object.device,
+                    &task.id,
+                    &job.peer,
+                    &reference,
+                )
+                .await;
+            self.current(lease, task, keys, |_| Ok(()))?;
+            self.media_current(lease, &original, keys)?;
+            if let Err(error) = result {
+                return self.failed(lease, task, keys, error.status);
+            }
+        }
+        let bytes = self.current(lease, task, keys, |s| {
+            s.media_restore_chunk(&task.id, job.revision, keys)
+        })?;
+        let result = self
+            .api
+            .upload_media_chunk(&self.token(lease)?, &object, part as i32, bytes)
+            .await;
+        self.current(lease, task, keys, |_| Ok(()))?;
+        self.media_current(lease, &original, keys)?;
+        match result {
+            Ok(()) => {
+                self.current(lease, task, keys, |s| {
+                    s.media_restore_advance(&task.id, job.revision, keys)
+                })?;
+                Ok(Progress {
+                    task: self.with(lease, |s| s.task_view(&task.id, keys))?,
+                    condition: Condition::Uploading,
+                    http_status: None,
+                })
+            }
+            Err(error) => {
+                if error.status == Some(404) {
+                    self.current(lease, task, keys, |s| {
+                        s.media_restore_start(&task.id, job.revision, keys)
+                    })?;
+                }
+                self.failed(lease, task, keys, error.status)
+            }
+        }
+    }
     pub async fn step(&self, id: &str, keys: &KeyPair) -> Result<Progress> {
         let lease = self.lease(keys)?;
-        let _network = self.network.lock().await;
+        let network = self.network.lock().await;
         let mut task = self.with(&lease, |s| s.task_view(id, keys))?;
         match task.state {
             TaskState::Accepted => {
@@ -827,6 +895,13 @@ impl MessageCoordinator {
             }
         }
         self.current(&lease, &task, keys, |_| Ok(()))?;
+        if !task.cancel_requested && batch.header.kind != Kind::Text {
+            let job = self.current(&lease, &task, keys, |s| s.media_job(id, keys))?;
+            if job.reupload.is_some() {
+                drop(network);
+                return self.restore_media(&lease, &task, keys).await;
+            }
+        }
         let token = self.token(&lease)?;
         let result = if task.cancel_requested {
             self.api.cancel(&token, &batch).await
@@ -838,7 +913,23 @@ impl MessageCoordinator {
         };
         let result = match result {
             Ok(result) => result,
-            Err(error) => return self.failed(&lease, &task, keys, error.status),
+            Err(error) => {
+                if error.status == Some(404)
+                    && !task.cancel_requested
+                    && batch.header.kind != Kind::Text
+                {
+                    self.current(&lease, &task, keys, |s| {
+                        let job = s.media_job(id, keys)?;
+                        s.media_restore_start(id, job.revision, keys)
+                    })?;
+                    return Ok(Progress {
+                        task,
+                        condition: Condition::Uploading,
+                        http_status: error.status,
+                    });
+                }
+                return self.failed(&lease, &task, keys, error.status);
+            }
         };
         self.apply(&lease, &task, &batch, result, keys)?
             .ok_or_else(|| local("unconfirmed mutation".into()))

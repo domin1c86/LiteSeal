@@ -480,10 +480,12 @@ pub async fn process(state: &AppState) -> Result<Report, String> {
             None
         };
         let poll = ctx.actor.poll(&ctx.keys).await?;
-        let changed = task
-            .as_ref()
-            .is_some_and(|t| matches!(t.condition, Condition::Accepted | Condition::Cancelled))
-            || poll.received > 0;
+        let changed = task.as_ref().is_some_and(|t| {
+            matches!(
+                t.condition,
+                Condition::Accepted | Condition::Cancelled | Condition::Uploading
+            )
+        }) || poll.received > 0;
         Ok(Report {
             changed,
             task,

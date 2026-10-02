@@ -258,6 +258,232 @@ fn cancellation_fences_late_upload_and_clear_does_not_reuse_original_id() {
     );
 }
 #[test]
+fn prepared_reupload_reopens_with_exact_ciphertext_batch_and_binding() {
+    let mut f = Fixture::new();
+    let id = uuid::Uuid::new_v4().to_string();
+    let bytes = b"immutable ciphertext".repeat(70_000);
+    f.stage(&id, &bytes);
+    f.upload(&id);
+    f.store.prepare_media(&id, 100, &f.keys).unwrap();
+    let batch = f.store.original(&id, &f.keys).unwrap().to_wire().unwrap();
+    let binding = f
+        .store
+        .media_submission(&id, &f.keys)
+        .unwrap()
+        .to_wire()
+        .unwrap();
+    let job = f.store.media_job(&id, &f.keys).unwrap();
+    let original = f
+        .store
+        .trust
+        .read_checked(|conn| ciphertext(conn, &f.owner, &job))
+        .unwrap();
+    let start = f
+        .store
+        .media_restore_start(&id, job.revision, &f.keys)
+        .unwrap();
+    assert!(start.restoring);
+    assert_eq!(start.phase, Phase::Prepared);
+    assert_eq!(start.uploaded, 0);
+    assert!(
+        f.store
+            .clear_media_cache(None, &f.keys)
+            .unwrap()
+            .protected_tasks
+            == 1
+    );
+    assert_eq!(
+        f.store
+            .media_restore_chunk(&id, start.revision, &f.keys)
+            .unwrap(),
+        original[..CHUNK]
+    );
+    let next = f
+        .store
+        .media_restore_advance(&id, start.revision, &f.keys)
+        .unwrap();
+    assert_eq!(next.uploaded, CHUNK as u64);
+    f.store = Store::open(
+        &f.path,
+        f.owner.clone(),
+        Witness::new(&f.path, f.native.clone()),
+    )
+    .unwrap();
+    assert_eq!(
+        f.store
+            .media_restore_chunk(&id, next.revision, &f.keys)
+            .unwrap(),
+        original[CHUNK..]
+    );
+    let done = f
+        .store
+        .media_restore_advance(&id, next.revision, &f.keys)
+        .unwrap();
+    assert!(!done.restoring);
+    assert_eq!(done.uploaded, original.len() as u64);
+    assert_eq!(
+        f.store.original(&id, &f.keys).unwrap().to_wire().unwrap(),
+        batch
+    );
+    assert_eq!(
+        f.store
+            .media_submission(&id, &f.keys)
+            .unwrap()
+            .to_wire()
+            .unwrap(),
+        binding
+    );
+    // Pre-change encrypted jobs do not contain the new optional cursor.
+    let job = f.store.media_job(&id, &f.keys).unwrap();
+    let mut old = serde_json::to_value(job).unwrap();
+    old.as_object_mut().unwrap().remove("reupload");
+    let old = crypto::encrypt(
+        &serde_json::to_vec(&old).unwrap(),
+        &f.keys.public_key,
+        &f.keys.secret_key,
+    )
+    .unwrap();
+    f.store
+        .trust
+        .write_checked(|conn| {
+            conn.execute(
+                "UPDATE device_control_tasks SET body=?1 WHERE scope=?2 AND id=?3",
+                params![old, scope(&f.owner), id],
+            )
+            .map_err(db)?;
+            Ok(())
+        })
+        .unwrap();
+    assert!(f.store.media_job(&id, &f.keys).unwrap().reupload.is_none());
+}
+#[test]
+fn prepared_reupload_cancel_and_corruption_never_advance_or_change_original_batch() {
+    for cancel in [false, true] {
+        let mut f = Fixture::new();
+        let id = uuid::Uuid::new_v4().to_string();
+        f.stage(&id, b"retain original");
+        f.upload(&id);
+        f.store.prepare_media(&id, 100, &f.keys).unwrap();
+        let batch = f.store.original(&id, &f.keys).unwrap().to_wire().unwrap();
+        let revision = f.store.media_job(&id, &f.keys).unwrap().revision;
+        let start = f.store.media_restore_start(&id, revision, &f.keys).unwrap();
+        if cancel {
+            f.store.cancel_media(&id, &f.keys).unwrap();
+        } else {
+            Connection::open(&f.path).unwrap().execute("UPDATE direct_v3_media_chunks SET ciphertext=zeroblob(length(ciphertext)) WHERE id=?1",[&id]).unwrap();
+        }
+        assert!(f
+            .store
+            .media_restore_chunk(&id, start.revision, &f.keys)
+            .is_err());
+        assert!(f
+            .store
+            .media_restore_advance(&id, start.revision, &f.keys)
+            .is_err());
+        assert!(f
+            .store
+            .media_restore_start(&id, start.revision, &f.keys)
+            .is_err());
+        assert_eq!(
+            f.store.original(&id, &f.keys).unwrap().to_wire().unwrap(),
+            batch
+        );
+        assert_eq!(f.store.media_job(&id, &f.keys).unwrap().reupload, Some(0));
+    }
+}
+#[test]
+fn original_acceptance_during_restore_overrides_progress_and_allows_safe_cleanup() {
+    let mut f = Fixture::new();
+    let id = uuid::Uuid::new_v4().to_string();
+    f.stage(&id, b"already accepted original");
+    f.upload(&id);
+    f.store.prepare_media(&id, 100, &f.keys).unwrap();
+    let revision = f.store.media_job(&id, &f.keys).unwrap().revision;
+    f.store.media_restore_start(&id, revision, &f.keys).unwrap();
+    f.store.begin_publish(&id, 0, &f.keys).unwrap();
+    let batch = f.store.original(&id, &f.keys).unwrap();
+    let receipt = super::super::Acceptance::from_authenticated_response(
+        &batch,
+        &id,
+        batch.digest().unwrap(),
+        200,
+    )
+    .unwrap();
+    f.store.confirm_accepted(&receipt, &f.keys).unwrap();
+    let view = f.store.media_task(&id, &f.keys).unwrap();
+    assert!(!view.restoring);
+    assert_eq!(view.uploaded, view.total);
+    assert!(f
+        .store
+        .media_restore_advance(&id, revision + 1, &f.keys)
+        .is_err());
+    f.store.clear_accepted_task(&id, &f.keys).unwrap();
+    assert!(!f.store.media_tasks(&f.keys).unwrap()[0].restoring);
+    assert_eq!(
+        f.store
+            .clear_media_cache(None, &f.keys)
+            .unwrap()
+            .cleared_tasks,
+        1
+    );
+    assert_eq!(f.store.history(None, 100, &f.keys).unwrap().len(), 1);
+}
+#[test]
+fn prepared_reupload_native_gap_recovers_cursor_without_changing_ciphertext_or_batch() {
+    let mut f = Fixture::new();
+    let id = uuid::Uuid::new_v4().to_string();
+    let bytes = b"native restore gap".repeat(80_000);
+    f.stage(&id, &bytes);
+    f.upload(&id);
+    f.store.prepare_media(&id, 100, &f.keys).unwrap();
+    let original = f.store.original(&id, &f.keys).unwrap().to_wire().unwrap();
+    let revision = f.store.media_job(&id, &f.keys).unwrap().revision;
+    let start = f.store.media_restore_start(&id, revision, &f.keys).unwrap();
+    let before = f._work.0.join("before-restore.db");
+    std::fs::copy(&f.path, &before).unwrap();
+    {
+        let mut cell = f.native.0.lock().unwrap();
+        cell.2 = Some(cell.1 + 2);
+    }
+    assert!(f
+        .store
+        .media_restore_advance(&id, start.revision, &f.keys)
+        .is_err());
+    drop(f.store);
+    std::fs::copy(&before, &f.path).unwrap();
+    let mut store = Store::open(
+        &f.path,
+        f.owner.clone(),
+        Witness::new(&f.path, f.native.clone()),
+    )
+    .unwrap();
+    let restored = store.media_task(&id, &f.keys).unwrap();
+    assert_eq!(restored.uploaded, CHUNK as u64);
+    assert!(restored.restoring);
+    assert_eq!(
+        store.original(&id, &f.keys).unwrap().to_wire().unwrap(),
+        original
+    );
+    let job = store.media_job(&id, &f.keys).unwrap();
+    let cipher = store
+        .trust
+        .read_checked(|conn| ciphertext(conn, &f.owner, &job))
+        .unwrap();
+    assert_eq!(job.descriptor.decrypt(job.kind, &cipher).unwrap(), bytes);
+    assert_eq!(
+        store
+            .media_restore_chunk(&id, restored.revision, &f.keys)
+            .unwrap(),
+        cipher[CHUNK..]
+    );
+    assert!(
+        !store
+            .media_restore_advance(&id, restored.revision, &f.keys)
+            .unwrap()
+            .restoring
+    );
+}
+#[test]
 fn bulk_storage_cleanup_protects_unknown_publication_and_other_conversations() {
     let mut f = Fixture::new();
     let pending = uuid::Uuid::new_v4().to_string();

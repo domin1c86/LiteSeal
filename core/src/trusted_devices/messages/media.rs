@@ -94,6 +94,7 @@ pub struct View {
     pub downloaded: u64,
     pub download: bool,
     pub total: u64,
+    pub restoring: bool,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -111,6 +112,8 @@ pub(super) struct Job {
     pub next: usize,
     #[serde(default)]
     pub download: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reupload: Option<usize>,
 }
 impl Job {
     pub fn view(&self) -> View {
@@ -127,7 +130,8 @@ impl Job {
             uploaded: if self.download {
                 0
             } else {
-                (self.next as u64 * CHUNK as u64).min(self.descriptor.size + 40)
+                (self.reupload.unwrap_or(self.next) as u64 * CHUNK as u64)
+                    .min(self.descriptor.size + 40)
             },
             downloaded: if self.download {
                 (self.next as u64 * CHUNK as u64).min(self.descriptor.size + 40)
@@ -136,6 +140,7 @@ impl Job {
             },
             download: self.download,
             total: self.descriptor.size + 40,
+            restoring: self.reupload.is_some(),
         }
     }
 }
@@ -182,6 +187,9 @@ pub(super) fn load(
         || job.phase == Phase::Staged && job.next == parts
         || job.phase == Phase::Downloading && job.next == parts
         || job.download && matches!(job.phase, Phase::Staged | Phase::Uploaded | Phase::Prepared)
+        || job
+            .reupload
+            .is_some_and(|part| job.phase != Phase::Prepared || job.download || part >= parts)
         || !job.download
             && matches!(
                 job.phase,
@@ -265,6 +273,39 @@ fn message_state(
         return Err(invalid());
     }
     Ok(TaskState::Accepted)
+}
+fn restorable(conn: &Connection, owner: &Owner, job: &Job, keys: &KeyPair) -> Result<(), String> {
+    let row = task(conn, &owner.scope(), &job.id)?.ok_or_else(invalid)?;
+    let (row, batch, _) = checked_task(conn, owner, row, keys)?;
+    let sender = current(conn, &owner.origin, &owner.account)?;
+    let peer = current(conn, &owner.origin, &job.peer)?;
+    if !matches!(row.state, TaskState::Prepared | TaskState::Publishing)
+        || row.cancel_requested
+        || batch.verify(&sender, &peer).is_err()
+        || owner.member(&sender)? != job.authority
+    {
+        return Err("原媒体发布、取消意图或授权目录已变化".into());
+    }
+    Ok(())
+}
+fn public_view(
+    conn: &Connection,
+    owner: &Owner,
+    job: &Job,
+    keys: &KeyPair,
+) -> Result<View, String> {
+    let mut view = job.view();
+    if job.reupload.is_some() {
+        match message_state(conn, owner, &job.id, keys)? {
+            TaskState::Accepted => {
+                view.restoring = false;
+                view.uploaded = view.total;
+            }
+            TaskState::Cancelled | TaskState::Conflict => view.restoring = false,
+            _ => {}
+        }
+    }
+    Ok(view)
 }
 fn clearable(conn: &Connection, owner: &Owner, job: &Job, keys: &KeyPair) -> Result<bool, String> {
     if job.phase == Phase::Prepared {
@@ -395,6 +436,7 @@ impl Store {
                 .collect(),
             next: 0,
             download: false,
+            reupload: None,
         };
         // The complete ciphertext commit comes first. If the following covered
         // write is interrupted, its recovered descriptor still has every chunk.
@@ -435,7 +477,7 @@ impl Store {
                 return Err(invalid());
             }
             ids.into_iter()
-                .map(|id| load(conn, &owner, &id, keys).map(|j| j.view()))
+                .map(|id| {let job=load(conn,&owner,&id,keys)?;public_view(conn,&owner,&job,keys)})
                 .collect()
         })
     }
@@ -453,7 +495,8 @@ impl Store {
             if hidden {
                 return Err("原媒体消息已在本机隐藏".into());
             }
-            load(conn, &owner, id, keys).map(|j| j.view())
+            let job = load(conn, &owner, id, keys)?;
+            public_view(conn, &owner, &job, keys)
         })
     }
     /// Sender-owned local audition/preview only, before a signed message task.
@@ -538,6 +581,72 @@ impl Store {
                 return Err(invalid());
             }
             job.next = 0;
+            save(conn, &owner, &mut job, revision, keys)?;
+            Ok(job.view())
+        })
+    }
+    pub(super) fn media_restore_start(
+        &mut self,
+        id: &str,
+        revision: u64,
+        keys: &KeyPair,
+    ) -> Result<View, String> {
+        self.owner.keys(keys)?;
+        let owner = self.owner.clone();
+        self.trust.write_checked(|conn| {
+            let mut job = load(conn, &owner, id, keys)?;
+            if job.phase != Phase::Prepared || job.revision != revision || job.download {
+                return Err(invalid());
+            }
+            restorable(conn, &owner, &job, keys)?;
+            job.descriptor
+                .decrypt(job.kind, &ciphertext(conn, &owner, &job)?)
+                .map(Zeroizing::new)
+                .map_err(|_| invalid())?;
+            job.reupload = Some(0);
+            save(conn, &owner, &mut job, revision, keys)?;
+            Ok(job.view())
+        })
+    }
+    pub(super) fn media_restore_chunk(
+        &mut self,
+        id: &str,
+        revision: u64,
+        keys: &KeyPair,
+    ) -> Result<Vec<u8>, String> {
+        self.owner.keys(keys)?;
+        let owner = self.owner.clone();
+        self.trust.read_checked(|conn| {
+            let job = load(conn, &owner, id, keys)?;
+            if job.revision != revision {
+                return Err(invalid());
+            }
+            let part = job.reupload.ok_or_else(invalid)?;
+            restorable(conn, &owner, &job, keys)?;
+            chunk(conn, &owner, &job, part)
+        })
+    }
+    pub(super) fn media_restore_advance(
+        &mut self,
+        id: &str,
+        revision: u64,
+        keys: &KeyPair,
+    ) -> Result<View, String> {
+        self.owner.keys(keys)?;
+        let owner = self.owner.clone();
+        self.trust.write_checked(|conn| {
+            let mut job = load(conn, &owner, id, keys)?;
+            if job.revision != revision {
+                return Err(invalid());
+            }
+            let part = job.reupload.ok_or_else(invalid)?;
+            restorable(conn, &owner, &job, keys)?;
+            chunk(conn, &owner, &job, part)?;
+            job.reupload = if part + 1 == job.hashes.len() {
+                None
+            } else {
+                Some(part + 1)
+            };
             save(conn, &owner, &mut job, revision, keys)?;
             Ok(job.view())
         })

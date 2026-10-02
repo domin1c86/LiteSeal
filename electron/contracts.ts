@@ -273,7 +273,7 @@ export interface AttachmentTask { id: string; peer_id: string; message_id: strin
 export type RefreshTarget={kind:"root"}|{kind:"join";profileId:string};
 export type DirectCondition="uploading"|"uploaded"|"downloading"|"cached"|"failed"|"unavailable"|"prepared"|"accepted"|"cancelled"|"syncing"|"needs_trust"|"conflict"|"retry"|"session_required"|"unsupported"|"idle"|"received"|"acknowledged";
 export type DirectMediaPhase="staged"|"uploaded"|"prepared"|"cancelled"|"downloading"|"cached"|"failed"|"unavailable";
-export interface DirectMediaTask{id:string;peer:string;revision:number;phase:DirectMediaPhase;kind:"attachment"|"voice";name:string;mime:string;size:number;duration_ms:number|null;uploaded:number;downloaded:number;download:boolean;total:number}
+export interface DirectMediaTask{id:string;peer:string;revision:number;phase:DirectMediaPhase;kind:"attachment"|"voice";name:string;mime:string;size:number;duration_ms:number|null;uploaded:number;downloaded:number;download:boolean;total:number;restoring?:boolean}
 export interface DirectMediaInfo{id:string;peer:string;kind:"attachment"|"voice";name:string;mime:string;size:number;duration_ms:number|null;cache:DirectMediaPhase|null}
 export interface DirectPeer{account:string;origin:string;root_device:string;root_fingerprint:string;encryption_fingerprint:string;signing_fingerprint:string}
 export interface DirectDraft{peer:string;revision:number;text:string;prepared:string|null}

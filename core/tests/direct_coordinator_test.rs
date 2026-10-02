@@ -41,6 +41,9 @@ impl Drop for Fixture {
 }
 impl Fixture {
     async fn new() -> Self {
+        Self::new_mode(false).await
+    }
+    async fn new_mode(restore: bool) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let keys = Arc::new(crypto::generate_keypair().unwrap());
@@ -76,6 +79,7 @@ impl Fixture {
         let release_ = release.clone();
         let first = AtomicBool::new(true);
         let server = tokio::spawn(async move {
+            let mut expired = false;
             loop {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let mut bytes = vec![];
@@ -103,6 +107,7 @@ impl Fixture {
                 };
                 let parsed = url::Url::parse(&format!("{url}{uri}")).unwrap();
                 let path = parsed.path();
+                let mut lose_response = false;
                 let response = if path.starts_with("/users/") {
                     let account = path.split('/').nth(2).unwrap();
                     let anchor = roots.iter().find(|a| a.account == account).unwrap();
@@ -128,7 +133,7 @@ impl Fixture {
                     .unwrap()
                     .try_into()
                     .unwrap();
-                    let outcome = if first.swap(false, Ordering::SeqCst) {
+                    let outcome = if !restore && first.swap(false, Ordering::SeqCst) {
                         seen_.notify_one();
                         release_.notified().await;
                         Outcome::Accepted {
@@ -147,9 +152,12 @@ impl Fixture {
                     let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
                     serde_json::to_vec(value.get("id").unwrap()).unwrap()
                 } else if path.starts_with("/direct/v3/media/objects/") {
-                    if first.swap(false, Ordering::SeqCst) {
+                    if (!restore || expired) && first.swap(false, Ordering::SeqCst) {
                         seen_.notify_one();
                         release_.notified().await;
+                        if restore {
+                            lose_response = true;
+                        }
                     }
                     vec![]
                 } else {
@@ -177,11 +185,18 @@ impl Fixture {
                     };
                     serde_json::to_vec(&outcome).unwrap()
                 };
-                let status = if path.starts_with("/direct/v3/media/objects/") {
+                let status = if restore && path == "/direct/v3/media/batches" && !expired {
+                    expired = true;
+                    "404 Not Found"
+                } else if path.starts_with("/direct/v3/media/objects/") {
                     "204 No Content"
                 } else {
                     "200 OK"
                 };
+                if lose_response {
+                    socket.shutdown().await.unwrap();
+                    continue;
+                }
                 let header=format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n",response.len());
                 socket.write_all(header.as_bytes()).await.unwrap();
                 socket.write_all(&response).await.unwrap();
@@ -368,4 +383,102 @@ async fn unpublished_cancel_is_local_idempotent_and_never_queries_or_publishes()
             .await
             .is_err()
     );
+}
+#[tokio::test]
+async fn prepared_restore_releases_text_lock_and_fences_late_cancel_rotation_and_lock() {
+    use liteseal_core::trusted_devices::messages::media::Stage;
+    use liteseal_shared::direct_message::Kind;
+    for mode in 0..4 {
+        let f = Fixture::new_mode(true).await;
+        let id = uuid::Uuid::new_v4().to_string();
+        f.actor
+            .stage_media(
+                Stage {
+                    id: &id,
+                    peer: &f.peer,
+                    name: "原重传.txt",
+                    bytes: b"original restore bytes",
+                    kind: Kind::Attachment,
+                    duration_ms: None,
+                },
+                &f.keys,
+            )
+            .unwrap();
+        f.actor.media_step(&id, &f.keys).await.unwrap();
+        let prepared = f
+            .actor
+            .prepare_media(&id, &f.keys)
+            .await
+            .unwrap()
+            .task
+            .unwrap();
+        let expired = f.actor.step(&id, &f.keys).await.unwrap();
+        assert_eq!(expired.condition, Condition::Uploading);
+        assert_eq!(expired.http_status, Some(404));
+        let actor = f.actor.clone();
+        let keys = f.keys.clone();
+        let original = id.clone();
+        let pending = tokio::spawn(async move { actor.step(&original, &keys).await });
+        tokio::time::timeout(std::time::Duration::from_secs(3), f.seen.notified())
+            .await
+            .unwrap();
+        let available = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            f.actor.prepare_media(&id, &f.keys),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(available.task.unwrap().digest, prepared.digest);
+        match mode {
+            0 => {
+                f.actor.cancel_media(&id, &f.keys).unwrap();
+            }
+            1 => {
+                f.actor.renew_session("synthetic-rotated".into()).unwrap();
+            }
+            2 => {
+                f.actor.invalidate().unwrap();
+                f.actor.resume().unwrap();
+                f.actor.renew_session("synthetic-unlocked".into()).unwrap();
+            }
+            _ => {}
+        }
+        f.release.notify_one();
+        let response = pending.await.unwrap();
+        if mode == 3 {
+            assert_eq!(response.unwrap().condition, Condition::Retry);
+        } else {
+            assert!(response.is_err());
+        }
+        let saved = f.actor.media_tasks(&f.keys).unwrap().pop().unwrap();
+        assert!(saved.restoring);
+        assert_eq!(saved.uploaded, 0);
+        if mode == 0 {
+            assert_eq!(
+                f.actor.step(&id, &f.keys).await.unwrap().condition,
+                Condition::Cancelled
+            );
+        } else {
+            assert_eq!(
+                f.actor.step(&id, &f.keys).await.unwrap().condition,
+                Condition::Uploading
+            );
+            assert!(!f.actor.media_tasks(&f.keys).unwrap()[0].restoring);
+            assert_eq!(
+                f.actor
+                    .prepare_media(&id, &f.keys)
+                    .await
+                    .unwrap()
+                    .task
+                    .unwrap()
+                    .digest,
+                prepared.digest
+            );
+            assert_eq!(
+                f.actor.step(&id, &f.keys).await.unwrap().condition,
+                Condition::Accepted
+            );
+        }
+    }
 }

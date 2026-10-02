@@ -8,16 +8,17 @@ function Preview({url,audio,name,onClose}:{url:string;audio:boolean;name:string;
 export function DirectMediaComposer({scope,account,online,paused,onChanged}:{scope:string;account:string;online:boolean;paused:boolean;onChanged:()=>void}){
   const [tasks,setTasks]=useState<DirectMediaTask[]>([]),[busy,setBusy]=useState(false),[error,setError]=useState(""),[preview,setPreview]=useState<{url:string;audio:boolean;name:string}|null>(null);
   const alive=useRef(true),stopped=useRef(false),url=useRef<string|null>(null),generation=useRef(0);
+  const [active,setActive]=useState<string|null>(null);
   const api=getDesktopApi();const close=()=>{const current=url.current;url.current=null;setPreview(null);if(current)void api.close_direct_media_preview({url:current}).catch(()=>{});};
   const current=(n:number)=>alive.current&&!paused&&generation.current===n;
   async function reload(){const n=generation.current;const rows=await api.get_direct_media_tasks({scope});if(current(n))setTasks(rows.filter(t=>t.peer===account&&!t.download&&t.phase!=="cancelled"));}
   useEffect(()=>{alive.current=true;void reload().catch(e=>setError(String(e)));return()=>{alive.current=false;stopped.current=true;generation.current++;if(url.current)void api.close_direct_media_preview({url:url.current}).catch(()=>{});};},[scope,account]);
   useEffect(()=>{if(paused){generation.current++;stopped.current=true;close();setTasks([]);setBusy(false);}},[paused]);
   useEffect(()=>{const changed=()=>{const n=generation.current;if(!paused)void reload().catch(e=>{if(current(n))setError(String(e));});};window.addEventListener("liteseal-direct-changed",changed);return()=>window.removeEventListener("liteseal-direct-changed",changed);},[scope,account,paused]);
-  async function run(work:()=>Promise<unknown>){if(busy||paused)return;const n=generation.current;setBusy(true);setError("");try{await work();if(current(n)){await reload();onChanged();}}catch(e){if(current(n))setError(String(e));}finally{if(current(n))setBusy(false);}}
+  async function run(work:()=>Promise<unknown>){if(busy||paused)return;const n=generation.current;setBusy(true);setError("");try{await work();if(current(n)){await reload();onChanged();}}catch(e){if(current(n))setError(String(e));}finally{if(current(n)){setBusy(false);setActive(null);}}}
   async function stage(file:File){await run(()=>api.stage_direct_file({scope,account,file}));}
   async function send(task:DirectMediaTask){await run(async()=>{
-    const n=generation.current;stopped.current=false;let next=task;close();
+    const n=generation.current;stopped.current=false;setActive(task.id);let next=task;close();
     while(next.phase==="staged"&&!stopped.current&&current(n)){
       const progress=await api.direct_media_step({scope,id:task.id});if(!current(n)||stopped.current)return;next=progress.task;setTasks(rows=>rows.map(t=>t.id===next.id?next:t));
       if(!["uploading","uploaded"].includes(progress.condition))throw new Error("原上传未确认，请保留任务继续或取消");
@@ -25,7 +26,8 @@ export function DirectMediaComposer({scope,account,online,paused,onChanged}:{sco
     if(stopped.current||!current(n))return;
     const prepared=await api.prepare_direct_media({scope,id:task.id});if(!current(n)||stopped.current)return;
     if(!prepared.task)throw new Error("正在校验目录或需要正式会话，请继续原任务");
-    const result=await api.direct_task_step({id:task.id});if(!current(n))return;
+    let result;
+    do {result=await api.direct_task_step({id:task.id});if(!current(n)||stopped.current)return;await reload();} while(result.condition==="uploading"&&current(n)&&!stopped.current);
     if(result.condition!=="accepted"&&result.condition!=="cancelled")throw new Error("原发布尚未确认；不会自动重签，请继续原任务");
   });}
   async function cancel(task:DirectMediaTask){stopped.current=true;const n=generation.current;try{await api.cancel_direct_media({scope,id:task.id});if(current(n)){await reload();onChanged();}}catch(e){if(current(n))setError(String(e));}}
@@ -34,13 +36,13 @@ export function DirectMediaComposer({scope,account,online,paused,onChanged}:{sco
     <button disabled={busy||paused} onClick={()=>void run(()=>api.select_direct_media({scope,account}))}>选择加密文件或图片</button>
     <button disabled={busy||paused} onClick={()=>void run(()=>api.stage_direct_clipboard({scope,account}))}>粘贴图片</button>
     <VoiceRecorder key={scope+account} paused={paused||busy} onStaged={reload} stageClip={async(blob,durationMs)=>{if(paused)throw new Error("媒体已暂停");await api.stage_direct_voice({scope,account,blob,durationMs});}}/>
-    {tasks.map(task=><div key={task.id} aria-label="v3 原媒体任务"><p>{task.name} · {(task.size/1024).toFixed(1)} KiB · {task.phase} · {task.id}</p><progress value={task.uploaded} max={task.total}/>
+    {tasks.map(task=><div key={task.id} aria-label="v3 原媒体任务"><p>{task.name} · {(task.size/1024).toFixed(1)} KiB · {task.phase}{task.restoring?" · 正在重传原密文":""} · {task.id}</p><progress value={task.uploaded} max={task.total}/>
       <button disabled={busy||paused||!online} onClick={()=>void send(task)}>发送 / 继续原媒体任务</button>
       <button disabled={paused} onClick={()=>void cancel(task)}>取消原媒体任务</button>
       <button disabled={busy||paused} onClick={()=>void run(()=>api.clear_direct_media({scope,id:task.id}))}>清理已完成缓存</button>
       {["staged","uploaded"].includes(task.phase)&&["image/png","image/jpeg","image/webp","audio/webm"].includes(task.mime)&&<button disabled={busy||paused} onClick={()=>void run(async()=>{close();const n=generation.current;const opened=await api.export_direct_media({scope,id:task.id,preview:true,pending:true});if(!opened)return;if(current(n)){url.current=opened;setPreview({url:opened,audio:task.kind==="voice",name:task.name});}else void api.close_direct_media_preview({url:opened});})}>发送前预览 / 试听</button>}
     </div>)}
-    {busy&&<button onClick={()=>{stopped.current=true;}}>停止传输（保留原任务）</button>}
+    {busy&&tasks.some(t=>t.id===active&&t.phase==="staged")&&<button onClick={()=>{stopped.current=true;}}>停止传输（保留原任务）</button>}
     {preview&&<Preview {...preview} onClose={close}/>}<button disabled={busy||paused} onClick={()=>void reload().catch(e=>setError(String(e)))}>刷新原媒体任务</button>{error&&<p role="alert">{error}</p>}
   </section>;
 }

@@ -162,9 +162,13 @@ async fn persistent_core_media_upload_restart_publish_and_recipient_ack() {
         m::CHUNK as u64
     );
     drop(actor);
-    let actor =
-        MessageCoordinator::open_with_protection(&source_path, owner, &a.keys, protection.clone())
-            .unwrap();
+    let actor = MessageCoordinator::open_with_protection(
+        &source_path,
+        owner.clone(),
+        &a.keys,
+        protection.clone(),
+    )
+    .unwrap();
     actor.renew_session(a.token.clone()).unwrap();
     assert_eq!(
         actor.media_tasks(&a.keys).unwrap()[0].uploaded,
@@ -180,6 +184,74 @@ async fn persistent_core_media_upload_restart_publish_and_recipient_ack() {
         .task
         .unwrap();
     assert_eq!(prepared.id, id);
+    let read_original = || {
+        let mut store = liteseal_core::trusted_devices::messages::Store::open(
+            &source_path,
+            owner.clone(),
+            protection.witness(&source_path).unwrap(),
+        )
+        .unwrap();
+        store.original(&id, &a.keys).unwrap().to_wire().unwrap()
+    };
+    let original_batch = read_original();
+    let original_chunks: Vec<Vec<u8>> = sqlx::query_scalar(
+        "SELECT data FROM direct_v3_media_chunks WHERE object_id=$1 ORDER BY part",
+    )
+    .bind(&id)
+    .fetch_all(f.db.pool())
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE direct_v3_media_objects SET expires_at=now()-interval '1 second' WHERE id=$1",
+    )
+    .bind(&id)
+    .execute(f.db.pool())
+    .await
+    .unwrap();
+    let restore = actor.step(&id, &a.keys).await.unwrap();
+    assert_eq!(restore.condition, Condition::Uploading);
+    assert_eq!(restore.http_status, Some(404));
+    assert!(actor.media_tasks(&a.keys).unwrap()[0].restoring);
+    assert_eq!(
+        actor.step(&id, &a.keys).await.unwrap().condition,
+        Condition::Uploading
+    );
+    assert_eq!(
+        actor.media_tasks(&a.keys).unwrap()[0].uploaded,
+        m::CHUNK as u64
+    );
+    drop(actor);
+    let actor = MessageCoordinator::open_with_protection(
+        &source_path,
+        owner.clone(),
+        &a.keys,
+        protection.clone(),
+    )
+    .unwrap();
+    actor.renew_session(a.token.clone()).unwrap();
+    assert_eq!(
+        actor.media_tasks(&a.keys).unwrap()[0].uploaded,
+        m::CHUNK as u64
+    );
+    for _ in 0..8 {
+        if !actor.media_tasks(&a.keys).unwrap()[0].restoring {
+            break;
+        }
+        assert_eq!(
+            actor.step(&id, &a.keys).await.unwrap().condition,
+            Condition::Uploading
+        );
+    }
+    assert!(!actor.media_tasks(&a.keys).unwrap()[0].restoring);
+    assert_eq!(read_original(), original_batch);
+    let restored_chunks: Vec<Vec<u8>> = sqlx::query_scalar(
+        "SELECT data FROM direct_v3_media_chunks WHERE object_id=$1 ORDER BY part",
+    )
+    .bind(&id)
+    .fetch_all(f.db.pool())
+    .await
+    .unwrap();
+    assert_eq!(original_chunks, restored_chunks);
     assert_eq!(
         actor
             .prepare_media(&id, &a.keys)
@@ -428,6 +500,127 @@ async fn core_http_client_upload_publish_four_device_download_and_expiry() {
     assert_eq!(
         api.publish_media(&a.token, &value).await.unwrap().state(),
         RemoteState::Accepted
+    );
+}
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn expired_prepared_directory_change_keeps_original_batch_until_explicit_cancel() {
+    use liteseal_core::{
+        backup::WorkDirectory,
+        trusted_devices::{
+            messages::{
+                coordinator::{Condition, MessageCoordinator},
+                media::Stage,
+                Owner, Store,
+            },
+            tasks::anchor_fingerprint,
+            witness::platform::Protection,
+        },
+    };
+    let f = Fixture::start(true).await;
+    let a = f.account().await;
+    let b = f.account().await;
+    accepted(&f, &a, &b).await;
+    let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
+    let path = work.0.join("original.db");
+    let protection = Protection::isolated_test();
+    let owner = Owner::new(&f.url, &a.id, &a.device, &a.keys).unwrap();
+    let actor =
+        MessageCoordinator::open_with_protection(&path, owner.clone(), &a.keys, protection.clone())
+            .unwrap();
+    for state in [directory(&f, &a), directory(&f, &b)] {
+        actor
+            .confirm_root(state.anchor(), &anchor_fingerprint(state.anchor()), &a.keys)
+            .unwrap();
+    }
+    actor.renew_session(a.token.clone()).unwrap();
+    let id = uuid::Uuid::new_v4().to_string();
+    actor
+        .stage_media(
+            Stage {
+                id: &id,
+                peer: &b.id,
+                name: "原目录文件.txt",
+                bytes: b"retain old audience",
+                kind: Kind::Attachment,
+                duration_ms: None,
+            },
+            &a.keys,
+        )
+        .unwrap();
+    actor.media_step(&id, &a.keys).await.unwrap();
+    let original = actor
+        .prepare_media(&id, &a.keys)
+        .await
+        .unwrap()
+        .task
+        .unwrap();
+    let read = || {
+        Store::open(&path, owner.clone(), protection.witness(&path).unwrap())
+            .unwrap()
+            .original(&id, &a.keys)
+            .unwrap()
+            .to_wire()
+            .unwrap()
+    };
+    let wire = read();
+    sqlx::query(
+        "UPDATE direct_v3_media_objects SET expires_at=now()-interval '1 second' WHERE id=$1",
+    )
+    .bind(&id)
+    .execute(f.db.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        actor.step(&id, &a.keys).await.unwrap().condition,
+        Condition::Uploading
+    );
+    assert_eq!(
+        actor.step(&id, &a.keys).await.unwrap().condition,
+        Condition::Uploading
+    );
+    let _joined = grant(&f, &b, &directory(&f, &b)).await;
+    assert_eq!(
+        actor.step(&id, &a.keys).await.unwrap().condition,
+        Condition::Conflict
+    );
+    assert_eq!(read(), wire);
+    assert_eq!(
+        actor
+            .prepare_media(&id, &a.keys)
+            .await
+            .unwrap()
+            .task
+            .unwrap()
+            .digest,
+        original.digest
+    );
+    assert_eq!(
+        actor
+            .clear_media_cache(None, &a.keys)
+            .unwrap()
+            .protected_tasks,
+        1
+    );
+    let published: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM direct_v3_batches WHERE id=$1)")
+            .bind(&id)
+            .fetch_one(f.db.pool())
+            .await
+            .unwrap();
+    assert!(!published);
+    actor.cancel_media(&id, &a.keys).unwrap();
+    assert_eq!(
+        actor.step(&id, &a.keys).await.unwrap().condition,
+        Condition::Cancelled
+    );
+    assert_eq!(read(), wire);
+    assert_eq!(
+        actor
+            .clear_media_cache(None, &a.keys)
+            .unwrap()
+            .cleared_tasks,
+        1
     );
 }
 fn media(

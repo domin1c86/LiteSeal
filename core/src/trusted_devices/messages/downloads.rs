@@ -182,6 +182,7 @@ impl Store {
                 hashes: vec![],
                 next: 0,
                 download: true,
+                reupload: None,
             })
         })?;
         if job.phase != Phase::Downloading || !job.hashes.is_empty() {

@@ -1,5 +1,21 @@
 # P0/P1 验收记录（待执行）
 
+## 2026-10-03 已准备媒体过期后的原密文恢复短测
+
+基线 `ffe26b7` 加本轮工作树，合成身份、临时数据库/文件、隔离原生保护和 Chromium 目录；真实库只使用既有标记专用 PostgreSQL 16.14。没有新长期、真实资料操作或推送；服务端生产协议/迁移与 T22 v1/v2 格式不变。
+
+- `target/test-results/direct-media-restore-core-final-2026-10-03.txt`：最终 20 项媒体存储短测通过（7.09 秒），新增四项恢复场景。认证重传游标重开、逐块原密文/原批次及媒体绑定签名完全一致、旧任务缺少游标可读、取消/坏缓存不推进、原接受结果覆盖活动进度并可安全清理通过。新增原生写故障后恢复前一 SQLite 夹具、通过见证重放提交游标，完整密文与原批次不变；此为故障注入/回退模拟，不是实际进程强杀。
+- `direct-media-restore-http-2026-10-03.txt`：6 项协调器短测通过（6.20 秒）。新增恢复等待中的取消、会话轮换、锁定/解锁及分块响应丢失四种情况：迟到回复不推进，仍保留原编号/摘要，允许重试时沿原块完成；恢复等待期间原准备查询可完成，验证文字网络锁已释放。HTTP 为本机夹具，不算真实系统锁屏或网络长时间验收；该用例也在最终完整工程中重新执行通过。
+- `direct-media-restore-ui-final-2026-10-03.txt` / `direct-ui-eQQIYC/result.json`：真实 Chromium，浅深色、1280×900/390×844 四组合各 25 项通过，无 renderer 错误和横向溢出（25 秒）。新增已准备媒体连续恢复/发布沿同一编号，只查询一次原准备结果；原暂存上传停止保留任务，已准备恢复提供原取消入口。API、音频和网络为夹具；没有用它替代真实双机或系统播放。
+- `direct-media-restore-delivery-final-2026-10-03.txt`：最终完整 `npm test` 为 23 项 Node、356 项普通 Rust 通过，0 失败；79 项 PostgreSQL 默认 ignored，实际库结果另记。格式、全 workspace/all-targets Clippy（-D warnings）、核心 FFI 检查通过，`direct-media-restore-static-2026-10-03.txt`。最终生产构建通过，release 49.82 秒，`direct-media-restore-build-2026-10-03.txt`，保留既有链接警告。
+- 群 UI 宽窄两组通过，`direct-media-restore-group-ui-2026-10-03.txt` / `group-ui-HS6FWI`；风格回归保持 72 张既有截图范围、无 renderer 错误，`direct-media-restore-style-2026-10-03.txt` / `ui-style-m6UDPv`。
+
+- `target/test-results/direct-media-restore-postgres-2026-10-03.json`：专用 PostgreSQL 16.14 全部 **79 通过/0 失败/0 跳过**，脱敏失败诊断为空。原协调器真实往返新增准备后过期、发布 404、按原编号重建、一块后重开、继续恢复及发布；恢复前后实际服务端分块和本机签名批次完全一致。新增目录变化用例验证原批次/摘要不变、没有发布、缓存仍受保护，明确取消后原编号栅栏完成并可清理。沿用只读观察认证 IP 窗口，三次计数 36/36/38，分别等待 19/25/27 秒自然到期（合计 71 秒），不删计数、不重试失败用例；脚本 `run-media-restore-paced.mjs` / `run-local-media-restore.ps1` 在测试目录。
+
+- `target/test-results/direct-media-restore-group-integration-2026-10-03.txt`：真实专用 PostgreSQL/服务端/同机三个隔离 Rust 桌面进程的 11 阶段全部通过，包含旧文字/群协作、群文件/合成语音/活动以及 T22 v2 离线缓存/投票/草稿/隐藏历史。它证明既有回归范围，不代表真实双 Windows、系统或新 v3 界面端到端验收。
+
+恢复每步先查询原接受/取消结果并校验目录，结果未知且媒体发布 404 才初始化；原目录冲突不重签。持久暂停/调度策略与预览强杀回收继续实施；真实磁盘满/权限拒绝/强杀、系统生命周期、双 Windows、独立审查和长期验收没有新增证据。
+
 ## 2026-10-03 v3 媒体存储与按会话整理短测
 
 基线 `cc79a66` 加本轮工作树；合成身份、隔离原生保护、临时 SQLite/Chromium 目录与已有标记专用 PostgreSQL，不操作真实资料、不启动新长期、不推送。服务端生产协议、迁移和 T22 v1/v2 格式不变。
