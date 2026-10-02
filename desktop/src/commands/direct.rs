@@ -319,10 +319,52 @@ pub async fn prepare(
     state: &AppState,
     account: String,
     text: String,
+    draft_revision: Option<u64>,
 ) -> Result<Preparation, String> {
     uuid(&account)?;
     let ctx = context(state)?;
-    let result = bounded(ctx.actor.prepare_text(&account, &text, &ctx.keys)).await?;
+    if draft_revision.is_none()
+        && ctx
+            .actor
+            .draft(&account, &ctx.keys)
+            .ok()
+            .is_some_and(|draft| draft.revision > 0)
+    {
+        return Err("请查询已保存草稿并携带原修订，不会另建替代任务".into());
+    }
+    let result = bounded(
+        ctx.actor
+            .prepare_text_draft(&account, &text, draft_revision, &ctx.keys),
+    )
+    .await?;
+    current(state, &ctx)?;
+    Ok(result)
+}
+pub fn draft(
+    state: &AppState,
+    account: String,
+) -> Result<liteseal_core::trusted_devices::messages::drafts::View, String> {
+    uuid(&account)?;
+    let ctx = context(state)?;
+    let result = ctx
+        .actor
+        .draft(&account, &ctx.keys)
+        .map_err(|e| e.to_string())?;
+    current(state, &ctx)?;
+    Ok(result)
+}
+pub fn save_draft(
+    state: &AppState,
+    account: String,
+    revision: u64,
+    text: String,
+) -> Result<liteseal_core::trusted_devices::messages::drafts::View, String> {
+    uuid(&account)?;
+    let ctx = context(state)?;
+    let result = ctx
+        .actor
+        .save_draft(&account, revision, &text, &ctx.keys)
+        .map_err(|e| e.to_string())?;
     current(state, &ctx)?;
     Ok(result)
 }

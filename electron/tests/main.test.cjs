@@ -117,6 +117,7 @@ for (const startupLocked of [false, true]) test(`main restricts IPC, locks and a
   electron.powerMonitor.emit('lock-screen');
   const beforeLockedRefresh = commands.filter(n=>n==='process_session_refreshes').length;
   for(const name of ['get_direct_chat','get_direct_history','inspect_direct_peer','confirm_direct_peer','prepare_direct_text','direct_task_step','cancel_direct_task','forget_direct_task','hide_direct_message'])assert.equal((await handlers.get(`liteseal:${name}`)(valid,{})).ok,false,name);
+  for(const name of ['get_direct_draft','save_direct_draft'])assert.equal((await handlers.get(`liteseal:${name}`)(valid,{})).ok,false,name);
   intervals[3]();assert.ok(!commands.includes('process_direct_chat'));
   for(const name of ['get_normal_profile','select_normal_profile','clear_normal_profile'])assert.equal((await handlers.get(`liteseal:${name}`)(valid,{})).ok,false,name);
   intervals[2](); await new Promise(resolve=>setTimeout(resolve,0));
@@ -215,6 +216,7 @@ for (const startupLocked of [false, true]) test(`main restricts IPC, locks and a
   assert.ok(reader);
   const readerEvent = { sender: reader.webContents, senderFrame: reader.webContents.mainFrame };
   for(const name of ['get_direct_chat','get_direct_history','inspect_direct_peer','confirm_direct_peer','prepare_direct_text','direct_task_step','cancel_direct_task','forget_direct_task','hide_direct_message'])assert.equal((await handlers.get(`liteseal:${name}`)(readerEvent,{})).ok,false,name);
+  for(const name of ['get_direct_draft','save_direct_draft'])assert.equal((await handlers.get(`liteseal:${name}`)(readerEvent,{})).ok,false,name);
   for(const name of ['get_normal_profile','select_normal_profile','clear_normal_profile'])assert.equal((await handlers.get(`liteseal:${name}`)(readerEvent,{})).ok,false,name);
   for(const name of ['get_session_refresh','prepare_session_refresh','session_refresh_step','cancel_session_refresh','forget_session_refresh']) {
     assert.equal((await handlers.get(`liteseal:${name}`)(readerEvent,{})).ok,false,name);

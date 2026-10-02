@@ -447,15 +447,39 @@ async fn desktop_text_original_retry_receive_ack_paging_hide_and_selected_scope(
         )
         .unwrap();
     }
+    let body = "中文 🦭 <script>原文字</script>";
+    let saved = d::save_draft(&a.state, b.anchor.account.clone(), 0, body.into()).unwrap();
+    assert_eq!(
+        d::draft(&a.reopen(&p), b.anchor.account.clone())
+            .unwrap()
+            .text,
+        body
+    );
     let prepared = d::prepare(
         &a.state,
         b.anchor.account.clone(),
         "中文 🦭 <script>原文字</script>".into(),
+        Some(saved.revision),
     )
     .await
     .unwrap()
     .task
     .unwrap();
+    assert!(d::draft(&a.state, b.anchor.account.clone())
+        .unwrap()
+        .text
+        .is_empty());
+    let same = d::prepare(
+        &a.state,
+        b.anchor.account.clone(),
+        body.into(),
+        Some(saved.revision),
+    )
+    .await
+    .unwrap()
+    .task
+    .unwrap();
+    assert_eq!(same.id, prepared.id);
     assert_eq!(
         d::step(&a.state, prepared.id.clone())
             .await
@@ -545,10 +569,19 @@ async fn desktop_text_original_retry_receive_ack_paging_hide_and_selected_scope(
         cursor = page.next_cursor;
     }
     assert_eq!(ids.len(), 52);
+    let current = d::draft(&a.state, b.anchor.account.clone()).unwrap();
+    let next = d::save_draft(
+        &a.state,
+        b.anchor.account.clone(),
+        current.revision,
+        "迟到响应仍保留原任务".into(),
+    )
+    .unwrap();
     let late = d::prepare(
         &a.state,
         b.anchor.account.clone(),
         "迟到响应仍保留原任务".into(),
+        Some(next.revision),
     )
     .await
     .unwrap()

@@ -28,7 +28,20 @@ pub enum Command {
         fingerprint: String,
     },
     #[serde(rename = "prepare_direct_text")]
-    PrepareDirectText { account: String, text: String },
+    PrepareDirectText {
+        account: String,
+        text: String,
+        #[serde(rename = "draftRevision")]
+        draft_revision: Option<u64>,
+    },
+    #[serde(rename = "get_direct_draft")]
+    GetDirectDraft { account: String },
+    #[serde(rename = "save_direct_draft")]
+    SaveDirectDraft {
+        account: String,
+        revision: u64,
+        text: String,
+    },
     #[serde(rename = "direct_task_step")]
     DirectTaskStep { id: String },
     #[serde(rename = "cancel_direct_task")]
@@ -996,6 +1009,8 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
     let management = matches!(
         &command,
         Command::GetDirectChat {}
+            | Command::GetDirectDraft { .. }
+            | Command::SaveDirectDraft { .. }
             | Command::GetDirectHistory { .. }
             | Command::InspectDirectPeer { .. }
             | Command::ConfirmDirectPeer { .. }
@@ -1141,9 +1156,23 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
             account,
             fingerprint,
         } => serde_json::to_value(commands::direct::confirm_peer(state, account, fingerprint)?),
-        Command::PrepareDirectText { account, text } => {
-            serde_json::to_value(commands::direct::prepare(state, account, text).await?)
+        Command::PrepareDirectText {
+            account,
+            text,
+            draft_revision,
+        } => serde_json::to_value(
+            commands::direct::prepare(state, account, text, draft_revision).await?,
+        ),
+        Command::GetDirectDraft { account } => {
+            serde_json::to_value(commands::direct::draft(state, account)?)
         }
+        Command::SaveDirectDraft {
+            account,
+            revision,
+            text,
+        } => serde_json::to_value(commands::direct::save_draft(
+            state, account, revision, text,
+        )?),
         Command::DirectTaskStep { id } => {
             serde_json::to_value(commands::direct::step(state, id).await?)
         }

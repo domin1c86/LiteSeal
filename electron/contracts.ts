@@ -17,7 +17,9 @@ export interface CommandMap {
   get_direct_history:{args:{before?:number|null};result:DirectHistory};
   inspect_direct_peer:{args:{account:string};result:DirectPeer};
   confirm_direct_peer:{args:{account:string;fingerprint:string};result:void};
-  prepare_direct_text:{args:{account:string;text:string};result:DirectPreparation};
+  prepare_direct_text:{args:{account:string;text:string;draftRevision?:number};result:DirectPreparation};
+  get_direct_draft:{args:{account:string};result:DirectDraft};
+  save_direct_draft:{args:{account:string;revision:number;text:string};result:DirectDraft};
   direct_task_step:{args:{id:string};result:DirectProgress};
   cancel_direct_task:{args:{id:string};result:DirectTask};
   forget_direct_task:{args:{id:string};result:void};
@@ -245,6 +247,7 @@ export interface AttachmentTask { id: string; peer_id: string; message_id: strin
 export type RefreshTarget={kind:"root"}|{kind:"join";profileId:string};
 export type DirectCondition="prepared"|"accepted"|"cancelled"|"syncing"|"needs_trust"|"conflict"|"retry"|"session_required"|"unsupported"|"idle"|"received"|"acknowledged";
 export interface DirectPeer{account:string;origin:string;root_device:string;root_fingerprint:string;encryption_fingerprint:string;signing_fingerprint:string}
+export interface DirectDraft{peer:string;revision:number;text:string;prepared:string|null}
 export interface DirectTask{id:string;revision:number;state:"prepared"|"publishing"|"conflict"|"accepted"|"cancelled";peer:string;epoch:string;digest:number[];cancel_requested:boolean}
 export interface DirectProgress{task:DirectTask;condition:DirectCondition;http_status:number|null}
 export interface DirectPreparation{task:DirectTask|null;condition:DirectCondition;http_status:number|null}
@@ -265,6 +268,7 @@ export interface GroupActivity { id:string;creator:string;title:string;start_at:
 export interface GroupExtensions { attachments:{id:string;blob:string;name:string;size:number;mime:string;duration_ms:number|null}[];activities:GroupActivity[];pending:boolean;conflict:boolean;pending_root:string|null }
 export type GroupExtensionCommand={kind:"activity";title:string;start_at:number;timezone:string;location:string;description:string}|{kind:"respond";activity:string;answer:GroupAnswer;revision:number}|{kind:"close"|"cancel";activity:string;revision:number};
 export const commandNames = [
+  "get_direct_draft","save_direct_draft",
   "get_direct_chat","get_direct_history","inspect_direct_peer","confirm_direct_peer","prepare_direct_text","direct_task_step","cancel_direct_task","forget_direct_task","hide_direct_message",
   "get_normal_profile","select_normal_profile","clear_normal_profile",
   "get_session_refresh","prepare_session_refresh","session_refresh_step","cancel_session_refresh","forget_session_refresh",

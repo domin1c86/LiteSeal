@@ -231,6 +231,20 @@ impl MessageCoordinator {
         let lease = self.lease(keys)?;
         self.with(&lease, |s| s.history(before, limit, keys))
     }
+    pub fn draft(&self, peer: &str, keys: &KeyPair) -> Result<super::drafts::View> {
+        let lease = self.lease(keys)?;
+        self.with(&lease, |s| s.draft(peer, keys))
+    }
+    pub fn save_draft(
+        &self,
+        peer: &str,
+        revision: u64,
+        text: &str,
+        keys: &KeyPair,
+    ) -> Result<super::drafts::View> {
+        let lease = self.lease(keys)?;
+        self.with(&lease, |s| s.save_draft(peer, revision, text, keys))
+    }
     pub fn text(&self, id: &str, keys: &KeyPair) -> Result<String> {
         let lease = self.lease(keys)?;
         self.with(&lease, |s| s.text(id, keys))
@@ -287,6 +301,15 @@ impl MessageCoordinator {
         text: &str,
         keys: &KeyPair,
     ) -> Result<Preparation> {
+        self.prepare_text_draft(peer, text, None, keys).await
+    }
+    pub async fn prepare_text_draft(
+        &self,
+        peer: &str,
+        text: &str,
+        draft_revision: Option<u64>,
+        keys: &KeyPair,
+    ) -> Result<Preparation> {
         if text.is_empty() || text.len() > liteseal_shared::direct_message::MAX_BODY {
             return Err(local("text".into()));
         }
@@ -328,7 +351,7 @@ impl MessageCoordinator {
             }
         }
         let task = self.with(&lease, |s| {
-            s.prepare(
+            s.prepare_with_draft(
                 Prepare {
                     id: &uuid::Uuid::new_v4().to_string(),
                     peer,
@@ -336,12 +359,18 @@ impl MessageCoordinator {
                     kind: Kind::Text,
                     body: text.as_bytes(),
                 },
+                draft_revision,
                 keys,
             )
         })?;
         Ok(Preparation {
+            condition: match task.state {
+                TaskState::Accepted => Condition::Accepted,
+                TaskState::Cancelled => Condition::Cancelled,
+                TaskState::Conflict => Condition::Conflict,
+                _ => Condition::Prepared,
+            },
             task: Some(task),
-            condition: Condition::Prepared,
             http_status: None,
         })
     }

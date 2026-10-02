@@ -130,6 +130,217 @@ fn accepted(batch: &Batch) -> Acceptance {
 }
 
 #[test]
+fn encrypted_draft_reopens_and_prepare_consumes_revision_with_original_retry() {
+    let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
+    let p = Protection::isolated_test();
+    let a = Account::new("alice");
+    let b = Account::new("bob");
+    let mut store = open(&work.0, "draft", &a, false, &p);
+    seed(&mut store, &[&a, &b]);
+    let saved = store
+        .save_draft("bob", 0, "草稿中文 🦭\n第二行", &a.root)
+        .unwrap();
+    assert_eq!(saved.revision, 1);
+    let identity = liteseal_core::keystore::KeystoreData {
+        user_id: "alice".into(),
+        device_id: a.initial.anchor().root.device_id.clone(),
+        server_url: a.initial.anchor().origin.clone(),
+        token: String::new(),
+        refresh_token: String::new(),
+        public_key: a.root.public_key.to_vec(),
+        secret_key: a.root.secret_key.to_vec(),
+        ed25519_pk: a.root.ed25519_pk.to_vec(),
+        ed25519_sk: a.root.ed25519_sk.to_vec(),
+    };
+    let output = work.0.join("draft-must-not-export.lseal");
+    let error = liteseal_core::backup::export(
+        &work.0.join("draft.db"),
+        identity,
+        b"independent backup password",
+        false,
+        &output,
+        &std::sync::atomic::AtomicBool::new(false),
+        |_, _| {},
+    )
+    .err()
+    .unwrap();
+    assert!(error.contains("v3 草稿"));
+    assert!(!output.exists());
+    drop(store);
+    let mut store = open(&work.0, "draft", &a, false, &p);
+    assert_eq!(store.draft("bob", &a.root).unwrap().text, saved.text);
+    assert!(store.save_draft("bob", 0, "过时正文", &a.root).is_err());
+    let id = uuid::Uuid::new_v4().to_string();
+    assert!(store
+        .prepare_with_draft(
+            Prepare {
+                id: &id,
+                peer: "bob",
+                sent_at: 2000,
+                kind: Kind::Text,
+                body: b"mismatch"
+            },
+            Some(1),
+            &a.root
+        )
+        .is_err());
+    assert_eq!(store.tasks(&a.root).unwrap().len(), 0);
+    assert_eq!(store.draft("bob", &a.root).unwrap().text, saved.text);
+    let task = store
+        .prepare_with_draft(
+            Prepare {
+                id: &id,
+                peer: "bob",
+                sent_at: 2000,
+                kind: Kind::Text,
+                body: saved.text.as_bytes(),
+            },
+            Some(1),
+            &a.root,
+        )
+        .unwrap();
+    let draft = store.draft("bob", &a.root).unwrap();
+    assert_eq!(draft.revision, 2);
+    assert!(draft.text.is_empty());
+    assert_eq!(draft.prepared.as_deref(), Some(id.as_str()));
+    let retry = uuid::Uuid::new_v4().to_string();
+    let same = store
+        .prepare_with_draft(
+            Prepare {
+                id: &retry,
+                peer: "bob",
+                sent_at: 3000,
+                kind: Kind::Text,
+                body: saved.text.as_bytes(),
+            },
+            Some(1),
+            &a.root,
+        )
+        .unwrap();
+    assert_eq!(same.id, task.id);
+    assert_eq!(same.digest, task.digest);
+    assert_eq!(store.tasks(&a.root).unwrap().len(), 1);
+    store.save_draft("bob", 2, "新的正文保留", &a.root).unwrap();
+    assert!(store
+        .prepare_with_draft(
+            Prepare {
+                id: &retry,
+                peer: "bob",
+                sent_at: 3000,
+                kind: Kind::Text,
+                body: saved.text.as_bytes()
+            },
+            Some(1),
+            &a.root
+        )
+        .is_err());
+    assert_eq!(store.draft("bob", &a.root).unwrap().text, "新的正文保留");
+    drop(store);
+    let bytes = fs::read(work.0.join("draft.db")).unwrap();
+    assert!(!bytes
+        .windows(saved.text.len())
+        .any(|b| b == saved.text.as_bytes()));
+}
+
+#[test]
+fn draft_scope_isolated_and_failed_atomic_prepare_preserves_current_body() {
+    let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
+    let p = Protection::isolated_test();
+    let a = Account::new("alice");
+    let b = Account::new("bob");
+    let mut first = open(&work.0, "shared-draft", &a, false, &p);
+    seed(&mut first, &[&a, &b]);
+    first.save_draft("bob", 0, "仅原身份可读", &a.root).unwrap();
+    let mut other = open(&work.0, "shared-draft", &b, false, &p);
+    assert!(other.draft("bob", &b.root).unwrap().text.is_empty());
+    assert!(first.draft("unknown", &a.root).is_err());
+    let id = uuid::Uuid::new_v4().to_string();
+    assert!(first
+        .prepare_with_draft(
+            Prepare {
+                id: &id,
+                peer: "bob",
+                sent_at: 2000,
+                kind: Kind::Text,
+                body: "仅原身份可读".as_bytes()
+            },
+            Some(0),
+            &a.root
+        )
+        .is_err());
+    assert!(first.tasks(&a.root).unwrap().is_empty());
+    assert_eq!(first.draft("bob", &a.root).unwrap().text, "仅原身份可读");
+}
+
+#[test]
+fn prepare_draft_secure_write_failure_rolls_back_task_and_clear_together() {
+    use liteseal_core::trusted_devices::witness::{SecureCell, SecureStore, Witness};
+    use std::sync::{Arc, Mutex, MutexGuard};
+    #[derive(Default)]
+    struct Memory {
+        state: Mutex<(Option<Vec<u8>>, bool)>,
+    }
+    struct Cell<'a>(MutexGuard<'a, (Option<Vec<u8>>, bool)>);
+    impl SecureCell for Cell<'_> {
+        fn read(&mut self) -> Result<Option<Vec<u8>>, String> {
+            Ok(self.0 .0.clone())
+        }
+        fn write(&mut self, bytes: &[u8]) -> Result<(), String> {
+            if self.0 .1 {
+                self.0 .1 = false;
+                return Err("synthetic secure write failure".into());
+            }
+            self.0 .0 = Some(bytes.to_vec());
+            Ok(())
+        }
+    }
+    impl SecureStore for Memory {
+        fn binding(&self) -> [u8; 32] {
+            [42; 32]
+        }
+        fn lock(&self) -> Result<Box<dyn SecureCell + '_>, String> {
+            Ok(Box::new(Cell(self.state.lock().unwrap())))
+        }
+    }
+    let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
+    let path = work.0.join("atomic-draft.db");
+    drop(liteseal_core::trusted_devices::DeviceTrustStore::open(&path).unwrap());
+    let backend = Arc::new(Memory::default());
+    let a = Account::new("alice");
+    let b = Account::new("bob");
+    let owner = Owner::new(
+        &a.initial.anchor().origin,
+        "alice",
+        &a.initial.anchor().root.device_id,
+        &a.root,
+    )
+    .unwrap();
+    let mut store = Store::open(&path, owner, Witness::new(&path, backend.clone())).unwrap();
+    seed(&mut store, &[&a, &b]);
+    store.save_draft("bob", 0, "失败后保留", &a.root).unwrap();
+    backend.state.lock().unwrap().1 = true;
+    let id = uuid::Uuid::new_v4().to_string();
+    assert!(store
+        .prepare_with_draft(
+            Prepare {
+                id: &id,
+                peer: "bob",
+                sent_at: 2000,
+                kind: Kind::Text,
+                body: "失败后保留".as_bytes()
+            },
+            Some(1),
+            &a.root
+        )
+        .is_err());
+    assert!(store.tasks(&a.root).unwrap().is_empty());
+    let draft = store.draft("bob", &a.root).unwrap();
+    assert_eq!(draft.revision, 1);
+    assert_eq!(draft.text, "失败后保留");
+    assert!(draft.prepared.is_none());
+}
+
+#[test]
 fn original_task_reopen_unknown_result_and_explicit_cancel_do_not_reencrypt_or_skip_chain() {
     let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
     let protection = Protection::isolated_test();

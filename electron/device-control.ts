@@ -2,6 +2,7 @@ import type { CommandName } from "./contracts";
 import type { DesktopBridge } from "./bridge";
 
 export const deviceCommands = new Set<CommandName>([
+  "get_direct_draft","save_direct_draft",
   "get_direct_chat","get_direct_history","inspect_direct_peer","confirm_direct_peer","prepare_direct_text","direct_task_step","cancel_direct_task","forget_direct_task","hide_direct_message",
   "get_normal_profile","select_normal_profile","clear_normal_profile",
   "get_session_refresh","prepare_session_refresh","session_refresh_step","cancel_session_refresh","forget_session_refresh",

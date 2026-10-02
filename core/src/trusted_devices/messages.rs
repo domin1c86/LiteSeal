@@ -14,6 +14,7 @@ use std::path::Path;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 pub mod api;
 pub mod coordinator;
+pub mod drafts;
 const MAX_LOCAL: usize = 73768;
 const MAX_TASKS: usize = 128;
 pub(crate) fn require_backup_support(
@@ -28,6 +29,10 @@ pub(crate) fn require_backup_support(
     let origin = liteseal_shared::trusted_device::canonical_origin(&identity.server_url)
         .map_err(|_| invalid())?;
     let scope = Owner::new(&origin, &identity.user_id, &identity.device_id, &keys)?.scope();
+    let task_table:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='device_control_tasks')",[],|r|r.get(0)).map_err(db)?;
+    if task_table&&conn.query_row("SELECT EXISTS(SELECT 1 FROM device_control_tasks WHERE scope=?1 AND kind='direct_v3_draft')",[format!("draft:{scope}")],|r|r.get::<_,bool>(0)).map_err(db)?{
+        return Err("当前身份含单聊 v3 草稿，本版备份尚不支持；未生成会遗漏草稿的备份".into());
+    }
     if conn
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM direct_v3_records WHERE scope=?1)",
@@ -465,6 +470,36 @@ impl Store {
         })
     }
     pub fn prepare(&mut self, request: Prepare<'_>, keys: &KeyPair) -> Result<TaskView, String> {
+        self.prepare_with_draft(request, None, keys)
+    }
+    pub fn draft(&mut self, peer: &str, keys: &KeyPair) -> Result<drafts::View, String> {
+        self.owner.keys(keys)?;
+        let owner = self.owner.clone();
+        self.trust.read_checked(|conn| {
+            current(conn, &owner.origin, peer)?;
+            drafts::load(conn, &owner, peer, keys)
+        })
+    }
+    pub fn save_draft(
+        &mut self,
+        peer: &str,
+        revision: u64,
+        text: &str,
+        keys: &KeyPair,
+    ) -> Result<drafts::View, String> {
+        self.owner.keys(keys)?;
+        let owner = self.owner.clone();
+        self.trust.write_checked(|conn| {
+            current(conn, &owner.origin, peer)?;
+            drafts::put(conn, &owner, peer, revision, text, None, keys)
+        })
+    }
+    pub fn prepare_with_draft(
+        &mut self,
+        request: Prepare<'_>,
+        draft_revision: Option<u64>,
+        keys: &KeyPair,
+    ) -> Result<TaskView, String> {
         self.owner.keys(keys)?;
         if uuid::Uuid::parse_str(request.id)
             .ok()
@@ -475,6 +510,21 @@ impl Store {
         let owner = self.owner.clone();
         let scope = owner.scope();
         self.trust.write_checked(|conn| {
+            if let Some(expected)=draft_revision {
+                if request.kind!=Kind::Text{return Err(invalid());}
+                let draft=drafts::load(conn,&owner,request.peer,keys)?;
+                if draft.revision!=expected {
+                    if draft.revision==expected.checked_add(1).ok_or_else(invalid)? {
+                        if let Some(id)=draft.prepared.as_ref(){
+                            let row=task(conn,&scope,id)?.ok_or("原准备已整理，请保留原结果，不会重新创建")?;
+                            let (row,batch,local)=checked_task(conn,&owner,row,keys)?;
+                            if batch.header.peer==request.peer&&batch.header.kind==Kind::Text&&local.body==request.body{return view(&row,&batch);}
+                        }
+                    }
+                    return Err("草稿修订已变化，原准备没有覆盖新正文".into());
+                }
+                if draft.text.as_bytes()!=request.body{return Err("请先保存当前正文，原草稿未改变".into());}
+            }
             let sender=current(conn,&owner.origin,&owner.account)?;owner.member(&sender)?;let peer=current(conn,&owner.origin,request.peer)?;
             if let Some(row)=task(conn,&scope,request.id)? {
                 let (row,batch,body)=checked_task(conn,&owner,row,keys)?;
@@ -490,6 +540,7 @@ impl Store {
             let batch=Batch::make(header,&sender,&peer,keys,request.body).map_err(|_|invalid())?;batch.verify_next(previous.as_ref()).map_err(|_|invalid())?;
             let local=seal(&owner,&batch,"authored","processed",request.body,keys)?;let wire=batch.to_wire().map_err(|_|invalid())?;let epoch=hex::encode(epoch);
             conn.execute("INSERT INTO direct_v3_tasks(scope,id,revision,state,peer,epoch,wire,local) VALUES(?1,?2,0,'prepared',?3,?4,?5,?6)",params![scope,request.id,request.peer,epoch,wire,local]).map_err(|_|conflict())?;
+            if let Some(expected)=draft_revision{drafts::put(conn,&owner,request.peer,expected,"",Some(request.id.into()),keys)?;}
             Ok(TaskView{id:request.id.into(),revision:0,state:TaskState::Prepared,peer:request.peer.into(),epoch,digest:batch.digest().map_err(|_|invalid())?,cancel_requested:false})
         })
     }
