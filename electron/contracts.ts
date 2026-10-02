@@ -14,7 +14,11 @@ export interface GroupCollaboration { polls: GroupPoll[]; pin: string | null; pi
 export type CollaborationCommand = { kind: "mention"; text: string; mentions: CollaborationMember[] } | { kind: "poll"; question: string; options: string[] } | { kind: "vote"; poll: string; option: string; revision: number } | { kind: "close"; poll: string; revision: number } | { kind: "pin"; message: string | null; revision: number };
 export interface CommandMap {
   get_direct_chat:{args:{};result:DirectSnapshot};
-  get_direct_history:{args:{before?:number|null};result:DirectHistory};
+  get_direct_history:{args:{account?:string|null;before?:number|null};result:DirectHistory};
+  mark_direct_read:{args:{account:string;throughId:string};result:void};
+  set_direct_muted:{args:{account:string;revision:number;muted:boolean};result:void};
+  set_direct_notification_context:{args:{scope:string;activeAccount:string|null};result:void};
+  take_direct_notification_target:{args:{scope:string};result:{peer:string}|null};
   inspect_direct_peer:{args:{account:string};result:DirectPeer};
   confirm_direct_peer:{args:{account:string;fingerprint:string};result:void};
   prepare_direct_text:{args:{account:string;text:string;draftRevision?:number};result:DirectPreparation};
@@ -24,7 +28,7 @@ export interface CommandMap {
   cancel_direct_task:{args:{id:string};result:DirectTask};
   forget_direct_task:{args:{id:string};result:void};
   hide_direct_message:{args:{id:string};result:void};
-  process_direct_chat:{args:{};result:{changed:boolean;task:DirectProgress|null;poll:{condition:DirectCondition;received:number;acknowledged:number;has_more:boolean;http_status:number|null}|null}};
+  process_direct_chat:{args:{};result:{changed:boolean;task:DirectProgress|null;poll:{condition:DirectCondition;received:number;acknowledged:number;has_more:boolean;http_status:number|null}|null;notification_scope:string|null;notifications:{peer:string;id:string}[]}};
   get_normal_profile:{args:{};result:NormalProfileSnapshot};
   select_normal_profile:{args:{target:RefreshTarget;generation:number;scopeFingerprint:string};result:NormalProfileSnapshot};
   clear_normal_profile:{args:{generation:number};result:NormalProfileSnapshot};
@@ -251,7 +255,8 @@ export interface DirectDraft{peer:string;revision:number;text:string;prepared:st
 export interface DirectTask{id:string;revision:number;state:"prepared"|"publishing"|"conflict"|"accepted"|"cancelled";peer:string;epoch:string;digest:number[];cancel_requested:boolean}
 export interface DirectProgress{task:DirectTask;condition:DirectCondition;http_status:number|null}
 export interface DirectPreparation{task:DirectTask|null;condition:DirectCondition;http_status:number|null}
-export interface DirectSnapshot{identity:DirectPeer;device:string;peers:DirectPeer[];tasks:DirectTask[];can_network:boolean}
+export interface DirectConversation{peer:string;revision:number;muted:boolean;unread:number;latest_id:string|null;latest_cursor:number|null;has_draft:boolean}
+export interface DirectSnapshot{notification_scope:string;identity:DirectPeer;device:string;peers:DirectPeer[];conversations:DirectConversation[];tasks:DirectTask[];can_network:boolean}
 export interface DirectHistory{messages:{cursor:number;id:string;sender:string;sender_device:string;peer:string;role:string;kind:string;outcome:string;sent_at:number;accepted_at:number;text:string|null}[];next_cursor:number|null}
 export interface NormalProfileChoice{target:RefreshTarget;scope_fingerprint:string;origin:string;account:string;device:string;device_name:string;protocol:string;has_session:boolean;eligible:boolean;access_expired:boolean}
 export interface NormalProfileSnapshot{generation:number;explicit:boolean;selected:NormalProfileChoice|null;error:string|null;profiles:{target:RefreshTarget;profile:NormalProfileChoice|null;error:string|null}[]}
@@ -269,6 +274,8 @@ export interface GroupExtensions { attachments:{id:string;blob:string;name:strin
 export type GroupExtensionCommand={kind:"activity";title:string;start_at:number;timezone:string;location:string;description:string}|{kind:"respond";activity:string;answer:GroupAnswer;revision:number}|{kind:"close"|"cancel";activity:string;revision:number};
 export const commandNames = [
   "get_direct_draft","save_direct_draft",
+  "mark_direct_read","set_direct_muted",
+  "set_direct_notification_context","take_direct_notification_target",
   "get_direct_chat","get_direct_history","inspect_direct_peer","confirm_direct_peer","prepare_direct_text","direct_task_step","cancel_direct_task","forget_direct_task","hide_direct_message",
   "get_normal_profile","select_normal_profile","clear_normal_profile",
   "get_session_refresh","prepare_session_refresh","session_refresh_step","cancel_session_refresh","forget_session_refresh",

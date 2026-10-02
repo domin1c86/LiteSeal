@@ -56,9 +56,11 @@ fn peer(anchor: &Anchor) -> Peer {
 }
 #[derive(Serialize)]
 pub struct Snapshot {
+    pub notification_scope: String,
     pub identity: Peer,
     pub device: String,
     pub peers: Vec<Peer>,
+    pub conversations: Vec<liteseal_core::trusted_devices::messages::conversations::View>,
     pub tasks: Vec<TaskView>,
     pub can_network: bool,
 }
@@ -78,6 +80,8 @@ pub struct Report {
     pub changed: bool,
     pub task: Option<Progress>,
     pub poll: Option<Poll>,
+    pub notification_scope: Option<String>,
+    pub notifications: Vec<liteseal_core::trusted_devices::messages::conversations::Notification>,
 }
 fn bad() -> String {
     "选中单聊范围已变化或不可用，请查询原任务，不会自动重建".into()
@@ -221,9 +225,14 @@ pub fn snapshot(state: &AppState) -> Result<Snapshot, String> {
         .map(peer)
         .collect();
     let result = Snapshot {
+        notification_scope: ctx.key.clone(),
         identity: peer(&own),
         device: ctx.selected.identity.device_id.clone(),
         peers,
+        conversations: ctx
+            .actor
+            .conversations(&ctx.keys)
+            .map_err(|e| e.to_string())?,
         tasks: ctx.actor.tasks(&ctx.keys).map_err(|e| e.to_string())?,
         can_network: !ctx.selected.identity.token.is_empty(),
     };
@@ -231,13 +240,23 @@ pub fn snapshot(state: &AppState) -> Result<Snapshot, String> {
     Ok(result)
 }
 pub fn history(state: &AppState, before: Option<i64>) -> Result<History, String> {
+    history_peer(state, None, before)
+}
+pub fn history_peer(
+    state: &AppState,
+    account: Option<String>,
+    before: Option<i64>,
+) -> Result<History, String> {
+    if let Some(account) = &account {
+        uuid(account)?;
+    }
     if before.is_some_and(|n| n <= 0) {
         return Err("历史游标无效".into());
     }
     let ctx = context(state)?;
     let rows = ctx
         .actor
-        .history(before, 6, &ctx.keys)
+        .history_peer(account.as_deref(), before, 6, &ctx.keys)
         .map_err(|e| e.to_string())?;
     let next_cursor = if rows.len() == 6 {
         rows.last().map(|r| r.cursor)
@@ -264,6 +283,27 @@ pub fn history(state: &AppState, before: Option<i64>) -> Result<History, String>
         messages,
         next_cursor,
     })
+}
+pub fn mark_read(state: &AppState, account: String, through_id: String) -> Result<(), String> {
+    uuid(&account)?;
+    let ctx = context(state)?;
+    ctx.actor
+        .mark_read(&account, &through_id, &ctx.keys)
+        .map_err(|e| e.to_string())?;
+    current(state, &ctx)
+}
+pub fn set_muted(
+    state: &AppState,
+    account: String,
+    revision: u64,
+    muted: bool,
+) -> Result<(), String> {
+    uuid(&account)?;
+    let ctx = context(state)?;
+    ctx.actor
+        .set_muted(&account, revision, muted, &ctx.keys)
+        .map_err(|e| e.to_string())?;
+    current(state, &ctx)
 }
 pub async fn inspect_peer(state: &AppState, account: String) -> Result<Peer, String> {
     uuid(&account)?;
@@ -432,6 +472,8 @@ pub async fn process(state: &AppState) -> Result<Report, String> {
             changed,
             task,
             poll: Some(poll),
+            notification_scope: Some(ctx.key.clone()),
+            notifications: ctx.actor.claim_notifications(&ctx.keys)?,
         })
     };
     let result = bounded(work).await?;

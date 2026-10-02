@@ -21,7 +21,7 @@ for (const startupLocked of [false, true]) test(`main restricts IPC, locks and a
   let loaded;
   const load = new Promise(resolve => { loaded = resolve; });
   const child = new EventEmitter();
-  let holdDevice = false, heldDevice, holdRefresh = false, heldRefresh,holdDirect=false,heldDirect;
+  let holdDevice = false, heldDevice, holdRefresh = false, heldRefresh,holdDirect=false,heldDirect,holdContext=false,heldContext;
   child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
   child.kill = () => { child.emit('exit', 0); child.emit('close', 0); };
   child.stdin.on('finish', child.kill);
@@ -29,6 +29,8 @@ for (const startupLocked of [false, true]) test(`main restricts IPC, locks and a
     const request = JSON.parse(frame.toString());
     commands.push(request.command.name);
     if(holdDirect&&request.command.name==='process_direct_chat'){heldDirect=request;return;}
+    if(holdContext&&request.command.name==='get_direct_chat'){heldContext=request;return;}
+    if(request.command.name==='get_direct_chat'){child.stdout.write(JSON.stringify({id:request.id,result:{notification_scope:'native-scope',peers:[{account:'bob'}]}})+'\n');return;}
     if (holdRefresh && request.command.name === 'process_session_refreshes') { heldRefresh = request; return; }
     if (holdDevice && request.command.name === 'get_device_control') { heldDevice = request; return; }
     child.stdout.write(JSON.stringify({ id: request.id, result: request.command.name === 'process_scheduled_messages' ? 1 : request.command.name === 'process_groups' ? { changed: 1, errors: [] } : [] }) + '\n');
@@ -51,6 +53,7 @@ for (const startupLocked of [false, true]) test(`main restricts IPC, locks and a
         });
       }
       setMenuBarVisibility() {}
+      isFocused() { return false; }
       isDestroyed() { return false; }
       close() { this.emit('closed'); }
       destroy() { this.emit('closed'); }
@@ -116,7 +119,7 @@ for (const startupLocked of [false, true]) test(`main restricts IPC, locks and a
   assert.ok(heldDevice);
   electron.powerMonitor.emit('lock-screen');
   const beforeLockedRefresh = commands.filter(n=>n==='process_session_refreshes').length;
-  for(const name of ['get_direct_chat','get_direct_history','inspect_direct_peer','confirm_direct_peer','prepare_direct_text','direct_task_step','cancel_direct_task','forget_direct_task','hide_direct_message'])assert.equal((await handlers.get(`liteseal:${name}`)(valid,{})).ok,false,name);
+  for(const name of ['set_direct_notification_context','take_direct_notification_target','mark_direct_read','set_direct_muted','get_direct_chat','get_direct_history','inspect_direct_peer','confirm_direct_peer','prepare_direct_text','direct_task_step','cancel_direct_task','forget_direct_task','hide_direct_message'])assert.equal((await handlers.get(`liteseal:${name}`)(valid,{})).ok,false,name);
   for(const name of ['get_direct_draft','save_direct_draft'])assert.equal((await handlers.get(`liteseal:${name}`)(valid,{})).ok,false,name);
   intervals[3]();assert.ok(!commands.includes('process_direct_chat'));
   for(const name of ['get_normal_profile','select_normal_profile','clear_normal_profile'])assert.equal((await handlers.get(`liteseal:${name}`)(valid,{})).ok,false,name);
@@ -169,6 +172,17 @@ for (const startupLocked of [false, true]) test(`main restricts IPC, locks and a
   child.stdout.write(JSON.stringify({id:heldDirect.id,result:{changed:true,task:null,poll:null}})+'\n');await new Promise(resolve=>setTimeout(resolve,0));
   assert.ok(!rendererEvents.some(event=>event[0]==='liteseal:direct-changed'));
   holdDirect=false;electron.powerMonitor.emit('resume');await new Promise(resolve=>setTimeout(resolve,0));
+  const context=handlers.get('liteseal:set_direct_notification_context');
+  assert.equal((await context(valid,{scope:'native-scope',activeAccount:'bob'})).ok,true);
+  assert.equal((await context(valid,{scope:'other-scope',activeAccount:'bob'})).ok,false);
+  assert.equal((await context(valid,{scope:'native-scope',activeAccount:'mallory'})).ok,false);
+  assert.equal((await handlers.get('liteseal:take_direct_notification_target')(valid,{scope:'native-scope'})).result,null);
+  holdContext=true;const olderContext=context(valid,{scope:'native-scope',activeAccount:'bob'});await new Promise(resolve=>setTimeout(resolve,0));const olderRequest=heldContext;
+  holdContext=false;assert.equal((await context(valid,{scope:'native-scope',activeAccount:null})).ok,true);
+  child.stdout.write(JSON.stringify({id:olderRequest.id,result:{notification_scope:'native-scope',peers:[{account:'bob'}]}})+'\n');assert.equal((await olderContext).ok,false,'older context cannot replace a later selection');
+  holdContext=true;const pendingContext=context(valid,{scope:'native-scope',activeAccount:'bob'});await new Promise(resolve=>setTimeout(resolve,0));
+  electron.powerMonitor.emit('suspend');child.stdout.write(JSON.stringify({id:heldContext.id,result:{notification_scope:'native-scope',peers:[{account:'bob'}]}})+'\n');assert.equal((await pendingContext).ok,false);
+  holdContext=false;electron.powerMonitor.emit('resume');await new Promise(resolve=>setTimeout(resolve,0));
   holdDevice=true;
   const beforeRootSave=devices(valid,{});
   await new Promise(resolve=>setTimeout(resolve,0));
@@ -215,7 +229,7 @@ for (const startupLocked of [false, true]) test(`main restricts IPC, locks and a
   const reader = windows[1];
   assert.ok(reader);
   const readerEvent = { sender: reader.webContents, senderFrame: reader.webContents.mainFrame };
-  for(const name of ['get_direct_chat','get_direct_history','inspect_direct_peer','confirm_direct_peer','prepare_direct_text','direct_task_step','cancel_direct_task','forget_direct_task','hide_direct_message'])assert.equal((await handlers.get(`liteseal:${name}`)(readerEvent,{})).ok,false,name);
+  for(const name of ['set_direct_notification_context','take_direct_notification_target','mark_direct_read','set_direct_muted','get_direct_chat','get_direct_history','inspect_direct_peer','confirm_direct_peer','prepare_direct_text','direct_task_step','cancel_direct_task','forget_direct_task','hide_direct_message'])assert.equal((await handlers.get(`liteseal:${name}`)(readerEvent,{})).ok,false,name);
   for(const name of ['get_direct_draft','save_direct_draft'])assert.equal((await handlers.get(`liteseal:${name}`)(readerEvent,{})).ok,false,name);
   for(const name of ['get_normal_profile','select_normal_profile','clear_normal_profile'])assert.equal((await handlers.get(`liteseal:${name}`)(readerEvent,{})).ok,false,name);
   for(const name of ['get_session_refresh','prepare_session_refresh','session_refresh_step','cancel_session_refresh','forget_session_refresh']) {

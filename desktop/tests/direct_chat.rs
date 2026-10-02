@@ -497,15 +497,42 @@ async fn desktop_text_original_retry_receive_ack_paging_hide_and_selected_scope(
         liteseal_core::trusted_devices::messages::coordinator::Condition::Accepted
     );
     assert_eq!(world.lock().unwrap().publish, 1);
-    assert!(d::process(&b.state).await.unwrap().changed);
+    let report = d::process(&b.state).await.unwrap();
+    assert!(report.changed);
+    assert_eq!(report.notifications.len(), 1);
+    assert_eq!(report.notifications[0].id, prepared.id);
+    assert_eq!(
+        report.notification_scope.as_deref(),
+        Some(d::snapshot(&b.state).unwrap().notification_scope.as_str())
+    );
+    let conversation = d::snapshot(&b.state).unwrap().conversations.remove(0);
+    assert_eq!(conversation.unread, 1);
+    assert!(
+        d::history_peer(&b.state, Some(a.anchor.account.clone()), None)
+            .unwrap()
+            .messages
+            .iter()
+            .all(|m| m.record.peer == a.anchor.account)
+    );
+    d::mark_read(&b.state, a.anchor.account.clone(), prepared.id.clone()).unwrap();
+    let conversation = d::snapshot(&b.state).unwrap().conversations.remove(0);
+    assert_eq!(conversation.unread, 0);
+    d::set_muted(
+        &b.state,
+        a.anchor.account.clone(),
+        conversation.revision,
+        true,
+    )
+    .unwrap();
+    assert!(d::snapshot(&b.reopen(&p)).unwrap().conversations[0].muted);
     assert_eq!(
         d::history(&b.state, None).unwrap().messages[0]
             .text
             .as_deref(),
         Some("中文 🦭 <script>原文字</script>")
     );
-    d::process(&b.state).await.unwrap();
-    d::process(&b.state).await.unwrap();
+    assert!(d::process(&b.state).await.unwrap().notifications.is_empty());
+    assert!(d::process(&b.state).await.unwrap().notifications.is_empty());
     assert_eq!(world.lock().unwrap().acks, 2);
     d::hide(&b.state, prepared.id.clone()).unwrap();
     world

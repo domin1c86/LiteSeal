@@ -35,6 +35,7 @@ const notifications = new ChatNotifications(() => mainWindow, bridge);
 let locked = false;
 let lockEnabled = false;
 let lockGeneration = 0;
+let directContextRequest = 0;
 let unlockAfter = 0;
 let unlockBusy = false;
 let releaseUrl: string | null = null;
@@ -117,9 +118,10 @@ else {
     setInterval(()=>{
       if(directBusy||locked||screenLocked||systemSuspended||quitting||exitRequested)return;
       let epoch:number;try{epoch=deviceControl.capture();}catch{return;}
-      const generation=lockGeneration;directBusy=true;
+      const generation=lockGeneration,notificationGeneration=notifications.directGeneration(),notificationRevision=notifications.directRevision();directBusy=true;
       void bridge.call("process_direct_chat",{}).then(report=>{
         deviceControl.check(epoch);if(generation!==lockGeneration)return;
+        try{notifications.receiveDirect(report,notificationGeneration,notificationRevision);}catch{/* Toast failures never fail delivery or ACK. */}
         mainWindow?.webContents.send("liteseal:direct-status",report);
         if(report.changed)mainWindow?.webContents.send("liteseal:direct-changed");
       }).catch(()=>{}).finally(()=>{directBusy=false;});
@@ -431,6 +433,17 @@ else {
             return { ok: true, result: null };
           }
           if (name === "take_notification_target") return { ok: true, result: notifications.takeTarget() };
+          if(name==="set_direct_notification_context"||name==="take_direct_notification_target") {
+            const input=args as {scope:string;activeAccount?:string|null};
+            const contextRequest=name==="set_direct_notification_context"?++directContextRequest:directContextRequest;
+            const current=await bridge.call("get_direct_chat",{});
+            if(locked||generation!==lockGeneration||deviceEpoch===null)throw new Error("通知上下文已失效");
+            deviceControl.check(deviceEpoch);
+            if(typeof input.scope!=="string"||input.scope!==current.notification_scope||name==="set_direct_notification_context"&&contextRequest!==directContextRequest)throw new Error("通知档案已变化");
+            if(name==="take_direct_notification_target")return {ok:true,result:notifications.takeDirect(input.scope)};
+            if(input.activeAccount!==null&&!current.peers.some(p=>p.account===input.activeAccount))throw new Error("通知会话无效");
+            notifications.directContext(input.scope,input.activeAccount??null);return {ok:true,result:null};
+          }
           if (name === "copy_message_text") {
             const text = args && typeof args === "object" ? (args as Record<string, unknown>).text : undefined;
             if (typeof text !== "string" || text.length > 1024 * 1024) throw new Error("无效的复制文本或文本超过 1 MiB");
@@ -450,6 +463,11 @@ else {
           if (name === "poll_messages") {
             // A failed notification must never consume or fail a persisted relay batch.
             await notifications.receive(result as import("../ui/src/types").PollMessagesResult).catch(() => {});
+          }
+          if(["save_root_session","select_normal_profile","clear_normal_profile","sign_out","clear_keypair","logout_all_sessions","change_password"].includes(name))notifications.directContext(null,null);
+          if(name==="set_direct_muted"||name==="mark_direct_read"||name==="hide_direct_message") {
+            if(name==="hide_direct_message")notifications.directContext(null,null);
+            else notifications.dismissDirect((args as {account:string}).account);
           }
           if (name === "clear_group_history") { notifications.suppressGroup((args as { groupId: string }).groupId); mainWindow?.webContents.send("liteseal:groups-changed"); }
           if (name === "set_group_muted") notifications.suppressGroup((args as { groupId: string }).groupId);
@@ -498,7 +516,7 @@ else {
     });
     mainWindow.on("closed", () => { mainWindow = undefined; });
     mainWindow.webContents.on("will-prevent-unload", () => { exitRequested = false; if (!locked && !screenLocked && !systemSuspended) void deviceControl.resume().catch(() => {}); });
-    mainWindow.webContents.on("render-process-gone", () => notifications.context(null, null));
+    mainWindow.webContents.on("render-process-gone", () => {notifications.context(null, null);notifications.directContext(null,null);});
     mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     mainWindow.webContents.on("will-navigate", event => event.preventDefault());
     mainWindow.webContents.on("will-attach-webview", event => event.preventDefault());

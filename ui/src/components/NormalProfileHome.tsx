@@ -15,7 +15,7 @@ export default function NormalProfileHome({view,onLegacy}:{view:NormalProfileSna
     <p>身份和历史保存在所选档案。核对对方原设备根指纹后开始文字聊天。</p>
     <div style={{display:"flex",flexWrap:"wrap",gap:"8px"}}><button onClick={()=>void open("choice")}>选择正常档案</button>{view.selected&&<button onClick={()=>void open("refresh")}>管理选中档案续期</button>}
     <button onClick={()=>void open("join")}>管理加入档案</button><button onClick={()=>void open("archive")}>打开离线恢复档案</button>{onLegacy&&<><button onClick={()=>void legacy()}>原设备旧历史与群聊</button><button onClick={()=>void open("rootSession")}>恢复原设备正式会话</button></>}</div>
-    {view.selected?.protocol==="v3"&&<DirectChat key={view.selected.scope_fingerprint} onFlushReady={work=>{flush.current=work;}}/>}
+    {view.selected?.protocol==="v3"&&<DirectChat key={view.selected.scope_fingerprint} obscured={panel!==null} onFlushReady={work=>{flush.current=work;}}/>}
     {error&&<p role="alert">{error}</p>}{panel==="choice"&&<NormalProfilePanel onClose={()=>setPanel(null)}/>}{panel==="refresh"&&view.selected&&<SessionRefreshPanel target={view.selected.target} onClose={()=>setPanel(null)}/>}
     {panel==="join"&&<DeviceJoinPanel onClose={()=>setPanel(null)}/>}{panel==="archive"&&<BackupPanel canExport={false} onClose={()=>setPanel(null)}/>}
     {panel==="rootSession"&&<RootSessionPanel onClose={()=>setPanel(null)}/>}

@@ -13,8 +13,10 @@ use sha2::{Digest, Sha256};
 use std::path::Path;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 pub mod api;
+pub mod conversations;
 pub mod coordinator;
 pub mod drafts;
+mod ordering;
 const MAX_LOCAL: usize = 73768;
 const MAX_TASKS: usize = 128;
 pub(crate) fn require_backup_support(
@@ -30,6 +32,9 @@ pub(crate) fn require_backup_support(
         .map_err(|_| invalid())?;
     let scope = Owner::new(&origin, &identity.user_id, &identity.device_id, &keys)?.scope();
     let task_table:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='device_control_tasks')",[],|r|r.get(0)).map_err(db)?;
+    if task_table && conn.query_row("SELECT EXISTS(SELECT 1 FROM device_control_tasks WHERE scope=?1 AND kind='direct_v3_conversation')", [format!("conversation:{scope}")], |r| r.get::<_,bool>(0)).map_err(db)? {
+        return Err("当前身份含单聊 v3 会话设置，本版备份尚不支持；未生成会遗漏设置的备份".into());
+    }
     if task_table&&conn.query_row("SELECT EXISTS(SELECT 1 FROM device_control_tasks WHERE scope=?1 AND kind='direct_v3_draft')",[format!("draft:{scope}")],|r|r.get::<_,bool>(0)).map_err(db)?{
         return Err("当前身份含单聊 v3 草稿，本版备份尚不支持；未生成会遗漏草稿的备份".into());
     }
@@ -448,6 +453,7 @@ fn insert_record(
 ) -> Result<(), String> {
     let (role, outcome) = state;
     conn.execute("INSERT INTO direct_v3_records(scope,id,stream,sequence,wire,digest,local,role,outcome,accepted_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",params![scope,batch.header.id,stream,batch.header.sequence,batch.to_wire().map_err(|_|invalid())?,batch.digest().map_err(|_|invalid())?.as_slice(),local,role,outcome,accepted_at]).map_err(db)?;
+    ordering::insert(conn, scope, &batch.header.id, conn.last_insert_rowid())?;
     Ok(())
 }
 impl Store {
@@ -455,6 +461,7 @@ impl Store {
         let mut trust = DeviceTrustStore::open(path)?;
         trust.protect(witness)?;
         trust.enable_direct_messages()?;
+        trust.write_checked(|conn| ordering::initialize(conn, &owner.scope()))?;
         Ok(Self { trust, owner })
     }
     pub fn trust(&mut self) -> &mut DeviceTrustStore {
@@ -1027,6 +1034,15 @@ impl Store {
         limit: usize,
         keys: &KeyPair,
     ) -> Result<Vec<RecordView>, String> {
+        self.history_peer(None, before, limit, keys)
+    }
+    pub fn history_peer(
+        &mut self,
+        peer: Option<&str>,
+        before: Option<i64>,
+        limit: usize,
+        keys: &KeyPair,
+    ) -> Result<Vec<RecordView>, String> {
         self.owner.keys(keys)?;
         if !(1..=100).contains(&limit) {
             return Err(invalid());
@@ -1034,8 +1050,10 @@ impl Store {
         let owner = self.owner.clone();
         let scope = owner.scope();
         self.trust.read_checked(|conn| {
-            let mut query=conn.prepare("SELECT rowid,id FROM direct_v3_records r WHERE scope=?1 AND rowid<?2 AND NOT EXISTS(SELECT 1 FROM direct_v3_hidden h WHERE h.scope=r.scope AND h.id=r.id) ORDER BY rowid DESC LIMIT ?3").map_err(db)?;
-            let rows=query.query_map(params![scope,before.unwrap_or(i64::MAX),limit],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?))).map_err(db)?.collect::<rusqlite::Result<Vec<_>>>().map_err(db)?;
+            if let Some(peer) = peer { current(conn, &owner.origin, peer)?; }
+            ordering::check(conn, &scope)?;
+            let mut query=conn.prepare("SELECT rowid,id FROM direct_v3_records r WHERE scope=?1 AND rowid<?2 AND (?4 IS NULL OR CASE WHEN json_extract(CAST(wire AS TEXT),'$.header.sender')=?5 THEN json_extract(CAST(wire AS TEXT),'$.header.peer') ELSE json_extract(CAST(wire AS TEXT),'$.header.sender') END=?4) AND NOT EXISTS(SELECT 1 FROM direct_v3_hidden h WHERE h.scope=r.scope AND h.id=r.id) ORDER BY rowid DESC LIMIT ?3").map_err(db)?;
+            let rows=query.query_map(params![scope,before.unwrap_or(i64::MAX),limit,peer,owner.account],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?))).map_err(db)?.collect::<rusqlite::Result<Vec<_>>>().map_err(db)?;
             rows.into_iter().map(|(cursor,id)| {
                 let row=record(conn,&scope,&id)?.ok_or_else(invalid)?;
                 let (batch,_)=checked_record(conn,&owner,&row,keys)?;

@@ -214,6 +214,35 @@ impl MessageCoordinator {
         let lease = self.lease(keys)?;
         self.with(&lease, |s| s.roots(keys))
     }
+    pub fn conversations(&self, keys: &KeyPair) -> Result<Vec<super::conversations::View>> {
+        let lease = self.lease(keys)?;
+        self.with(&lease, |s| s.conversations(keys))
+    }
+    pub fn claim_notifications(
+        &self,
+        keys: &KeyPair,
+    ) -> Result<Vec<super::conversations::Notification>> {
+        let lease = self.lease(keys)?;
+        self.with(&lease, |s| s.claim_notifications(keys))
+    }
+    pub fn mark_read(&self, peer: &str, through_id: &str, keys: &KeyPair) -> Result<()> {
+        let lease = self.lease(keys)?;
+        self.with(&lease, |s| s.mark_read(peer, through_id, keys))
+    }
+    pub fn set_muted(&self, peer: &str, revision: u64, muted: bool, keys: &KeyPair) -> Result<()> {
+        let lease = self.lease(keys)?;
+        self.with(&lease, |s| s.set_muted(peer, revision, muted, keys))
+    }
+    pub fn history_peer(
+        &self,
+        peer: Option<&str>,
+        before: Option<i64>,
+        limit: usize,
+        keys: &KeyPair,
+    ) -> Result<Vec<RecordView>> {
+        let lease = self.lease(keys)?;
+        self.with(&lease, |s| s.history_peer(peer, before, limit, keys))
+    }
     pub fn request_cancel(&self, id: &str, keys: &KeyPair) -> Result<TaskView> {
         let lease = self.lease(keys)?;
         self.with(&lease, |s| s.request_cancel(id, keys))

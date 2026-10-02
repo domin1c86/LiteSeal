@@ -47,6 +47,7 @@ test('preload exposes exactly the typed business commands, with error propagatio
   listeners.get('liteseal:session-refresh-changed')();assert.equal(events.at(-1),'liteseal-session-refresh-changed');
   listeners.get('liteseal:normal-profile-changed')();assert.equal(events.at(-1),'liteseal-normal-profile-changed');
   listeners.get('liteseal:direct-changed')();assert.equal(events.at(-1),'liteseal-direct-changed');
+  listeners.get('liteseal:direct-notification-target')();assert.equal(events.at(-1),'liteseal-direct-notification-target');
   listeners.get('liteseal:direct-status')(null,{changed:false,task:null,poll:null});assert.equal(events.at(-1),'liteseal-direct-status');
   assert.deepEqual(await exposed.get_contacts({}), []);
   assert.equal((await exposed.stage_attachment_file({ peerId: 'bob', file: selectedFile })).id, 'staged');

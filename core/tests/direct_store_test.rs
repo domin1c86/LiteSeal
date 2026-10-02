@@ -130,6 +130,139 @@ fn accepted(batch: &Batch) -> Acceptance {
 }
 
 #[test]
+fn conversations_page_before_limiting_and_preserve_arrivals_after_read_boundary() {
+    let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
+    let p = Protection::isolated_test();
+    let a = Account::new("alice");
+    let b = Account::new("bob");
+    let c = Account::new("carol");
+    let mut alice = open(&work.0, "alice", &a, false, &p);
+    let mut carol = open(&work.0, "carol", &c, false, &p);
+    let mut bob = open(&work.0, "bob", &b, false, &p);
+    for s in [&mut alice, &mut carol, &mut bob] {
+        seed(s, &[&a, &b, &c]);
+    }
+    let mut batches = Vec::new();
+    for n in 0..12 {
+        let (sender, keys) = if n % 3 == 0 {
+            (&mut carol, &c.root)
+        } else {
+            (&mut alice, &a.root)
+        };
+        let id = uuid::Uuid::new_v4().to_string();
+        prepare(sender, "bob", &id, format!("消息 {n} 🦭").as_bytes(), keys);
+        sender.begin_publish(&id, 0, keys).unwrap();
+        let batch = sender.original(&id, keys).unwrap();
+        sender.confirm_accepted(&accepted(&batch), keys).unwrap();
+        bob.receive(&batch, &accepted(&batch), &b.root).unwrap();
+        batches.push(batch);
+    }
+    let page = bob.history_peer(Some("alice"), None, 6, &b.root).unwrap();
+    assert_eq!(page.len(), 6);
+    assert!(page.iter().all(|r| r.peer == "alice"));
+    let older = bob
+        .history_peer(Some("alice"), Some(page[5].cursor), 6, &b.root)
+        .unwrap();
+    assert_eq!(older.len(), 2);
+    assert!(!older.iter().any(|r| page.iter().any(|p| p.id == r.id)));
+    let list = bob.conversations(&b.root).unwrap();
+    assert_eq!(list.iter().find(|c| c.peer == "alice").unwrap().unread, 8);
+    assert_eq!(list.iter().find(|c| c.peer == "carol").unwrap().unread, 4);
+    assert!(bob.mark_read("carol", &page[0].id, &b.root).is_err());
+    let next = uuid::Uuid::new_v4().to_string();
+    prepare(&mut alice, "bob", &next, b"arrival after query", &a.root);
+    alice.begin_publish(&next, 0, &a.root).unwrap();
+    let next_batch = alice.original(&next, &a.root).unwrap();
+    alice
+        .confirm_accepted(&accepted(&next_batch), &a.root)
+        .unwrap();
+    bob.receive(&next_batch, &accepted(&next_batch), &b.root)
+        .unwrap();
+    bob.mark_read("alice", &page[0].id, &b.root).unwrap();
+    bob.mark_read("alice", &older[0].id, &b.root).unwrap(); // Cannot move backwards.
+    bob.receive(&batches[11], &accepted(&batches[11]), &b.root)
+        .unwrap();
+    let state = bob
+        .conversations(&b.root)
+        .unwrap()
+        .into_iter()
+        .find(|c| c.peer == "alice")
+        .unwrap();
+    assert_eq!(state.unread, 1);
+    assert_eq!(state.latest_id.as_deref(), Some(next.as_str()));
+    let claimed = bob.claim_notifications(&b.root).unwrap();
+    assert_eq!(claimed.len(), 2);
+    assert_eq!(claimed.iter().find(|n| n.peer == "alice").unwrap().id, next);
+    assert!(bob.claim_notifications(&b.root).unwrap().is_empty());
+    let state = bob
+        .conversations(&b.root)
+        .unwrap()
+        .into_iter()
+        .find(|c| c.peer == "alice")
+        .unwrap();
+    bob.set_muted("alice", state.revision, true, &b.root)
+        .unwrap();
+    assert!(bob
+        .set_muted("alice", state.revision, false, &b.root)
+        .is_err());
+    drop(bob);
+    let mut bob = open(&work.0, "bob", &b, false, &p);
+    let state = bob
+        .conversations(&b.root)
+        .unwrap()
+        .into_iter()
+        .find(|c| c.peer == "alice")
+        .unwrap();
+    assert!(state.muted);
+    assert_eq!(state.unread, 1);
+    assert!(bob.claim_notifications(&b.root).unwrap().is_empty());
+    bob.hide(&next, &b.root).unwrap();
+    bob.receive(&next_batch, &accepted(&next_batch), &b.root)
+        .unwrap();
+    assert_eq!(
+        bob.conversations(&b.root)
+            .unwrap()
+            .into_iter()
+            .find(|c| c.peer == "alice")
+            .unwrap()
+            .unread,
+        0
+    );
+    assert!(bob.mark_read("alice", &next, &b.root).is_err());
+    // Same DB, same account, independent device scope; no inherited read/mute.
+    drop(bob);
+    let mut second = open(&work.0, "bob", &b, true, &p);
+    for batch in &batches {
+        second.receive(batch, &accepted(batch), &b.second).unwrap();
+    }
+    second
+        .receive(&next_batch, &accepted(&next_batch), &b.second)
+        .unwrap();
+    let state = second
+        .conversations(&b.second)
+        .unwrap()
+        .into_iter()
+        .find(|c| c.peer == "alice")
+        .unwrap();
+    assert!(!state.muted);
+    assert_eq!(state.unread, 9);
+    assert!(second
+        .history_peer(Some("unknown"), None, 6, &b.second)
+        .is_err());
+    // Rowid was outside the old witness projection. Its new protected binding
+    // must reject reordering even when all signed bytes remain untouched.
+    let conn = rusqlite::Connection::open(work.0.join("bob.db")).unwrap();
+    conn.execute("UPDATE direct_v3_records SET rowid=rowid+10000", [])
+        .unwrap();
+    assert!(second
+        .history_peer(Some("alice"), None, 6, &b.second)
+        .is_err());
+    assert!(second.conversations(&b.second).is_err());
+    assert!(second.claim_notifications(&b.second).is_err());
+    assert!(second.mark_read("alice", &next, &b.second).is_err());
+}
+
+#[test]
 fn encrypted_draft_reopens_and_prepare_consumes_revision_with_original_retry() {
     let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
     let p = Protection::isolated_test();
@@ -445,6 +578,19 @@ fn four_isolated_stores_commit_complete_audience_independent_ack_and_own_replica
         );
         assert_eq!(receiver.history(None, 100, keys).unwrap()[0].role, role);
         assert_eq!(
+            receiver.claim_notifications(keys).unwrap().len(),
+            usize::from(role == "incoming")
+        );
+        assert!(receiver.claim_notifications(keys).unwrap().is_empty());
+        let list = receiver.conversations(keys).unwrap();
+        assert_eq!(
+            list.iter()
+                .find(|c| c.peer == if role == "incoming" { "alice" } else { "bob" })
+                .unwrap()
+                .unread,
+            u64::from(role == "incoming")
+        );
+        assert_eq!(
             receiver.history(None, 100, keys).unwrap()[0].peer,
             if role == "incoming" { "alice" } else { "bob" }
         );
@@ -506,6 +652,57 @@ impl liteseal_core::trusted_devices::witness::SecureStore for Memory {
     ) -> Result<Box<dyn liteseal_core::trusted_devices::witness::SecureCell + '_>, String> {
         Ok(Box::new(Slot(self.state.lock().unwrap())))
     }
+}
+#[test]
+fn failed_secure_write_does_not_consume_notification_or_read_and_mute_state() {
+    use liteseal_core::trusted_devices::{witness::Witness, DeviceTrustStore};
+    use std::sync::Arc;
+    let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
+    let p = Protection::isolated_test();
+    let a = Account::new("alice");
+    let b = Account::new("bob");
+    let mut sender = open(&work.0, "sender", &a, false, &p);
+    seed(&mut sender, &[&a, &b]);
+    let id = uuid::Uuid::new_v4().to_string();
+    prepare(&mut sender, "bob", &id, b"unread after failure", &a.root);
+    let batch = sender.original(&id, &a.root).unwrap();
+    let path = work.0.join("secure-notifications.db");
+    drop(DeviceTrustStore::open(&path).unwrap());
+    let memory = Arc::new(Memory::default());
+    let mut receiver = Store::open(
+        &path,
+        Owner::new(
+            &b.initial.anchor().origin,
+            "bob",
+            &b.initial.anchor().root.device_id,
+            &b.root,
+        )
+        .unwrap(),
+        Witness::new(&path, memory.clone()),
+    )
+    .unwrap();
+    seed(&mut receiver, &[&a, &b]);
+    receiver
+        .receive(&batch, &accepted(&batch), &b.root)
+        .unwrap();
+    for operation in 0..3 {
+        {
+            let mut state = memory.state.lock().unwrap();
+            state.fail_at = Some(state.writes + 1);
+        }
+        let result = match operation {
+            0 => receiver.claim_notifications(&b.root).map(|_| ()),
+            1 => receiver.mark_read("alice", &id, &b.root),
+            _ => receiver.set_muted("alice", 0, true, &b.root),
+        };
+        assert!(result.is_err());
+        let c = receiver.conversations(&b.root).unwrap().remove(0);
+        assert_eq!(c.unread, 1);
+        assert!(!c.muted);
+        assert_eq!(c.revision, 0);
+    }
+    assert_eq!(receiver.claim_notifications(&b.root).unwrap()[0].id, id);
+    assert!(receiver.claim_notifications(&b.root).unwrap().is_empty());
 }
 #[test]
 fn secure_commit_failures_never_expose_partial_body_head_or_ack_and_same_handle_recovers() {
@@ -691,6 +888,42 @@ fn backup_refuses_current_unsupported_history_without_publishing_incomplete_file
 }
 
 #[test]
+fn settings_only_backup_refuses_without_creating_an_incomplete_export() {
+    let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
+    let p = Protection::isolated_test();
+    let a = Account::new("alice");
+    let b = Account::new("bob");
+    let mut store = open(&work.0, "settings", &a, false, &p);
+    seed(&mut store, &[&a, &b]);
+    store.set_muted("bob", 0, true, &a.root).unwrap();
+    let identity = liteseal_core::keystore::KeystoreData {
+        user_id: "alice".into(),
+        device_id: a.initial.anchor().root.device_id.clone(),
+        server_url: a.initial.anchor().origin.clone(),
+        token: String::new(),
+        refresh_token: String::new(),
+        public_key: a.root.public_key.to_vec(),
+        secret_key: a.root.secret_key.to_vec(),
+        ed25519_pk: a.root.ed25519_pk.to_vec(),
+        ed25519_sk: a.root.ed25519_sk.to_vec(),
+    };
+    let output = work.0.join("no-incomplete-settings.lseal");
+    let error = liteseal_core::backup::export(
+        &work.0.join("settings.db"),
+        identity,
+        b"independent password",
+        false,
+        &output,
+        &std::sync::atomic::AtomicBool::new(false),
+        |_, _| {},
+    )
+    .unwrap_err();
+    assert!(error.contains("会话设置"));
+    assert!(!output.exists());
+    assert!(store.conversations(&a.root).unwrap()[0].muted);
+}
+
+#[test]
 fn authenticated_bad_body_is_quarantined_and_chain_advances_but_bad_signature_never_acks() {
     let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
     let protection = Protection::isolated_test();
@@ -721,6 +954,17 @@ fn authenticated_bad_body_is_quarantined_and_chain_advances_but_bad_signature_ne
         AckOutcome::Rejected
     );
     assert!(receiver.body(&batch.header.id, &b.root).is_err());
+    assert_eq!(
+        receiver
+            .conversations(&b.root)
+            .unwrap()
+            .iter()
+            .find(|c| c.peer == "alice")
+            .unwrap()
+            .unread,
+        0
+    );
+    assert!(receiver.claim_notifications(&b.root).unwrap().is_empty());
     assert_eq!(
         receiver.pending_acks(&b.root).unwrap()[0].outcome,
         AckOutcome::Rejected

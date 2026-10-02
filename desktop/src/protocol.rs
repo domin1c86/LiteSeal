@@ -19,7 +19,22 @@ pub enum Command {
     #[serde(rename = "get_direct_chat")]
     GetDirectChat {},
     #[serde(rename = "get_direct_history")]
-    GetDirectHistory { before: Option<i64> },
+    GetDirectHistory {
+        account: Option<String>,
+        before: Option<i64>,
+    },
+    #[serde(rename = "mark_direct_read")]
+    MarkDirectRead {
+        account: String,
+        #[serde(rename = "throughId")]
+        through_id: String,
+    },
+    #[serde(rename = "set_direct_muted")]
+    SetDirectMuted {
+        account: String,
+        revision: u64,
+        muted: bool,
+    },
     #[serde(rename = "inspect_direct_peer")]
     InspectDirectPeer { account: String },
     #[serde(rename = "confirm_direct_peer")]
@@ -1012,6 +1027,8 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
             | Command::GetDirectDraft { .. }
             | Command::SaveDirectDraft { .. }
             | Command::GetDirectHistory { .. }
+            | Command::MarkDirectRead { .. }
+            | Command::SetDirectMuted { .. }
             | Command::InspectDirectPeer { .. }
             | Command::ConfirmDirectPeer { .. }
             | Command::PrepareDirectText { .. }
@@ -1146,9 +1163,20 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
     };
     let result = match command {
         Command::GetDirectChat {} => serde_json::to_value(commands::direct::snapshot(state)?),
-        Command::GetDirectHistory { before } => {
-            serde_json::to_value(commands::direct::history(state, before)?)
+        Command::GetDirectHistory { account, before } => {
+            serde_json::to_value(commands::direct::history_peer(state, account, before)?)
         }
+        Command::MarkDirectRead {
+            account,
+            through_id,
+        } => serde_json::to_value(commands::direct::mark_read(state, account, through_id)?),
+        Command::SetDirectMuted {
+            account,
+            revision,
+            muted,
+        } => serde_json::to_value(commands::direct::set_muted(
+            state, account, revision, muted,
+        )?),
         Command::InspectDirectPeer { account } => {
             serde_json::to_value(commands::direct::inspect_peer(state, account).await?)
         }
