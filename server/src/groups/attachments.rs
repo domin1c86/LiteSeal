@@ -79,8 +79,8 @@ async fn create(
     else{
         let published:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM group_attachment_published WHERE id=$1)").bind(&input.id).fetch_one(&mut *tx).await.map_err(unavailable)?;
         if published{return Err(conflict());}
-        let usage=sqlx::query("SELECT COALESCE(SUM(size),0)::BIGINT AS bytes,COUNT(*) AS count FROM (SELECT size FROM attachment_objects WHERE owner=$1 UNION ALL SELECT size FROM group_attachment_objects WHERE owner=$1) a").bind(&actor.user_id).fetch_one(&mut *tx).await.map_err(unavailable)?;
-        if usage.get::<i64,_>("bytes")+input.size>512*1024*1024||usage.get::<i64,_>("count")>=2000{return Err((StatusCode::PAYLOAD_TOO_LARGE,"附件共享配额为 512 MiB / 2000 对象".into()));}
+        let (bytes,count)=crate::attachments::usage(&mut tx,&actor.user_id).await?;
+        if bytes+input.size>512*1024*1024||count>=2000{return Err((StatusCode::PAYLOAD_TOO_LARGE,"附件共享配额为 512 MiB / 2000 对象".into()));}
         sqlx::query("INSERT INTO group_attachment_objects(id,group_id,owner,device_id,joined,size,expires_at) VALUES($1,$2,$3,$4,$5,$6,now()+make_interval(days=>$7))").bind(&input.id).bind(&id).bind(&actor.user_id).bind(&actor.device_id).bind(epoch(joined)?).bind(input.size).bind(crate::attachments::days()).execute(&mut *tx).await.map_err(unavailable)?;
     }
     tx.commit().await.map_err(unavailable)?;

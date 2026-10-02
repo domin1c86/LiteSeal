@@ -101,6 +101,7 @@ fn build_router(state: AppState, allowed_origin: HeaderValue) -> Router {
             get(contact_policy::list).post(contact_policy::change),
         )
         .route("/attachments", post(attachments::create))
+        .merge(direct_messages::media::router())
         .route(
             "/attachments/:id/:part",
             get(attachments::download).put(attachments::upload),

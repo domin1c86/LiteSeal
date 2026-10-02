@@ -1,10 +1,22 @@
 # P0/P1 验收记录（待执行）
 
+## 2026-10-02 v3 媒体基础工程与真实 PostgreSQL 短测
+
+基线 `8f8c856` 加本轮媒体工作树；所有文件、账号、密钥和目录均为合成测试数据，没有新长期或真实双机测试。
+
+Docker 恢复并修正加入档案夹具后，`restored-postgres-all-2026-10-02.json` 全部 **75 项真实 PostgreSQL 用例通过，0 失败/跳过**；首次 74/1 失败报告另存保留，不冒充成功。`restored-group-integration-2026-10-02.txt` 同机真实 PostgreSQL/服务端/三个 Rust 桌面通过，包含群附件失响应/重启下载、合成 WebM/Opus 解码/加密往返、活动改选/关闭/取消及重新加入隔离，还有 T22 v2 离线活动/缓存/投票/草稿/隐藏历史。此处补上原因 Docker/配置而未执行的库与联调证据；真实双 Windows、系统交互和独立审查仍不关闭。
+
+- `direct-media-foundation-delivery-2026-10-02.txt`：19 Electron/Node、326 普通 Rust 通过，0 失败；75 专用 PostgreSQL 默认 ignored，不计库通过。最终格式、全 workspace/all-targets Clippy（-D warnings）、核心 FFI 通过；完整生产构建通过，release 51.41 秒，实际服务端二进制构建通过，既有链接警告保留。报告为 `direct-media-foundation-static-final-2026-10-02.txt`、`direct-media-foundation-build-2026-10-02.txt` 和 `direct-media-foundation-server-build-2026-10-02.txt`。
+- `direct-media-foundation-focused-2026-10-02.txt`：5 项共享媒体测试通过，数据库用例编译通过。原文字四字段批次和收据摘要保持；加密描述往返、原批次确定性重绑定、签名字段篡改、错编号/类型/密钥长度、截断、重排、MAC、MIME、20 MiB/空文件/分块边界和 60 秒声明限制通过。短音频格式夹具不表示真实录音或播放验收，服务端不检验加密音频实际时长。
+- Docker 恢复后使用原标记测试库 `liteseal_test_t21_4f313d6c7233`，PostgreSQL 16.14，迁移 22 实际通过；凭据仅在测试子进程环境，报告无密码/令牌/私钥。`direct-media-postgres-2026-10-02.json` 新增 4 项全部实际通过：完整上传/分块幂等、损坏或不完整分块拒绝发布、原四设备下载及解密、原批次重试、过期后的接受结果、撤销/新授权隔离、当前拉黑策略、取消不投递、孤立清理、2000 对象及 512 MiB 边界，旧附件/v3 并发最后配额只接受一个且不死锁。未发布或非法数据未进入接收队列。
+- 旧引擎不可用报告 `direct-media-foundation-database-2026-10-02.txt` / `direct-media-foundation-integration-2026-10-02.txt` 的 not_executed 保留为历史证据，不再描述当前状态。只结束本轮无响应的只读 Docker 状态探针 CLI，未停止引擎或原后台；用户启动 Docker 后只启动本项目 PostgreSQL。完整库首轮 74/1 夹具失败见下方记录，失败报告为 `restored-postgres-first-failure-2026-10-02.json`。
+- 本批只改 shared/server，未开放客户端媒体 IPC、传输/缓存/预览/录音，未把模拟 UI 当作媒体可用性证明。协调器仍保留未支持媒体不 ACK，T22 白名单、媒体桌面接入、系统、真实双 Windows 与独立审查继续待完成/验收。
+
 ## 2026-10-02 Docker 恢复后的加入档案夹具修正
 
 用户启动 Docker 后，本轮仅启动本项目现有 `liteseal-postgres-1`，通过系统目录确认 `liteseal_test_t21_4f313d6c7233` 专用标记，再由进程环境恢复连接配置。PostgreSQL 16.14；未连接业务库，未写凭据到仓库或报告，也未重启其他容器或原有后台测试。
 
-完整专用库首轮 `target/test-results/restored-postgres-all-2026-10-02.json` 为 74 通过/1 失败/0 跳过，失败为真实加入 Windows 档案与 DPAPI 会话用例。定向复现定位到 `prepare_grant`：测试仅签署本地持钥证明，没有执行提交原证明的下一步；远端仍非 Proved，因此严格权限检查拒绝。补齐提交步骤并断言本地 AwaitingAuthorization、远端 Proved 后，原用例实际通过，包含服务端设备编号、会话重开/清除、密钥文件不变和不泄露令牌。生产核心及服务端授权规则没有放宽。完整套件和三客户端回归继续复跑，首轮失败报告保留。
+完整专用库首轮 `target/test-results/restored-postgres-first-failure-2026-10-02.json` 为 74 通过/1 失败/0 跳过，失败为真实加入 Windows 档案与 DPAPI 会话用例。定向复现定位到 `prepare_grant`：测试仅签署本地持钥证明，没有执行提交原证明的下一步；远端仍非 Proved，因此严格权限检查拒绝。补齐提交步骤并断言本地 AwaitingAuthorization、远端 Proved 后，原用例实际通过，包含服务端设备编号、会话重开/清除、密钥文件不变和不泄露令牌。生产核心及服务端授权规则没有放宽。修正后完整 75 项数据库及三客户端回归通过，首轮失败报告保留。
 
 ## 2026-10-02 v3 会话、已读与通知短测
 

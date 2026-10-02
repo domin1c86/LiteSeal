@@ -15,6 +15,7 @@ use serde::Deserialize;
 use sqlx::{Postgres, Row, Transaction};
 type Failure = (StatusCode, String);
 type Tx<'a> = Transaction<'a, Postgres>;
+pub(crate) mod media;
 pub const MIGRATION: &str = "
 CREATE TABLE direct_v3_batches (
  id TEXT PRIMARY KEY, sender TEXT NOT NULL REFERENCES users(id), source TEXT NOT NULL,
@@ -148,7 +149,9 @@ async fn lock_accounts(tx: &mut Tx<'_>, accounts: &[&str]) -> Result<(), Failure
     accounts.dedup();
     for account in accounts {
         uuid(account)?;
-        sqlx::query("SELECT id FROM users WHERE id=$1 FOR UPDATE")
+        // Serialize account/directory mutations, while allowing the KEY SHARE
+        // locks taken by legacy/group blob foreign keys under the quota lock.
+        sqlx::query("SELECT id FROM users WHERE id=$1 FOR NO KEY UPDATE")
             .bind(account)
             .fetch_optional(&mut **tx)
             .await
@@ -286,6 +289,14 @@ async fn publish(
     headers: HeaderMap,
     Json(batch): Json<Batch>,
 ) -> Result<Json<Outcome>, Failure> {
+    publish_batch(state, headers, batch, None).await
+}
+async fn publish_batch(
+    state: AppState,
+    headers: HeaderMap,
+    batch: Batch,
+    media: Option<liteseal_shared::direct_media::Submission>,
+) -> Result<Json<Outcome>, Failure> {
     let wire = batch.to_wire().map_err(codec)?;
     uuid(&batch.header.id)?;
     let (user, hash) = admit(&state, &headers, &batch.header.sender_device).await?;
@@ -296,7 +307,7 @@ async fn publish(
     let mut tx = state.db.pool().begin().await.map_err(storage)?;
     lock_accounts(&mut tx, &[&user, &batch.header.peer]).await?;
     let (sender, _) = current(&mut tx, &user, origin(&state)?).await?;
-    session(&mut tx, &hash, &user, &batch.header.sender_device, &sender).await?;
+    let authority = session(&mut tx, &hash, &user, &batch.header.sender_device, &sender).await?;
     if let Some(result) = existing(
         &mut tx,
         &batch.header.id,
@@ -306,6 +317,11 @@ async fn publish(
     )
     .await?
     {
+        if let Some(media) = &media {
+            if matches!(result, Outcome::Accepted { .. }) {
+                media::verify_existing(&mut tx, media).await?;
+            }
+        }
         tx.commit().await.map_err(storage)?;
         return Ok(Json(result));
     }
@@ -323,8 +339,7 @@ async fn publish(
             "双方原设备需要明确启用 v3".into(),
         ));
     }
-    // Media object authorization is a separate forthcoming integration.
-    if batch.header.kind != Kind::Text {
+    if batch.header.kind != Kind::Text && media.is_none() {
         return Err((StatusCode::BAD_REQUEST, "v3 媒体投递尚未启用".into()));
     }
     let mut devices = batch
@@ -342,6 +357,9 @@ async fn publish(
             .map_err(storage)?;
     }
     policy(&mut tx, &user, &batch.header.peer).await?;
+    if let Some(media) = &media {
+        media::validate_publication(&mut tx, media, authority).await?;
+    }
     let epoch = batch.header.epoch().map_err(codec)?;
     let prior =
         sqlx::query("SELECT sequence,digest FROM direct_v3_heads WHERE source=$1 AND epoch=$2")
@@ -396,6 +414,9 @@ async fn publish(
     }
     sqlx::query("INSERT INTO direct_v3_heads(source,epoch,sequence,digest) VALUES($1,$2,$3,$4) ON CONFLICT(source,epoch) DO UPDATE SET sequence=excluded.sequence,digest=excluded.digest")
         .bind(&batch.header.sender_device).bind(epoch.as_slice()).bind(batch.header.sequence).bind(digest.as_slice()).execute(&mut *tx).await.map_err(storage)?;
+    if let Some(media) = &media {
+        media::commit_publication(&mut tx, media).await?;
+    }
     tx.commit().await.map_err(storage)?;
     Ok(Json(Outcome::Accepted {
         receipt: Receipt {
