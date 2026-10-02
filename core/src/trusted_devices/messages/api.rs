@@ -1,6 +1,7 @@
 //! Bound HTTP receipts, no redirect/credential forwarding or unbounded JSON.
 use super::Acceptance;
 use liteseal_shared::{
+    direct_media::{Reference, Submission},
     direct_message::{self as d, Ack, Batch},
     direct_transport::{self as t, Page, Result as Outcome},
     trusted_device::canonical_origin,
@@ -78,6 +79,12 @@ impl AuthenticatedPage {
 pub struct DirectApi {
     origin: String,
     client: reqwest::Client,
+}
+/// Rust-only routing and public ciphertext reference; no file key or name.
+pub struct MediaObject<'a> {
+    pub device: &'a str,
+    pub id: &'a str,
+    pub reference: &'a Reference,
 }
 impl DirectApi {
     pub fn new(server: &str) -> Result<Self, ApiError> {
@@ -235,6 +242,136 @@ impl DirectApi {
         batch: &Batch,
     ) -> Result<AuthenticatedResult, ApiError> {
         self.submit(token, batch, "/direct/v3/batches").await
+    }
+    /// The immutable media wrapper binds the original batch and ciphertext.
+    /// It contains no plaintext file metadata or file key.
+    pub async fn publish_media(
+        &self,
+        token: &str,
+        submission: &Submission,
+    ) -> Result<AuthenticatedResult, ApiError> {
+        self.bound_batch(&submission.batch)?;
+        submission.verify_binding().map_err(|_| invalid())?;
+        let wire = submission.to_wire().map_err(|_| invalid())?;
+        let outcome = self
+            .json(
+                self.request(Method::POST, "/direct/v3/media/batches", token)?
+                    .header("content-type", "application/json")
+                    .body(wire),
+                32 * 1024,
+            )
+            .await?;
+        self.bind_result(&submission.batch, outcome, false)
+    }
+    pub async fn create_media(
+        &self,
+        token: &str,
+        device: &str,
+        object: &str,
+        peer: &str,
+        reference: &Reference,
+    ) -> Result<(), ApiError> {
+        id(device)?;
+        id(object)?;
+        id(peer)?;
+        reference
+            .validate(d::Kind::Attachment)
+            .map_err(|_| invalid())?;
+        let returned: String = self
+            .json(
+                self.request(Method::POST, "/direct/v3/media/objects", token)?
+                    .json(&serde_json::json!({
+                        "device_id": device, "id": object, "peer": peer,
+                        "size": reference.size, "hash": reference.hash,
+                    })),
+                128,
+            )
+            .await?;
+        if returned != object {
+            return Err(invalid());
+        }
+        Ok(())
+    }
+    fn media_request(
+        &self,
+        method: Method,
+        token: &str,
+        object: &MediaObject<'_>,
+        part: i32,
+    ) -> Result<(RequestBuilder, usize), ApiError> {
+        id(object.device)?;
+        id(object.id)?;
+        object
+            .reference
+            .validate(d::Kind::Attachment)
+            .map_err(|_| invalid())?;
+        let len = object.reference.chunk_len(part).map_err(|_| invalid())?;
+        Ok((
+            self.request(
+                method,
+                &format!("/direct/v3/media/objects/{}/{part}", object.id),
+                token,
+            )?
+            .query(&[("device_id", object.device)]),
+            len,
+        ))
+    }
+    /// A response loss leaves this exact chunk safe to retry under the same id.
+    pub async fn upload_media_chunk(
+        &self,
+        token: &str,
+        object: &MediaObject<'_>,
+        part: i32,
+        bytes: Vec<u8>,
+    ) -> Result<(), ApiError> {
+        let (request, len) = self.media_request(Method::PUT, token, object, part)?;
+        if bytes.len() != len {
+            return Err(invalid());
+        }
+        let response = request
+            .header("content-type", "application/octet-stream")
+            .body(bytes)
+            .send()
+            .await
+            .map_err(|_| network())?;
+        if response.status() != reqwest::StatusCode::NO_CONTENT {
+            return Err(ApiError {
+                status: Some(response.status().as_u16()),
+                message: "单聊 v3 分块尚未确认，保留原编号和密文",
+            });
+        }
+        Ok(())
+    }
+    /// Exact bounded ciphertext only. The caller must authenticate the complete
+    /// object against the descriptor before caching or exposing plaintext.
+    pub async fn download_media_chunk(
+        &self,
+        token: &str,
+        object: &MediaObject<'_>,
+        part: i32,
+    ) -> Result<Vec<u8>, ApiError> {
+        let (request, len) = self.media_request(Method::GET, token, object, part)?;
+        let mut response = request.send().await.map_err(|_| network())?;
+        if response.status() != reqwest::StatusCode::OK {
+            return Err(ApiError {
+                status: Some(response.status().as_u16()),
+                message: "单聊 v3 原附件不可用或请求被拒绝",
+            });
+        }
+        if response.content_length().is_some_and(|n| n != len as u64) {
+            return Err(invalid());
+        }
+        let mut bytes = Vec::with_capacity(len);
+        while let Some(chunk) = response.chunk().await.map_err(|_| network())? {
+            if bytes.len().saturating_add(chunk.len()) > len {
+                return Err(invalid());
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        if bytes.len() != len {
+            return Err(invalid());
+        }
+        Ok(bytes)
     }
     pub async fn cancel(
         &self,

@@ -1,5 +1,16 @@
 # P0/P1 验收记录（待执行）
 
+## 2026-10-02 共享媒体 HTTP 客户端短测与真实库联调
+
+基线 `7041957` 加本轮工作树；全部账号、文件、目录与密钥均为合成测试数据。Docker 中仅使用已有标记专用 PostgreSQL 16.14，不读取或修改业务库，凭据仅在子进程环境，不保存到源码或报告。
+
+- `target/test-results/direct-media-client-http-focused-2026-10-02.txt`：12 项 HTTP 测试通过，包含新增 6 项媒体场景。创建结果错编号拒绝、上传严格 204/长度、1 MiB 完整分块和尾块、截断/长度过大/chunked 超额、非法路由/编号/分块/令牌请求前拒绝、损坏签名/错 origin 本地拒绝、错收据拒绝、发布和上传响应丢失后原签名/编号/密文完全相同、307 不转发凭据通过。本机 HTTP 夹具是故障短测，不是远端系统验收。
+- `target/test-results/direct-media-client-http-postgres-2026-10-02.json`：5 项媒体真实库测试全部通过，0 失败/跳过，包括新增共享 Rust DirectApi 的完整分块上传、部分上传发布 409/原结果 Unknown、原批次重试、四原设备下载、中文/emoji 摘要/MAC 解密往返，以及对象过期后 404/原接受结果保持。另四项覆盖原授权隔离、共享配额并发、取消、损坏和清理；没有把服务器响应模拟成数据库结果。
+- 最终完整 `npm test` 为 19 项 Node/332 项普通 Rust 通过，0 失败；76 项 PostgreSQL 默认 ignored 不计通过，真实库证据另见本节五项专项及此前 75 项完整回归。报告 `direct-media-client-http-delivery-2026-10-02.txt`，此前已通过的中间复跑另存 `direct-media-client-http-delivery-initial-2026-10-02.txt`。
+- 格式、全 workspace/all-targets Clippy（-D warnings）及核心 FFI 编译通过，报告 `direct-media-client-http-checks-2026-10-02.txt`。`npm run build` 的 UI/Electron/Rust release 构建通过，release 52.05 秒，报告 `direct-media-client-http-build-2026-10-02.txt`；保留既有 LNK4098/LNK4099 警告。本批未改变 UI，未重复执行模拟界面或原生系统检查。
+
+只交付共享客户端受限传输接口，尚未接协调器持久任务/缓存、桌面 IPC/录音或 v3 离线备份。普通收件协调器仍保留未支持媒体不 ACK；未执行真实双 Windows、系统或独立审查，本批不启动新长期。此前完整 75 项库、三客户端与六轮群短测证据仍有效于其各自版本，不据此勾选新增媒体整体验收。
+
 ## 2026-10-02 Docker 恢复后的十账号多群短负载
 
 `node scripts/test-group-soak.mjs --smoke` 实际通过：十个隔离账号、十个群，每个账号参与全部十群；六轮、279 秒、九次故障注入，六轮待发积压均为 0。覆盖文字/文件/合成 WebM/Opus/活动与实名报名、临时断网、客户端重启、原消息/扩展响应丢失重试、令牌续期及移除/重加入阶段隔离；重加入后旧附件远端下载明确拒绝。报告 `target/test-results/group-soak-2026-10-02T14-39-49-893Z.json`，入口输出 `restored-group-smoke-2026-10-02.txt`。

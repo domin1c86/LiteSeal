@@ -1,6 +1,119 @@
 //! Marked dedicated PostgreSQL only; all files and identities are synthetic.
 use super::*;
+use liteseal_core::trusted_devices::messages::api::{DirectApi, MediaObject, RemoteState};
 use liteseal_shared::direct_media::{self as m, Descriptor, Submission};
+
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn core_http_client_upload_publish_four_device_download_and_expiry() {
+    let f = Fixture::start(true).await;
+    let a = f.account().await;
+    let b = f.account().await;
+    let (aj, sender) = grant(&f, &a, &directory(&f, &a)).await;
+    let (bj, peer) = grant(&f, &b, &directory(&f, &b)).await;
+    let at = synthetic_activation(&f, &a, &aj).await;
+    let bt = synthetic_activation(&f, &b, &bj).await;
+    accepted(&f, &a, &b).await;
+    let bytes = "中文与 emoji 🦭".as_bytes().repeat(70_000);
+    let (value, cipher) = media(&sender, &peer, &a.device, &a.keys, &bytes);
+    let api = DirectApi::new(&f.url).unwrap();
+    let object = MediaObject {
+        device: &a.device,
+        id: &value.batch.header.id,
+        reference: &value.object,
+    };
+    for _ in 0..2 {
+        api.create_media(&a.token, object.device, object.id, &b.id, object.reference)
+            .await
+            .unwrap();
+    }
+    api.upload_media_chunk(&a.token, &object, 0, cipher[..m::CHUNK].to_vec())
+        .await
+        .unwrap();
+    assert_eq!(
+        api.publish_media(&a.token, &value)
+            .await
+            .err()
+            .unwrap()
+            .status,
+        Some(409)
+    );
+    assert_eq!(
+        api.lookup(&a.token, &value.batch).await.unwrap().state(),
+        RemoteState::Unknown
+    );
+    for (part, bytes) in cipher.chunks(m::CHUNK).enumerate() {
+        api.upload_media_chunk(&a.token, &object, part as i32, bytes.to_vec())
+            .await
+            .unwrap();
+    }
+    for _ in 0..2 {
+        assert_eq!(
+            api.publish_media(&a.token, &value).await.unwrap().state(),
+            RemoteState::Accepted
+        );
+    }
+    assert_eq!(
+        api.pending(&b.token, &b.id, &b.device, 1)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    for (token, device) in [
+        (&a.token, &a.device),
+        (&at, &aj.status.ticket.device.device_id),
+        (&b.token, &b.device),
+        (&bt, &bj.status.ticket.device.device_id),
+    ] {
+        let target = MediaObject { device, ..object };
+        let mut downloaded = vec![];
+        for part in 0..cipher.len().div_ceil(m::CHUNK) {
+            downloaded.extend(
+                api.download_media_chunk(token, &target, part as i32)
+                    .await
+                    .unwrap(),
+            );
+        }
+        assert_eq!(downloaded, cipher);
+        let body = value
+            .batch
+            .open(&sender, &peer, &b.id, &b.device, &b.keys)
+            .unwrap();
+        let descriptor = Descriptor::from_body(&value.batch.header, &body).unwrap();
+        assert_eq!(
+            descriptor.decrypt(Kind::Attachment, &downloaded).unwrap(),
+            bytes
+        );
+    }
+    sqlx::query(
+        "UPDATE direct_v3_media_objects SET expires_at=now()-interval '1 second' WHERE id=$1",
+    )
+    .bind(object.id)
+    .execute(f.db.pool())
+    .await
+    .unwrap();
+    let target = MediaObject {
+        device: &b.device,
+        ..object
+    };
+    assert_eq!(
+        api.download_media_chunk(&b.token, &target, 0)
+            .await
+            .err()
+            .unwrap()
+            .status,
+        Some(404)
+    );
+    assert_eq!(
+        api.lookup(&a.token, &value.batch).await.unwrap().state(),
+        RemoteState::Accepted
+    );
+    assert_eq!(
+        api.publish_media(&a.token, &value).await.unwrap().state(),
+        RemoteState::Accepted
+    );
+}
 fn media(
     a: &DeviceState,
     b: &DeviceState,
