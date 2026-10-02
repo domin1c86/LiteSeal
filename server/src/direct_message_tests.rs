@@ -1,6 +1,8 @@
 //! Real HTTP/PostgreSQL and activation APIs; all identities are synthetic.
 #[path = "direct_media_tests.rs"]
 mod media_tests;
+#[path = "direct_operation_tests.rs"]
+mod operation_tests;
 use super::*;
 use liteseal_shared::{
     direct_message::{Ack, Batch, Header, Kind, MessageSpec},

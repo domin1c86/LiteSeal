@@ -1,5 +1,20 @@
 # P0/P1 验收记录（待执行）
 
+## 2026-10-03 T23 原设备编辑/撤回协议与服务端日志短测
+
+基线 `56f5978` 加本轮工作树；使用合成身份、隔离数据目录与已有标记专用 PostgreSQL，不操作真实用户资料、不启动新长期、不推送。本轮仅交付共享协议与服务端日志，客户端持久任务、认证补收游标、可见性投影及桌面入口尚未接通，不能据此关闭完整编辑/撤回功能。
+
+- `target/test-results/direct-operations-shared-2026-10-03.txt`：4 项共享协议短测通过（0.10 秒），覆盖原发送设备、四设备逐份加密、中文/emoji、不可变重试、签名/摘要/密文篡改、撤销授权后的受众收缩和撤回无正文。最终完整工程重新执行，并增加附件不可编辑断言。
+- `direct-operations-postgres-initial-2026-10-03.json`：最初 2 项真实 HTTP/PostgreSQL 专项通过，0 失败/0 跳过。覆盖原正文已释放后的证据核验、同编号并发幂等、版本冲突、撤回终态、分页、原发送设备权限以及新增设备不取得旧详情。此初轮不包含之后新增的伪签名/未接受原消息/32 MiB 配额用例，最终真实库结果另记。
+- 首轮完整工程在新增测试夹具中遇到 E0618：局部 `header` 变量遮蔽同名函数。修正夹具调用后重新执行，保留失败报告 `direct-operations-delivery-fixture-failure-2026-10-03.txt`；该失败轮不能计为通过，没有放宽生产权限检查。
+- `direct-operations-delivery-final-2026-10-03.txt`：最终 `npm test` 为 **27 项 Node/366 项普通 Rust 通过，0 失败**；83 项 PostgreSQL 默认 ignored，实际数据库结果另记。格式、全 workspace/all-targets Clippy（-D warnings）及核心 FFI 检查通过，`direct-operations-static-final-2026-10-03.txt`。
+- `direct-operations-build-2026-10-03.txt`：完整生产构建通过，Rust release 56.03 秒；既有 MSVC/libsodium 链接警告保留。
+- 群 UI 回归通过，`direct-operations-group-ui-2026-10-03.txt` / `group-ui-L4wNjt`；风格回归 72 张既有浅深色/宽窄截图范围通过，无 renderer 错误，`direct-operations-style-2026-10-03.txt` / `ui-style-uBFk4H`。这些结果证明现有界面兼容，不是尚未接入的新操作 UI 验收。
+- `target/test-results/direct-operations-postgres-2026-10-03.json`：专用 PostgreSQL 16.14 最终全套 **83 项通过/0 失败/0 跳过**，包含三项新增操作用例，脱敏失败诊断为空。新增未接受原消息/伪签名拒绝且无状态变更、合成 32 MiB 日志配额明确拒绝且不产生新记录，其他权限与并发断言也复验通过。Docker 容器健康；只读观察认证 IP 窗口，计数 36/36/38 时分别自然等待 19/26/27 秒（合计 72 秒），不删计数、不重试失败用例；运行脚本 `run-direct-operations-paced.mjs` / `run-local-direct-operations.ps1` 保存于测试目录。
+- `target/test-results/direct-operations-group-integration-2026-10-03.txt`：真实专用 PostgreSQL/服务端与同机三个隔离 Rust 桌面进程的 11 阶段全部通过，包括离线补收/丢 ACK/重启、群退出重新加入、协作与投票、附件响应丢失/认证下载、合成语音、活动及 T22 v2 离线缓存/草稿/隐藏历史。此为既有功能兼容回归，不代替新 v3 操作的客户端端到端或双 Windows 验收。
+
+日志为独立路由，不改原消息链或 ACK，不增加旧客户端待收。历史原参与设备与当前授权阶段取交集，原作者保留自有副本；新加入设备不取得旧操作详情。现有 T22 v1/v2 不含 v3 数据，拒绝当前 v3 备份的保护仍有效。真实双 Windows、系统生命周期、独立审查、客户端投影和新版备份继续待执行。
+
 ## 2026-10-03 新 v3 媒体自有工作目录与强杀回收短测
 
 基线 `5c55257` 加本轮工作树；使用合成文件、独立 Electron userData 与 OS 临时父目录，不读取真实用户资料或现有工作目录。应用持有单实例锁后验证媒体工作目录，预览/录音/剪贴板的条目标记同步完成后才写正文；退出等待自有清理。不扫描旧匿名目录，不整理用户另存为目标，不改 Rust 协议、数据库迁移或 T22 格式。

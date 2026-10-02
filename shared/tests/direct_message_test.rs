@@ -4,6 +4,8 @@ use liteseal_shared::{
     protocol::AckOutcome,
     trusted_device::*,
 };
+#[path = "support/direct_operation_cases.rs"]
+mod operations;
 struct Account {
     root: KeyPair,
     second: KeyPair,

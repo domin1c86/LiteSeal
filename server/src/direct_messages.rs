@@ -16,6 +16,7 @@ use sqlx::{Postgres, Row, Transaction};
 type Failure = (StatusCode, String);
 type Tx<'a> = Transaction<'a, Postgres>;
 pub(crate) mod media;
+pub(crate) mod operations;
 pub const MIGRATION: &str = "
 CREATE TABLE direct_v3_batches (
  id TEXT PRIMARY KEY, sender TEXT NOT NULL REFERENCES users(id), source TEXT NOT NULL,

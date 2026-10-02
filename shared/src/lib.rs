@@ -3,6 +3,7 @@ pub mod crypto;
 pub mod device_activation;
 pub mod direct_media;
 pub mod direct_message;
+pub mod direct_operation;
 pub mod direct_transport;
 pub mod group;
 pub mod group_extension;
