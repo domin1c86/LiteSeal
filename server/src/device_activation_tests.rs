@@ -984,11 +984,16 @@ async fn joined_windows_profile_uses_server_device_and_dpapi_session_without_rep
         .step(&challenge.id, None, &root.keys)
         .await
         .unwrap();
+    let sealed = joining.step(profile.task_id(), None, &keys).await.unwrap();
+    assert_eq!(sealed.task.phase, TaskPhase::AwaitingAuthorization);
+    // One step seals the proof locally; the next submits that original proof.
+    // Grant preparation must still refuse a remote request without possession.
     joining.step(profile.task_id(), None, &keys).await.unwrap();
     let inspect = authority
         .inspect_join(profile.task_id(), &root.keys)
         .await
         .unwrap();
+    assert_eq!(inspect.phase, JoinPhase::Proved);
     let grant = authority
         .prepare_grant(profile.task_id(), &inspect.combined_fingerprint, &root.keys)
         .await
