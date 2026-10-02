@@ -374,3 +374,97 @@ async fn session_check_rejects_wrong_scope_expiry_and_unknown_fields() {
         server.await.unwrap();
     }
 }
+#[tokio::test]
+async fn bootstrap_mode_needs_no_bearer_and_accepts_only_bound_root_configuration() {
+    use liteseal_shared::device_activation::{ModeQuery, ModeReply};
+    for case in 0..7 {
+        let (listener, url, state, keys) = setup().await;
+        let mode = Enable::make(&state, &uuid::Uuid::new_v4().to_string(), &keys).unwrap();
+        let server_state = state.clone();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut wire = Vec::new();
+            let mut chunk = [0; 4096];
+            let (start, length) = loop {
+                let n = socket.read(&mut chunk).await.unwrap();
+                assert!(n > 0);
+                wire.extend_from_slice(&chunk[..n]);
+                if let Some(start) = wire.windows(4).position(|v| v == b"\r\n\r\n") {
+                    let header = String::from_utf8_lossy(&wire[..start]).to_lowercase();
+                    assert!(header.starts_with("post /auth/v3/mode "));
+                    assert!(!header.contains("authorization:"));
+                    let length = header
+                        .lines()
+                        .find_map(|line| line.strip_prefix("content-length:"))
+                        .unwrap()
+                        .trim()
+                        .parse::<usize>()
+                        .unwrap();
+                    break (start + 4, length);
+                }
+            };
+            while wire.len() < start + length {
+                let n = socket.read(&mut chunk).await.unwrap();
+                assert!(n > 0);
+                wire.extend_from_slice(&chunk[..n]);
+            }
+            let query: ModeQuery = serde_json::from_slice(&wire[start..start + length]).unwrap();
+            query
+                .verify_current(&server_state, chrono::Utc::now().timestamp_millis())
+                .unwrap();
+            let mut reply = ModeReply {
+                version: 1,
+                request: query.digest().unwrap(),
+                event: if case == 1 { None } else { Some(mode) },
+            };
+            if case == 2 {
+                reply.request[0] ^= 1;
+            }
+            if case == 3 {
+                reply.event.as_mut().unwrap().signature[0] ^= 1;
+            }
+            if case == 4 {
+                reply.version = 2;
+            }
+            let mut body = serde_json::to_value(reply).unwrap();
+            if case == 5 {
+                body["access_token"] = serde_json::json!("synthetic-secret");
+            }
+            if case == 6 {
+                body["event"]["account"] = serde_json::json!(uuid::Uuid::new_v4().to_string());
+            }
+            socket
+                .write_all(&response(&serde_json::to_vec(&body).unwrap()))
+                .await
+                .unwrap();
+        });
+        let result = ActivationApi::new(&url)
+            .unwrap()
+            .discover_mode(&state, &state.anchor().root.device_id, &keys)
+            .await;
+        assert_eq!(result.is_ok(), case < 2);
+        if let Ok(mode) = result {
+            assert_eq!(mode.is_none(), case == 1);
+        }
+        server.await.unwrap();
+    }
+}
+#[tokio::test]
+async fn bootstrap_rejects_mismatched_local_keys_before_any_network_request() {
+    let (listener, url, state, keys) = setup().await;
+    let other = crypto::generate_keypair().unwrap();
+    let wrong = crypto::KeyPair {
+        secret_key: other.secret_key,
+        ..keys
+    };
+    assert!(ActivationApi::new(&url)
+        .unwrap()
+        .discover_mode(&state, &state.anchor().root.device_id, &wrong)
+        .await
+        .is_err());
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(30), listener.accept())
+            .await
+            .is_err()
+    );
+}

@@ -10,7 +10,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use liteseal_shared::device_activation::SessionInfo;
+use liteseal_shared::device_activation::{ModeQuery, ModeReply, SessionInfo};
 use liteseal_shared::{
     device_activation::{
         self as a, ActivationCancel, ActivationCancelResult, Challenge, ClosedReason, Closure,
@@ -125,6 +125,7 @@ pub fn router() -> Router<AppState> {
         .route("/devices/messaging/cancel", post(cancel_enable))
         .route("/users/:user/device_messaging", get(status))
         .route("/auth/v3/begin", post(begin))
+        .route("/auth/v3/mode", post(bootstrap_mode))
         .route("/auth/v3/cancel", post(cancel_activation))
         .route("/auth/v3/inspect", post(inspect))
         .route("/auth/v3/session/:device", get(session_info))
@@ -218,6 +219,69 @@ async fn status(
         enabled: event.is_some(),
         event,
     }))
+}
+async fn bootstrap_mode(
+    State(state): State<AppState>,
+    Json(query): Json<ModeQuery>,
+) -> Result<Json<ModeReply>, Failure> {
+    let realm = origin(&state)?;
+    query.verify_signature(now()).map_err(|_| denied())?;
+    uuid(&query.account)?;
+    if query.origin != realm {
+        return Err(denied());
+    }
+    let mut tx = state.db.pool().begin().await.map_err(storage)?;
+    trusted_devices::lock(&mut tx, &query.account).await?;
+    let (directory, _) = trusted_devices::directory(&mut tx, &query.account, realm).await?;
+    query
+        .verify_current(&directory, now())
+        .map_err(|_| denied())?;
+    if query.device == directory.anchor().root {
+        let active: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM devices WHERE id=$1 AND user_id=$2 AND revoked=false)",
+        )
+        .bind(&query.device.device_id)
+        .bind(&query.account)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(storage)?;
+        if !active {
+            return Err(denied());
+        }
+    } else {
+        let revoked: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM devices WHERE id=$1 AND user_id=$2 AND revoked=true)",
+        )
+        .bind(&query.device.device_id)
+        .bind(&query.account)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(storage)?;
+        if revoked {
+            return Err(denied());
+        }
+    }
+    let event = if enabled(&mut tx, &query.account).await.map_err(storage)? {
+        Some(mode(&mut tx, &directory).await?)
+    } else {
+        None
+    };
+    let reply = ModeReply {
+        version: 1,
+        request: query.digest().map_err(|_| bad())?,
+        event,
+    };
+    tx.commit().await.map_err(storage)?;
+    // Release the account lock and pool connection before using the rate store.
+    if !state
+        .db
+        .hit_rate_limit(&format!("device-mode:{}", query.device.device_id), 60, 60)
+        .await
+        .map_err(storage)?
+    {
+        return Err((StatusCode::TOO_MANY_REQUESTS, "设备配置查询过于频繁".into()));
+    }
+    Ok(Json(reply))
 }
 async fn enable(
     State(state): State<AppState>,

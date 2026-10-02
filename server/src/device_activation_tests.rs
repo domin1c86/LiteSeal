@@ -834,6 +834,97 @@ async fn v3_session_metadata_is_current_device_scoped_and_rejects_beta_or_consum
         StatusCode::UNAUTHORIZED
     );
 }
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn authorized_device_bootstraps_signed_mode_without_creating_session_or_enabling_protocol() {
+    use liteseal_shared::device_activation::{ModeQuery, ModeReply};
+    let f = Fixture::start(true).await;
+    let root = f.account().await;
+    let (join, directory) = authorized(&f, &root).await;
+    let query = ModeQuery::make(
+        &directory,
+        &uuid::Uuid::new_v4().to_string(),
+        &join.status.ticket.device.device_id,
+        now(),
+        &join.keys,
+    )
+    .unwrap();
+    let post = |q: ModeQuery| {
+        f.client
+            .post(format!("{}/auth/v3/mode", f.url))
+            .json(&q)
+            .send()
+    };
+    let before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions WHERE user_id=$1")
+        .bind(&root.id)
+        .fetch_one(f.db.pool())
+        .await
+        .unwrap();
+    let response = post(query.clone()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let disabled: ModeReply = response.json().await.unwrap();
+    disabled.verify(&query, directory.anchor()).unwrap();
+    assert!(disabled.event.is_none());
+    let mode = enable_mode(&f, &root).await;
+    let api = liteseal_core::trusted_devices::activation::ActivationApi::new(&f.url).unwrap();
+    assert_eq!(
+        api.discover_mode(&directory, &join.status.ticket.device.device_id, &join.keys)
+            .await
+            .unwrap(),
+        Some(mode)
+    );
+    for case in 0..4 {
+        let mut wrong = query.clone();
+        match case {
+            0 => wrong.signature[0] ^= 1,
+            1 => wrong.authorization[0] ^= 1,
+            2 => wrong.origin = "https://other.invalid".into(),
+            _ => wrong.device = directory.anchor().root.clone(),
+        }
+        assert_eq!(post(wrong).await.unwrap().status(), StatusCode::FORBIDDEN);
+    }
+    let expired = ModeQuery::make(
+        &directory,
+        &uuid::Uuid::new_v4().to_string(),
+        &query.device.device_id,
+        now() - 121000,
+        &join.keys,
+    )
+    .unwrap();
+    assert_eq!(post(expired).await.unwrap().status(), StatusCode::FORBIDDEN);
+    let after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions WHERE user_id=$1")
+        .bind(&root.id)
+        .fetch_one(f.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(after, before);
+    let attempts: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM device_session_attempts WHERE user_id=$1")
+            .bind(&root.id)
+            .fetch_one(f.db.pool())
+            .await
+            .unwrap();
+    assert_eq!(attempts, 0);
+    let operational: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM devices WHERE user_id=$1")
+        .bind(&root.id)
+        .fetch_one(f.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(operational, 1);
+    let revoke = make_event(
+        &directory,
+        uuid::Uuid::new_v4().to_string(),
+        DeviceAction::Revoke {
+            device_id: query.device.device_id.clone(),
+            grant_hash: directory.grant_hash().unwrap().to_vec(),
+        },
+        now(),
+        &root.keys,
+    )
+    .unwrap();
+    assert_eq!(f.submit(&root, &revoke).await.status(), StatusCode::OK);
+    assert_eq!(post(query).await.unwrap().status(), StatusCode::FORBIDDEN);
+}
 async fn state(f: &Fixture, root: &Account) -> DeviceState {
     let page = f
         .manifest(root, &root.id, 0, 100)

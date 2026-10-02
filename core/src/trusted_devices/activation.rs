@@ -1,12 +1,15 @@
 //! Typed activation transport. Private request/proof/session values stay in
 //! Rust; shell-facing activation jobs must retain originals before calling it.
-use liteseal_shared::{device_activation::SessionInfo, trusted_device::DeviceIdentity};
 use liteseal_shared::{
     device_activation::{
         self as a, ActivationCancel, ActivationCancelResult, Challenge, Enable, EnableCancel,
         EnableCancelResult, Envelope, Inspection, InspectionResult, Proof, Session, Start,
     },
     trusted_device::{canonical_origin, Anchor, DeviceState},
+};
+use liteseal_shared::{
+    device_activation::{ModeQuery, ModeReply, SessionInfo},
+    trusted_device::DeviceIdentity,
 };
 use reqwest::{Method, RequestBuilder};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -148,6 +151,29 @@ impl ActivationApi {
             event.verify_root(anchor).map_err(|_| invalid())?;
         }
         Ok(status.event)
+    }
+    pub async fn discover_mode(
+        &self,
+        state: &DeviceState,
+        device: &str,
+        keys: &liteseal_shared::crypto::KeyPair,
+    ) -> Result<Option<Enable>, ActivationError> {
+        self.root(state.anchor())?;
+        let query = ModeQuery::make(
+            state,
+            &uuid::Uuid::new_v4().to_string(),
+            device,
+            chrono::Utc::now().timestamp_millis(),
+            keys,
+        )
+        .map_err(|_| invalid())?;
+        let reply: ModeReply = self
+            .send(self.body(self.request(Method::POST, "/auth/v3/mode", None)?, &query)?)
+            .await?;
+        reply
+            .verify(&query, state.anchor())
+            .map_err(|_| invalid())?;
+        Ok(reply.event)
     }
     pub async fn enable(
         &self,

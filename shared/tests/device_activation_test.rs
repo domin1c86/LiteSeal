@@ -57,6 +57,76 @@ impl Fixture {
     }
 }
 #[test]
+fn bootstrap_query_is_read_only_signed_scoped_and_expiring() {
+    let f = Fixture::new();
+    for (device, keys) in [(ROOT, &f.root), (SECOND, &f.second)] {
+        let query = ModeQuery::make(&f.joined, REQUEST, device, 100_000, keys).unwrap();
+        query.verify_current(&f.joined, 100_000).unwrap();
+        query.verify_current(&f.joined, 70_000).unwrap();
+        assert!(query.verify_current(&f.joined, 69_999).is_err());
+        assert!(query.verify_current(&f.joined, 220_000).is_err());
+        assert!(ModeQuery::make(
+            &f.joined,
+            REQUEST,
+            device,
+            100_000,
+            if device == ROOT { &f.second } else { &f.root }
+        )
+        .is_err());
+        let reply = ModeReply {
+            version: 1,
+            request: query.digest().unwrap(),
+            event: Some(f.mode.clone()),
+        };
+        reply.verify(&query, f.joined.anchor()).unwrap();
+        let mut disabled = reply.clone();
+        disabled.event = None;
+        disabled.verify(&query, f.joined.anchor()).unwrap();
+        let mut wrong = reply.clone();
+        wrong.request[0] ^= 1;
+        assert!(wrong.verify(&query, f.joined.anchor()).is_err());
+        wrong = reply.clone();
+        wrong.event.as_mut().unwrap().signature[0] ^= 1;
+        assert!(wrong.verify(&query, f.joined.anchor()).is_err());
+        for case in 0..11 {
+            let mut wrong = query.clone();
+            match case {
+                0 => wrong.version = 2,
+                1 => wrong.id = MODE.into(),
+                2 => wrong.origin = "https://other.invalid".into(),
+                3 => wrong.account = ROOT.into(),
+                4 => wrong.device.device_id = MODE.into(),
+                5 => wrong.device.encryption_key[0] ^= 1,
+                6 => wrong.authorization[0] ^= 1,
+                7 => wrong.issued_at = i64::MIN,
+                8 => wrong.issued_at = i64::MAX,
+                9 => wrong.signature[0] ^= 1,
+                _ => wrong.device.signing_key[0] ^= 1,
+            }
+            assert!(wrong.verify_current(&f.joined, 100_000).is_err());
+        }
+        // A read signature does not authorize the root's enable operation.
+        let mut enable = f.mode.clone();
+        enable.signature = query.signature;
+        assert!(enable.verify_root(f.joined.anchor()).is_err());
+    }
+    let query = ModeQuery::make(&f.joined, REQUEST, SECOND, 100_000, &f.second).unwrap();
+    assert!(query.verify_current(&f.initial, 100_000).is_err());
+    let revoke = make_event(
+        &f.joined,
+        "revoke-for-bootstrap".into(),
+        DeviceAction::Revoke {
+            device_id: SECOND.into(),
+            grant_hash: f.joined.grant_hash().unwrap().to_vec(),
+        },
+        100_001,
+        &f.root,
+    )
+    .unwrap();
+    let revoked = f.joined.apply(&revoke).unwrap();
+    assert!(query.verify_current(&revoked, 100_002).is_err());
+}
+#[test]
 fn session_metadata_requires_live_original_device_authority_and_bounded_expiry() {
     let f = Fixture::new();
     let device = f.joined.secondary().unwrap().clone();
