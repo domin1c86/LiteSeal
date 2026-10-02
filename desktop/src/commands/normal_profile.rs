@@ -54,9 +54,17 @@ pub(crate) struct Context {
     pub target: Target,
     pub identity: KeystoreData,
     pub database: PathBuf,
+    pub protocol: String,
     generation: u64,
     binding: Binding,
     epoch: u64,
+}
+impl Context {
+    pub(crate) fn cache_key(&self) -> Result<String, String> {
+        Ok(hex::encode(Sha256::digest(
+            serde_json::to_vec(&(self.generation, &self.binding, self.epoch)).map_err(|_| bad())?,
+        )))
+    }
 }
 fn bad() -> String {
     "正常档案范围已变化或暂停，请重新打开原档案".into()
@@ -76,7 +84,7 @@ fn candidate(state: &AppState, target: Target) -> Result<Candidate, String> {
                     })
                     .transpose()?
                     .flatten();
-                let flags = current
+                let mut flags = current
                     .as_ref()
                     .map(|v| (v.has_credentials, v.eligible, v.access_expired))
                     .unwrap_or((!identity.token.is_empty(), true, false));
@@ -89,6 +97,9 @@ fn candidate(state: &AppState, target: Target) -> Result<Candidate, String> {
                         "switching"
                     }
                 };
+                if protocol == "v3" && current.is_none() {
+                    flags = (false, true, true);
+                }
                 (
                     identity,
                     state.db_path.clone(),
@@ -163,18 +174,22 @@ fn candidate(state: &AppState, target: Target) -> Result<Candidate, String> {
     })
 }
 pub(crate) fn invalidate(state: &AppState, suspend: bool) -> Result<(), String> {
-    let mut r = state.normal_profile_runtime.lock().map_err(|_| bad())?;
-    r.epoch = r.epoch.checked_add(1).ok_or_else(bad)?;
-    if suspend {
-        r.suspended = true;
-    }
-    Ok(())
+    super::direct::transition(state, suspend, false, || {
+        let mut r = state.normal_profile_runtime.lock().map_err(|_| bad())?;
+        r.epoch = r.epoch.checked_add(1).ok_or_else(bad)?;
+        if suspend {
+            r.suspended = true;
+        }
+        Ok(())
+    })
 }
 pub(crate) fn resume(state: &AppState) -> Result<(), String> {
-    let mut r = state.normal_profile_runtime.lock().map_err(|_| bad())?;
-    r.epoch = r.epoch.checked_add(1).ok_or_else(bad)?;
-    r.suspended = false;
-    Ok(())
+    super::direct::transition(state, false, true, || {
+        let mut r = state.normal_profile_runtime.lock().map_err(|_| bad())?;
+        r.epoch = r.epoch.checked_add(1).ok_or_else(bad)?;
+        r.suspended = false;
+        Ok(())
+    })
 }
 pub(crate) fn lease(state: &AppState) -> Result<u64, String> {
     let r = state.normal_profile_runtime.lock().map_err(|_| bad())?;
@@ -260,6 +275,7 @@ pub(crate) fn capture(state: &AppState) -> Result<Option<Context>, String> {
         target: c.view.target,
         identity: c.identity,
         database: c.database,
+        protocol: c.view.protocol,
         generation: selected.generation,
         binding: c.binding,
         epoch,

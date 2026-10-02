@@ -36,15 +36,18 @@ test('preload exposes exactly the typed business commands, with error propagatio
           return fail ? { ok: false, error: 'test error' } : { ok: true, result: [] };
         } } };
     },
-    window:{dispatchEvent(event){events.push(event.type);}}, Event,
+    window:{dispatchEvent(event){events.push(event.type);}}, Event,CustomEvent:class extends Event{constructor(type,options){super(type);this.detail=options.detail;}},
   });
   assert.deepEqual(Object.keys(exposed).sort(), [...commandNames].sort());
   assert.equal(exposed.resume_device_control, undefined);
   assert.equal(exposed.suspend_device_control, undefined);
   assert.equal(exposed.process_session_refreshes, undefined);
+  assert.equal(exposed.process_direct_chat, undefined);
   listeners.get('liteseal:device-paused')();assert.deepEqual(events,['liteseal-device-paused']);
   listeners.get('liteseal:session-refresh-changed')();assert.equal(events.at(-1),'liteseal-session-refresh-changed');
   listeners.get('liteseal:normal-profile-changed')();assert.equal(events.at(-1),'liteseal-normal-profile-changed');
+  listeners.get('liteseal:direct-changed')();assert.equal(events.at(-1),'liteseal-direct-changed');
+  listeners.get('liteseal:direct-status')(null,{changed:false,task:null,poll:null});assert.equal(events.at(-1),'liteseal-direct-status');
   assert.deepEqual(await exposed.get_contacts({}), []);
   assert.equal((await exposed.stage_attachment_file({ peerId: 'bob', file: selectedFile })).id, 'staged');
   await assert.rejects(exposed.stage_attachment_file({ peerId: 'bob', file: {} }), /没有本机路径/);

@@ -7,6 +7,8 @@ const choice=(join:boolean):NormalProfileChoice=>({target:join?{kind:"join",prof
 let view:NormalProfileSnapshot,delayed=false,deferred:((next:NormalProfileSnapshot)=>void)|null=null;
 const calls:{name:string;args:any}[]=[];
 const api={
+  get_direct_chat:async()=>({identity:{account:"synthetic-account",origin:"https://synthetic.example",root_device:"synthetic-root",root_fingerprint:"a".repeat(64),encryption_fingerprint:"b".repeat(64),signing_fingerprint:"c".repeat(64)},device:"joined-device",peers:[],tasks:[],can_network:true}),
+  get_direct_history:async()=>({messages:[],next_cursor:null}),
   get_normal_profile:async()=>structuredClone(view),
   select_normal_profile:async(args:any)=>{calls.push({name:"select",args});if(delayed)return new Promise<NormalProfileSnapshot>(r=>{deferred=r;});view.generation++;view.explicit=true;view.selected=structuredClone(view.profiles.find(p=>JSON.stringify(p.target)===JSON.stringify(args.target))!.profile);return structuredClone(view);},
   clear_normal_profile:async(args:any)=>{calls.push({name:"clear",args});view.generation++;view.explicit=true;view.selected=null;return structuredClone(view);},

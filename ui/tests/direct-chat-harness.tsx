@@ -1,0 +1,40 @@
+import {StrictMode} from "react";
+import {flushSync} from "react-dom";
+import {root} from "./device-harness-root";
+import DirectChat from "../src/components/DirectChat";
+import type {DirectSnapshot,DirectHistory,DirectPeer,DirectProgress} from "../../electron/contracts";
+import "../src/theme.css";
+const peer:DirectPeer={account:"22222222-2222-4222-8222-222222222222",origin:"https://synthetic.example",root_device:"peer-root",root_fingerprint:"b".repeat(64),encryption_fingerprint:"c".repeat(64),signing_fingerprint:"d".repeat(64)};
+let view:DirectSnapshot,rows:DirectHistory["messages"],delay=false,failPrepare=false,deferred:((p:DirectProgress)=>void)|null=null;
+const calls:{name:string;args:any}[]=[];
+const api={
+  get_direct_chat:async()=>structuredClone(view),
+  get_direct_history:async({before}:any)=>{const page=rows.filter(r=>before==null||r.cursor<before).slice(0,6);return {messages:structuredClone(page),next_cursor:page.length===6?page[5].cursor:null};},
+  inspect_direct_peer:async(args:any)=>{calls.push({name:"inspect",args});return structuredClone(peer);},
+  confirm_direct_peer:async(args:any)=>{calls.push({name:"confirm",args});view.peers=[structuredClone(peer)];},
+  prepare_direct_text:async(args:any)=>{calls.push({name:"prepare",args});view.tasks=[{id:"original-send",revision:1,state:"prepared",peer:peer.account,epoch:"e".repeat(64),digest:[],cancel_requested:false}];if(failPrepare)throw new Error("原准备响应丢失");return {task:structuredClone(view.tasks[0]),condition:"prepared" as const,http_status:null};},
+  direct_task_step:async(args:any)=>{calls.push({name:"step",args});if(delay)return new Promise<DirectProgress>(r=>{deferred=r;});return {task:structuredClone(view.tasks[0]),condition:"retry" as const,http_status:null};},
+  cancel_direct_task:async(args:any)=>{calls.push({name:"cancel",args});view.tasks[0].cancel_requested=true;return structuredClone(view.tasks[0]);},
+  forget_direct_task:async(args:any)=>{calls.push({name:"forget",args});view.tasks=[];},
+  hide_direct_message:async(args:any)=>{calls.push({name:"hide",args});rows=rows.filter(r=>r.id!==args.id);},
+};
+function reset(){view={identity:{...peer,account:"11111111-1111-4111-8111-111111111111",root_fingerprint:"a".repeat(64)},device:"own-second-device",peers:[],tasks:[],can_network:true};rows=Array.from({length:52},(_,i)=>({cursor:52-i,id:`message-${52-i}`,sender:peer.account,sender_device:"peer-root",peer:peer.account,role:"incoming",kind:"text",outcome:"processed",sent_at:Date.now(),accepted_at:123,text:`历史 ${52-i} 中文 🦭 <script>不执行</script>`}));delay=false;calls.length=0;window.confirm=()=>true;window.desktop=new Proxy(api,{get(t,k:keyof typeof api){if(!(k in t))throw new Error("chat accessed legacy/private API "+String(k));return t[k];}}) as any;}
+const sleep=()=>new Promise(r=>setTimeout(r,55));
+const check=(value:unknown,message:string)=>{if(!value)throw new Error(message);};
+const button=(text:string)=>[...document.querySelectorAll<HTMLButtonElement>("button")].find(b=>b.textContent?.trim()===text);
+async function click(text:string){check(button(text),"missing chat action "+text);button(text)!.click();await sleep();}
+async function fill(label:string,value:string){const node=document.querySelector<HTMLInputElement|HTMLTextAreaElement>(`[aria-label="${label}"]`)!;check(node,"missing field "+label);const prototype=node instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(prototype,"value")!.set!.call(node,value);node.dispatchEvent(new Event("input",{bubbles:true}));await sleep();}
+function open(text:string){const node=[...document.querySelectorAll('summary')].find(n=>n.textContent?.startsWith(text));check(node,"missing section "+text);node!.click();}
+let generation=0;const panel=()=>flushSync(()=>root.render(<StrictMode><DirectChat key={++generation}/></StrictMode>));
+(window as any).runDirectTests=async()=>{
+  const results:string[]=[];reset();panel();await sleep();check(!calls.length&&document.querySelectorAll('[aria-label="v3 文字历史"] li').length===6,"mount mutates task or wrong page");check(document.body.textContent!.includes("<script>")&&document.querySelectorAll('script').length===1,"text executes markup");results.push("mount reads only scoped metadata/history and renders authenticated text safely");
+  for(let i=0;i<8;i++)await click("加载更早的文字");check(document.querySelectorAll('[aria-label="v3 文字历史"] li').length===52&&button("加载更早的文字")!.disabled,"52-message paging misses or duplicates records");results.push("52-message bounded paging contains each record once");
+  await click("在本机隐藏");check(!rows.some(r=>r.id==="message-52")&&!document.body.textContent!.includes("历史 52 中文"),"hidden record returns");window.dispatchEvent(new Event("liteseal-direct-changed"));await sleep();check(!document.body.textContent!.includes("历史 52 中文"),"background change revives hidden record");results.push("explicit hiding and background refresh preserve visibility");
+  open("核对新的聊天账号");await fill("对方账号编号",peer.account);await click("查询对方根身份");check(!calls.some(c=>c.name==="confirm")&&button("确认对方原设备根身份")!.disabled,"inspection auto-trusts root");await fill("核对对方根指纹","wrong");check(button("确认对方原设备根身份")!.disabled,"wrong root accepted");await fill("核对对方根指纹",peer.root_fingerprint);await click("确认对方原设备根身份");check(calls.find(c=>c.name==="confirm")!.args.fingerprint===peer.root_fingerprint,"confirmation replaces root");results.push("candidate inspection requires independent full fingerprint confirmation");
+  failPrepare=true;await fill("v3 消息正文","待发中文 🦭");await click("发送加密文字");check(button("发送加密文字")!.disabled&&view.tasks[0].id==="original-send"&&document.body.textContent!.includes("原准备响应丢失"),"lost preparation permits replacement task");results.push("lost preparation response queries original tasks and blocks replacement send");
+  failPrepare=false;view.tasks=[];await click("刷新文字历史");await click("发送加密文字");check(calls.find(c=>c.name==="step")!.args.id==="original-send"&&document.querySelector<HTMLTextAreaElement>('[aria-label="v3 消息正文"]')!.value==="","send changes original id or retains committed draft");check(document.body.textContent!.includes("原结果尚未确认"),"unknown send reports success");results.push("text sends original persisted id and preserves unknown outcome");
+  open("原发送任务");delay=true;button("继续原发送任务")!.click();await sleep();check(!button("取消原发送任务")!.disabled,"in-flight retry prevents cancel");await click("取消原发送任务");deferred!({task:{...view.tasks[0],state:"accepted"},condition:"accepted",http_status:null});await sleep();check(!document.body.textContent!.includes("服务端已接受原消息"),"late success overrides cancel intent");results.push("cancel while retrying rejects late UI success");
+  reset();view.peers=[peer];view.tasks=[{id:"original-send",revision:2,state:"publishing",peer:peer.account,epoch:"e",digest:[],cancel_requested:false}];panel();await sleep();open("原发送任务");delay=true;button("继续原发送任务")!.click();await sleep();window.dispatchEvent(new Event("liteseal-app-locked"));deferred!({task:{...view.tasks[0],state:"accepted"},condition:"accepted",http_status:null});await sleep();check(!document.body.textContent!.includes("历史 52")&&!document.querySelector('[aria-label="v3 消息正文"]')&&!document.body.textContent!.includes("服务端已接受"),"lock exposes history or accepts late response");results.push("lock clears identity, text and history and rejects late results");
+  reset();view.can_network=false;panel();await sleep();open("核对新的聊天账号");await fill("对方账号编号",peer.account);check(button("查询对方根身份")!.disabled&&button("发送加密文字")!.disabled&&document.querySelectorAll('[aria-label="v3 文字历史"] li').length===6,"signed-out view networks or hides readable history");results.push("signed-out scope retains local history and blocks network actions");return results;
+};
+(window as any).showDirectChat=async()=>{reset();view.peers=[peer];panel();for(let i=0;i<20;i++){await sleep();if(button("刷新文字历史")&&!button("刷新文字历史")!.disabled&&document.querySelector<HTMLTextAreaElement>('[aria-label="v3 消息正文"]')?.value==="")return;}throw new Error("capture did not reach fresh scoped view");};

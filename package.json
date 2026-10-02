@@ -25,7 +25,8 @@
     "test:backup:ui": "node scripts/test-backup-ui.mjs",
     "test:groups:soak": "node scripts/test-group-soak.mjs",
     "test:devices:trial": "node scripts/test-trusted-devices.mjs",
-    "test:devices:ui": "node scripts/test-devices-ui.mjs"
+    "test:devices:ui": "node scripts/test-devices-ui.mjs",
+    "test:direct:ui": "node scripts/test-direct-ui.mjs"
   },
   "devDependencies": {
     "electron": "44.3.0",

@@ -259,6 +259,7 @@ pub fn clear_session(state: &AppState, profile: String) -> Result<(), String> {
     {
         return Err(bad());
     }
+    super::normal_profile::invalidate(state, false)?;
     ctx.normal.clear_session()?;
     // Retire both admission gates while still holding the desktop transition
     // lock. An already captured context cannot obtain a fresh post-clear lease.

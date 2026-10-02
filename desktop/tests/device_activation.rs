@@ -541,6 +541,13 @@ async fn accepted_original_session_saves_only_independent_profile_and_clear_fenc
             .unwrap();
             assert_eq!(chosen.selected.as_ref().unwrap().device, session.device);
             assert_eq!(chosen.generation, 1);
+            let chat = liteseal_desktop::commands::direct::snapshot(&f.state).unwrap();
+            assert_eq!(chat.device, session.device);
+            assert_eq!(chat.identity.account, session.account);
+            assert!(liteseal_desktop::commands::direct::history(&f.state, None)
+                .unwrap()
+                .messages
+                .is_empty());
             let selected_public = serde_json::to_string(&chosen).unwrap();
             assert!(
                 !selected_public.contains(&session.access_token)

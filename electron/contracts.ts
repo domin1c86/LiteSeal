@@ -13,6 +13,16 @@ export interface GroupPoll { id: string; creator: string; question: string; opti
 export interface GroupCollaboration { polls: GroupPoll[]; pin: string | null; pin_unavailable: boolean; pin_revision: number; pending: boolean; conflict: boolean; pending_message: string | null }
 export type CollaborationCommand = { kind: "mention"; text: string; mentions: CollaborationMember[] } | { kind: "poll"; question: string; options: string[] } | { kind: "vote"; poll: string; option: string; revision: number } | { kind: "close"; poll: string; revision: number } | { kind: "pin"; message: string | null; revision: number };
 export interface CommandMap {
+  get_direct_chat:{args:{};result:DirectSnapshot};
+  get_direct_history:{args:{before?:number|null};result:DirectHistory};
+  inspect_direct_peer:{args:{account:string};result:DirectPeer};
+  confirm_direct_peer:{args:{account:string;fingerprint:string};result:void};
+  prepare_direct_text:{args:{account:string;text:string};result:DirectPreparation};
+  direct_task_step:{args:{id:string};result:DirectProgress};
+  cancel_direct_task:{args:{id:string};result:DirectTask};
+  forget_direct_task:{args:{id:string};result:void};
+  hide_direct_message:{args:{id:string};result:void};
+  process_direct_chat:{args:{};result:{changed:boolean;task:DirectProgress|null;poll:{condition:DirectCondition;received:number;acknowledged:number;has_more:boolean;http_status:number|null}|null}};
   get_normal_profile:{args:{};result:NormalProfileSnapshot};
   select_normal_profile:{args:{target:RefreshTarget;generation:number;scopeFingerprint:string};result:NormalProfileSnapshot};
   clear_normal_profile:{args:{generation:number};result:NormalProfileSnapshot};
@@ -233,6 +243,13 @@ export interface GroupSnapshot { groups: GroupView[]; invitations: { id: string;
 export interface ScheduledTask { id: string; peer_id: string; due_at: number; text: string; state: string; error: string; sealed: boolean }
 export interface AttachmentTask { id: string; peer_id: string; message_id: string; name: string; size: number; mime: string; duration_ms?: number; offset: number; total: number; direction: string }
 export type RefreshTarget={kind:"root"}|{kind:"join";profileId:string};
+export type DirectCondition="prepared"|"accepted"|"cancelled"|"syncing"|"needs_trust"|"conflict"|"retry"|"session_required"|"unsupported"|"idle"|"received"|"acknowledged";
+export interface DirectPeer{account:string;origin:string;root_device:string;root_fingerprint:string;encryption_fingerprint:string;signing_fingerprint:string}
+export interface DirectTask{id:string;revision:number;state:"prepared"|"publishing"|"conflict"|"accepted"|"cancelled";peer:string;epoch:string;digest:number[];cancel_requested:boolean}
+export interface DirectProgress{task:DirectTask;condition:DirectCondition;http_status:number|null}
+export interface DirectPreparation{task:DirectTask|null;condition:DirectCondition;http_status:number|null}
+export interface DirectSnapshot{identity:DirectPeer;device:string;peers:DirectPeer[];tasks:DirectTask[];can_network:boolean}
+export interface DirectHistory{messages:{cursor:number;id:string;sender:string;sender_device:string;peer:string;role:string;kind:string;outcome:string;sent_at:number;accepted_at:number;text:string|null}[];next_cursor:number|null}
 export interface NormalProfileChoice{target:RefreshTarget;scope_fingerprint:string;origin:string;account:string;device:string;device_name:string;protocol:string;has_session:boolean;eligible:boolean;access_expired:boolean}
 export interface NormalProfileSnapshot{generation:number;explicit:boolean;selected:NormalProfileChoice|null;error:string|null;profiles:{target:RefreshTarget;profile:NormalProfileChoice|null;error:string|null}[]}
 export interface RefreshCurrent{generation:number;account:string;device:string;session:string;has_credentials:boolean;access_expired:boolean;eligible:boolean;access_expires_at:number;refresh_expires_at:number}
@@ -241,13 +258,14 @@ export interface RefreshProgress{task:RefreshTask;condition:"complete"|"cancelle
 export interface RefreshSnapshot{target:RefreshTarget;current:RefreshCurrent|null;tasks:RefreshTask[]}
 export type DesktopApi = {
   // The mapped business API never exposes private attachment descriptors.
-  [K in Exclude<CommandName, "suspend_device_control" | "resume_device_control" | "process_session_refreshes">]: (args: CommandMap[K]["args"]) => Promise<CommandMap[K]["result"]>;
+  [K in Exclude<CommandName, "suspend_device_control" | "resume_device_control" | "process_session_refreshes" | "process_direct_chat">]: (args: CommandMap[K]["args"]) => Promise<CommandMap[K]["result"]>;
 };
 export type GroupAnswer="yes"|"no"|"maybe";
 export interface GroupActivity { id:string;creator:string;title:string;start_at:number;timezone:string;location:string;description:string;responses:Record<string,GroupAnswer>;participants:string[];departed:string[];closed:boolean;cancelled:boolean;eligible:boolean;can_manage:boolean;revision:number }
 export interface GroupExtensions { attachments:{id:string;blob:string;name:string;size:number;mime:string;duration_ms:number|null}[];activities:GroupActivity[];pending:boolean;conflict:boolean;pending_root:string|null }
 export type GroupExtensionCommand={kind:"activity";title:string;start_at:number;timezone:string;location:string;description:string}|{kind:"respond";activity:string;answer:GroupAnswer;revision:number}|{kind:"close"|"cancel";activity:string;revision:number};
 export const commandNames = [
+  "get_direct_chat","get_direct_history","inspect_direct_peer","confirm_direct_peer","prepare_direct_text","direct_task_step","cancel_direct_task","forget_direct_task","hide_direct_message",
   "get_normal_profile","select_normal_profile","clear_normal_profile",
   "get_session_refresh","prepare_session_refresh","session_refresh_step","cancel_session_refresh","forget_session_refresh",
   "get_root_messaging", "check_root_messaging", "prepare_root_messaging", "root_messaging_step", "cancel_root_messaging", "forget_root_messaging",

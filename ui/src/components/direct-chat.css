@@ -1,0 +1,14 @@
+.direct-chat { margin:24px auto 0; max-width:840px; padding:16px; border-top:1px solid var(--border); overflow-wrap:anywhere; }
+.direct-chat details { margin:12px 0; }
+.direct-chat details > p { color:var(--text-subtle); font-size:13px; }
+.direct-chat label { display:flex; flex-direction:column; gap:6px; margin:10px 0; }
+.direct-chat input,.direct-chat select,.direct-chat textarea { width:100%; box-sizing:border-box; }
+.direct-chat textarea { min-height:100px; resize:vertical; }
+.direct-chat ol { list-style:none; padding:0; display:flex; flex-direction:column; gap:12px; }
+.direct-chat li { border:1px solid var(--border); border-radius:8px; padding:12px; max-width:85%; }
+.direct-chat li[data-own=true] { align-self:flex-end; }
+.direct-chat li > p:first-child { margin:0 0 8px; color:var(--text-subtle); font-size:12px; }
+.direct-chat li > p:nth-child(2) { margin:8px 0 12px; line-height:1.6; white-space:pre-wrap; }
+.direct-chat [aria-label="v3 原发送任务"] { padding:10px 0; border-bottom:1px solid var(--border); }
+.direct-chat [aria-label="v3 原发送任务"] button { margin:0 8px 8px 0; }
+@media(max-width:600px) { .direct-chat { padding:12px 0; } .direct-chat li { max-width:100%; box-sizing:border-box; } }

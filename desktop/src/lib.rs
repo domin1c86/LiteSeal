@@ -19,6 +19,7 @@ pub struct AppState {
     pub(crate) root_messaging_runtime: Mutex<commands::root_messaging::Runtime>,
     pub(crate) session_refresh_runtime: Mutex<commands::session_refresh::Runtime>,
     pub(crate) normal_profile_runtime: Mutex<commands::normal_profile::Runtime>,
+    pub(crate) direct_runtime: Mutex<commands::direct::Runtime>,
     pub(crate) normal_profile_gate: tokio::sync::RwLock<()>,
     pub(crate) legacy_direct_gate: tokio::sync::RwLock<()>,
     pub(crate) backup_runtime: std::sync::Arc<Mutex<commands::backup::Runtime>>,
@@ -61,6 +62,7 @@ impl AppState {
             root_messaging_runtime: Default::default(),
             session_refresh_runtime: Default::default(),
             normal_profile_runtime: Default::default(),
+            direct_runtime: Default::default(),
             normal_profile_gate: Default::default(),
             legacy_direct_gate: Default::default(),
             backup_runtime: Default::default(),
@@ -88,6 +90,8 @@ impl AppState {
 
     pub fn save_identity(&self, data: KeystoreData) -> Result<(), String> {
         let _commit = self.backup_commit.lock().map_err(|_| "备份提交锁不可用")?;
+        // Retire message/session leases before clearing or replacing capabilities.
+        commands::device_control::invalidate(self)?;
         let mut cached = self.identity.lock().map_err(|e| e.to_string())?;
         let previous = cached.clone();
         if let Some(previous) = &previous {

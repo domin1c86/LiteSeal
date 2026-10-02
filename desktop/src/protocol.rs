@@ -16,6 +16,29 @@ pub struct Request {
 #[derive(Deserialize)]
 #[serde(tag = "name", content = "args", deny_unknown_fields)]
 pub enum Command {
+    #[serde(rename = "get_direct_chat")]
+    GetDirectChat {},
+    #[serde(rename = "get_direct_history")]
+    GetDirectHistory { before: Option<i64> },
+    #[serde(rename = "inspect_direct_peer")]
+    InspectDirectPeer { account: String },
+    #[serde(rename = "confirm_direct_peer")]
+    ConfirmDirectPeer {
+        account: String,
+        fingerprint: String,
+    },
+    #[serde(rename = "prepare_direct_text")]
+    PrepareDirectText { account: String, text: String },
+    #[serde(rename = "direct_task_step")]
+    DirectTaskStep { id: String },
+    #[serde(rename = "cancel_direct_task")]
+    CancelDirectTask { id: String },
+    #[serde(rename = "forget_direct_task")]
+    ForgetDirectTask { id: String },
+    #[serde(rename = "hide_direct_message")]
+    HideDirectMessage { id: String },
+    #[serde(rename = "process_direct_chat")]
+    ProcessDirectChat {},
     #[serde(rename = "get_normal_profile")]
     GetNormalProfile {},
     #[serde(rename = "select_normal_profile")]
@@ -972,7 +995,17 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
     );
     let management = matches!(
         &command,
-        Command::UnlockApp { .. }
+        Command::GetDirectChat {}
+            | Command::GetDirectHistory { .. }
+            | Command::InspectDirectPeer { .. }
+            | Command::ConfirmDirectPeer { .. }
+            | Command::PrepareDirectText { .. }
+            | Command::DirectTaskStep { .. }
+            | Command::CancelDirectTask { .. }
+            | Command::ForgetDirectTask { .. }
+            | Command::HideDirectMessage { .. }
+            | Command::ProcessDirectChat {}
+            | Command::UnlockApp { .. }
             | Command::SuspendScheduledMessages {}
             | Command::GetNormalProfile {}
             | Command::SelectNormalProfile { .. }
@@ -1097,6 +1130,35 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
         None
     };
     let result = match command {
+        Command::GetDirectChat {} => serde_json::to_value(commands::direct::snapshot(state)?),
+        Command::GetDirectHistory { before } => {
+            serde_json::to_value(commands::direct::history(state, before)?)
+        }
+        Command::InspectDirectPeer { account } => {
+            serde_json::to_value(commands::direct::inspect_peer(state, account).await?)
+        }
+        Command::ConfirmDirectPeer {
+            account,
+            fingerprint,
+        } => serde_json::to_value(commands::direct::confirm_peer(state, account, fingerprint)?),
+        Command::PrepareDirectText { account, text } => {
+            serde_json::to_value(commands::direct::prepare(state, account, text).await?)
+        }
+        Command::DirectTaskStep { id } => {
+            serde_json::to_value(commands::direct::step(state, id).await?)
+        }
+        Command::CancelDirectTask { id } => {
+            serde_json::to_value(commands::direct::cancel(state, id)?)
+        }
+        Command::ForgetDirectTask { id } => {
+            serde_json::to_value(commands::direct::forget(state, id)?)
+        }
+        Command::HideDirectMessage { id } => {
+            serde_json::to_value(commands::direct::hide(state, id)?)
+        }
+        Command::ProcessDirectChat {} => {
+            serde_json::to_value(commands::direct::process(state).await?)
+        }
         Command::GetNormalProfile {} => {
             serde_json::to_value(commands::normal_profile::snapshot(state)?)
         }

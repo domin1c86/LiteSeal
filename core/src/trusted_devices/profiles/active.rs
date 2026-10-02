@@ -194,6 +194,10 @@ impl Store {
     pub fn database(&self) -> Result<PathBuf, String> {
         self.profiles.database(&self.profile_id)
     }
+    /// Public, locally verified original root; never a root accepted from wire.
+    pub fn root_anchor(&self) -> Anchor {
+        self.anchor.clone()
+    }
     pub fn job_owner(&self) -> Result<JobOwner, String> {
         JobOwner::new(
             self.anchor.clone(),

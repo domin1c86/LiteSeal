@@ -210,6 +210,10 @@ impl MessageCoordinator {
         let lease = self.lease(keys)?;
         self.with(&lease, |s| s.tasks(keys))
     }
+    pub fn roots(&self, keys: &KeyPair) -> Result<Vec<Anchor>> {
+        let lease = self.lease(keys)?;
+        self.with(&lease, |s| s.roots(keys))
+    }
     pub fn request_cancel(&self, id: &str, keys: &KeyPair) -> Result<TaskView> {
         let lease = self.lease(keys)?;
         self.with(&lease, |s| s.request_cancel(id, keys))

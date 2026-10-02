@@ -36,11 +36,15 @@ interface Session {
 
 export default function App(){
   const [view,setView]=useState<NormalProfileSnapshot|null>(null),[error,setError]=useState(""),[showProfiles,setShowProfiles]=useState(false);
+  const [legacy,setLegacy]=useState(false);
   const refresh=useRef<()=>void>(()=>{});
   useEffect(()=>{let live=true,generation=0;const read=()=>{const n=++generation;setView(null);setError("");void getDesktopApi().get_normal_profile({}).then(next=>{if(live&&generation===n)setView(next);},failure=>{if(live&&generation===n)setError(String(failure));});};refresh.current=read;read();window.addEventListener("liteseal-normal-profile-changed",read);return()=>{live=false;generation++;window.removeEventListener("liteseal-normal-profile-changed",read);};},[]);
   if(error)return <main style={{padding:"24px",maxWidth:"840px",margin:"0 auto",overflowWrap:"anywhere"}}><section><p role="alert">无法恢复选中档案：{error}</p><button onClick={()=>refresh.current()}>重新查询档案</button><button onClick={()=>setShowProfiles(true)}>选择正常档案</button>{showProfiles&&<NormalProfilePanel onClose={()=>setShowProfiles(false)}/>}</section></main>;
   if(!view)return <div role="status">正在核对本机选中档案…</div>;
-  if(view.error||view.selected?.target.kind==="join"||view.explicit&&!view.selected)return <NormalProfileHome key={`${view.generation}:${view.selected?.scope_fingerprint??"none"}`} view={view}/>;
+  if(view.error||view.selected?.protocol==="v3"||view.selected?.target.kind==="join"||view.explicit&&!view.selected){
+    if(legacy&&view.selected?.target.kind==="root"&&!view.error)return <><button onClick={()=>setLegacy(false)}>返回新文字聊天</button><LegacyApp key={`legacy:${view.generation}`}/></>;
+    return <NormalProfileHome key={`${view.generation}:${view.selected?.scope_fingerprint??"none"}`} view={view} onLegacy={view.selected?.target.kind==="root"?()=>setLegacy(true):undefined}/>;
+  }
   return <LegacyApp key={`${view.generation}:${view.selected?.scope_fingerprint??"unbound"}`}/>;
 }
 

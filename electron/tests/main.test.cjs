@@ -21,13 +21,14 @@ for (const startupLocked of [false, true]) test(`main restricts IPC, locks and a
   let loaded;
   const load = new Promise(resolve => { loaded = resolve; });
   const child = new EventEmitter();
-  let holdDevice = false, heldDevice, holdRefresh = false, heldRefresh;
+  let holdDevice = false, heldDevice, holdRefresh = false, heldRefresh,holdDirect=false,heldDirect;
   child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
   child.kill = () => { child.emit('exit', 0); child.emit('close', 0); };
   child.stdin.on('finish', child.kill);
   child.stdin.on('data', frame => {
     const request = JSON.parse(frame.toString());
     commands.push(request.command.name);
+    if(holdDirect&&request.command.name==='process_direct_chat'){heldDirect=request;return;}
     if (holdRefresh && request.command.name === 'process_session_refreshes') { heldRefresh = request; return; }
     if (holdDevice && request.command.name === 'get_device_control') { heldDevice = request; return; }
     child.stdout.write(JSON.stringify({ id: request.id, result: request.command.name === 'process_scheduled_messages' ? 1 : request.command.name === 'process_groups' ? { changed: 1, errors: [] } : [] }) + '\n');
@@ -95,6 +96,7 @@ for (const startupLocked of [false, true]) test(`main restricts IPC, locks and a
   assert.equal(handlers.has('liteseal:resume_device_control'), false);
   assert.equal(handlers.has('liteseal:suspend_device_control'), false);
   assert.equal(handlers.has('liteseal:process_session_refreshes'), false);
+  assert.equal(handlers.has('liteseal:process_direct_chat'),false);
   for(const name of ['get_normal_profile','select_normal_profile','clear_normal_profile'])assert.ok(handlers.has(`liteseal:${name}`));
   if (startupLocked) {
     assert.equal((await handlers.get('liteseal:app_lock_state')(valid, {})).result, true);
@@ -114,6 +116,8 @@ for (const startupLocked of [false, true]) test(`main restricts IPC, locks and a
   assert.ok(heldDevice);
   electron.powerMonitor.emit('lock-screen');
   const beforeLockedRefresh = commands.filter(n=>n==='process_session_refreshes').length;
+  for(const name of ['get_direct_chat','get_direct_history','inspect_direct_peer','confirm_direct_peer','prepare_direct_text','direct_task_step','cancel_direct_task','forget_direct_task','hide_direct_message'])assert.equal((await handlers.get(`liteseal:${name}`)(valid,{})).ok,false,name);
+  intervals[3]();assert.ok(!commands.includes('process_direct_chat'));
   for(const name of ['get_normal_profile','select_normal_profile','clear_normal_profile'])assert.equal((await handlers.get(`liteseal:${name}`)(valid,{})).ok,false,name);
   intervals[2](); await new Promise(resolve=>setTimeout(resolve,0));
   assert.equal(commands.filter(n=>n==='process_session_refreshes').length,beforeLockedRefresh);
@@ -158,6 +162,12 @@ for (const startupLocked of [false, true]) test(`main restricts IPC, locks and a
   electron.powerMonitor.emit('resume'); await new Promise(resolve=>setTimeout(resolve,0));
   intervals[2](); await new Promise(resolve=>setTimeout(resolve,0));
   assert.ok(rendererEvents.some(event=>event[0]==='liteseal:session-refresh-changed'));
+  holdDirect=true;intervals[3]();intervals[3]();await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(commands.filter(n=>n==='process_direct_chat').length,1);
+  electron.powerMonitor.emit('suspend');
+  child.stdout.write(JSON.stringify({id:heldDirect.id,result:{changed:true,task:null,poll:null}})+'\n');await new Promise(resolve=>setTimeout(resolve,0));
+  assert.ok(!rendererEvents.some(event=>event[0]==='liteseal:direct-changed'));
+  holdDirect=false;electron.powerMonitor.emit('resume');await new Promise(resolve=>setTimeout(resolve,0));
   holdDevice=true;
   const beforeRootSave=devices(valid,{});
   await new Promise(resolve=>setTimeout(resolve,0));
@@ -204,6 +214,7 @@ for (const startupLocked of [false, true]) test(`main restricts IPC, locks and a
   const reader = windows[1];
   assert.ok(reader);
   const readerEvent = { sender: reader.webContents, senderFrame: reader.webContents.mainFrame };
+  for(const name of ['get_direct_chat','get_direct_history','inspect_direct_peer','confirm_direct_peer','prepare_direct_text','direct_task_step','cancel_direct_task','forget_direct_task','hide_direct_message'])assert.equal((await handlers.get(`liteseal:${name}`)(readerEvent,{})).ok,false,name);
   for(const name of ['get_normal_profile','select_normal_profile','clear_normal_profile'])assert.equal((await handlers.get(`liteseal:${name}`)(readerEvent,{})).ok,false,name);
   for(const name of ['get_session_refresh','prepare_session_refresh','session_refresh_step','cancel_session_refresh','forget_session_refresh']) {
     assert.equal((await handlers.get(`liteseal:${name}`)(readerEvent,{})).ok,false,name);

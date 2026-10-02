@@ -22,3 +22,5 @@ ipcRenderer.on("liteseal:scheduled-changed", () => window.dispatchEvent(new Even
 ipcRenderer.on("liteseal:groups-changed", () => window.dispatchEvent(new Event("liteseal-groups-changed")));
 ipcRenderer.on("liteseal:session-refresh-changed", () => window.dispatchEvent(new Event("liteseal-session-refresh-changed")));
 ipcRenderer.on("liteseal:normal-profile-changed", () => window.dispatchEvent(new Event("liteseal-normal-profile-changed")));
+ipcRenderer.on("liteseal:direct-changed", () => window.dispatchEvent(new Event("liteseal-direct-changed")));
+ipcRenderer.on("liteseal:direct-status", (_event,report) => window.dispatchEvent(new CustomEvent("liteseal-direct-status",{detail:report})));

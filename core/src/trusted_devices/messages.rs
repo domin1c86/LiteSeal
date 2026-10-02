@@ -455,6 +455,15 @@ impl Store {
     pub fn trust(&mut self) -> &mut DeviceTrustStore {
         &mut self.trust
     }
+    pub(super) fn roots(&mut self, keys: &KeyPair) -> Result<Vec<Anchor>, String> {
+        self.owner.keys(keys)?;
+        self.trust.read_checked(|conn|{
+            let mut query=conn.prepare("SELECT anchor FROM trusted_device_anchors WHERE origin=?1 ORDER BY account LIMIT 130").map_err(db)?;
+            let rows=query.query_map([&self.owner.origin],|r|r.get::<_,Vec<u8>>(0)).map_err(db)?.collect::<rusqlite::Result<Vec<_>>>().map_err(db)?;
+            if rows.len()>129{return Err("已核对根身份达到本机上限".into());}
+            rows.into_iter().map(|bytes|{let anchor:Anchor=serde_json::from_slice(&bytes).map_err(|_|invalid())?;super::read(conn,&anchor,None)?;Ok(anchor)}).collect()
+        })
+    }
     pub fn prepare(&mut self, request: Prepare<'_>, keys: &KeyPair) -> Result<TaskView, String> {
         self.owner.keys(keys)?;
         if uuid::Uuid::parse_str(request.id)

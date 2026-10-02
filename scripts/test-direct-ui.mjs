@@ -1,0 +1,19 @@
+import { build } from 'esbuild';
+import { mkdir, mkdtemp, writeFile, readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { createRequire } from 'node:module';
+import { spawn, spawnSync } from 'node:child_process';
+import { stopTree } from './process.mjs';
+const types = spawnSync(process.execPath, ['node_modules/typescript/bin/tsc','-p','ui/tsconfig.tests.json'], { stdio:'inherit', windowsHide:true });
+if (types.status !== 0) process.exit(1);
+await mkdir('target/test-results',{recursive:true});
+const directory = await mkdtemp(path.resolve('target/test-results/direct-ui-'));
+await build({ entryPoints:['ui/tests/direct-chat-harness.tsx'], bundle:true, outfile:path.join(directory,'harness.js'), platform:'browser', jsx:'automatic', define:{'process.env.NODE_ENV':'"development"'} });
+await writeFile(path.join(directory,'index.html'), `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'none'"><link rel="stylesheet" href="harness.css"></head><body><div id="root"></div><script src="harness.js"></script></body></html>`);
+const env={...process.env}; delete env.ELECTRON_RUN_AS_NODE;
+const child=spawn(createRequire(import.meta.url)('electron'),[path.resolve('scripts/direct-ui-electron.cjs'),directory],{env,stdio:'ignore',windowsHide:true});
+let timedOut=false;
+const timer=setTimeout(()=>{timedOut=true;void stopTree(child);},90000);
+const code=await new Promise(resolve=>{child.once('error',()=>resolve(1));child.once('exit',resolve);}); clearTimeout(timer);
+try { console.log(await readFile(path.join(directory,'result.json'),'utf8')); } catch { console.log(timedOut?'Direct chat UI timed out':'Direct chat UI did not produce a result'); }
+console.log('Direct chat UI evidence: '+directory); process.exitCode=code===0&&!timedOut?0:1;
