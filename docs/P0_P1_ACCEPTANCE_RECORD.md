@@ -1,5 +1,21 @@
 # P0/P1 验收记录（待执行）
 
+## 2026-10-03 新 v3 媒体自有工作目录与强杀回收短测
+
+基线 `5c55257` 加本轮工作树；使用合成文件、独立 Electron userData 与 OS 临时父目录，不读取真实用户资料或现有工作目录。应用持有单实例锁后验证媒体工作目录，预览/录音/剪贴板的条目标记同步完成后才写正文；退出等待自有清理。不扫描旧匿名目录，不整理用户另存为目标，不改 Rust 协议、数据库迁移或 T22 格式。
+
+- `target/test-results/media-workspace-crash-2026-10-03.txt`：3 项独立目录/故障用例通过（451.64 ms）。验证标记媒体和中断空分配的回收、同级无关文件保留、外部路径拒绝；未知文件、错 owner 标记、目录 junction 均拒绝清理，外部数据不变。
+- 新增实际 OS 终止的隔离 Electron main 用例：创建带自有标记的合成录音输入与通过 main 预览接口写入的合成媒体文件，等待完成后 SIGKILL（Windows TerminateProcess），确认遗留两个条目；在新启动打开同一自有目录，只剩根所有权标记。该用例 223.51 ms，不连接服务器/不启用真实账号或麦克风，Rust 认证写接口为夹具。它证明此次主进程终止后的新式条目回收，不证明系统掉电、其他应用/旧目录、真实加密资料或所有强杀阶段均通过。
+- `media-workspace-delivery-2026-10-03.txt`：完整 `npm test` 为 **27 项 Node/362 项普通 Rust 通过，0 失败**，80 项 PostgreSQL 默认 ignored。既有 main/preload、文件认证、失效范围、取消/暂停和备份隔离断言同时通过。
+- 格式、全 workspace/all-targets Clippy（-D warnings）、核心 FFI 检查通过，`media-workspace-static-2026-10-03.txt`；完整生产构建通过，Rust release 为缓存构建（0.26 秒），`media-workspace-production-2026-10-03.txt`，保留既有链接警告。
+- 群 UI 宽窄回归通过，`media-workspace-group-ui-2026-10-03.txt` / `group-ui-ufevy7`；风格回归 72 张既有截图范围、无 renderer 错误，`media-workspace-style-2026-10-03.txt` / `ui-style-MqjYAe`。
+
+- `target/test-results/media-workspace-postgres-2026-10-03.json`：专用 PostgreSQL 16.14 既有 **80 项通过/0 失败/0 跳过**，脱敏失败诊断为空。沿用只读观察认证窗口，计数 36/36/38 时分别等待 19/26/27 秒自然到期（合计 72 秒），不删计数、不重试失败用例；脚本 `run-media-workspace-paced.mjs` / `run-local-media-workspace.ps1` 在测试目录。该结果用于服务端/核心兼容回归，不代替本次目录回收测试。
+
+- `target/test-results/media-workspace-group-integration-2026-10-03.txt`：真实专用 PostgreSQL/服务端/同机三个隔离 Rust 桌面进程的 11 阶段通过，包含旧群文字/协作、媒体/合成语音/活动和 T22 v2 离线缓存/投票/草稿/隐藏历史。这是兼容回归，不代替本次目录所有权和强杀测试。
+
+未知/损坏标记、链接、非固定文件名或超限条目会保留并报错；目录不保存路径、身份或密钥，不跟随 marker 路径或递归删除。旧匿名临时目录、另存为同目录临时输出及其他媒体机制保持原边界，实际磁盘满/权限拒绝、系统掉电、双 Windows 和独立审查继续待验收。
+
 ## 2026-10-03 持久暂停与传输调度短测
 
 基线 `bd87429` 加本轮工作树，过程中先独立提交清理竞争修复 `ef6f681`。全部采用合成身份、临时 SQLite/文件/Chromium 目录与隔离原生保护，真实库只用已有标记专用 PostgreSQL；不操作真实资料、不启动新长期、不推送。

@@ -4,6 +4,7 @@ import {linkSync} from "node:fs";
 import path from "node:path";
 import type {DesktopBridge} from "./bridge";
 import type {DirectMediaInfo,DirectMediaTask} from "./contracts";
+import type {MediaWorkspace} from "./media-workspace";
 type Host={capture:()=>number;check:(epoch:number)=>void;temp:()=>string;open:()=>Promise<string|null>;save:(name:string)=>Promise<string|null>;clipboard:()=>Promise<Buffer>};
 type Preview={scope:string;id:string;epoch:number;directory:string;file:string;digest:string;info:DirectMediaInfo;pending:boolean};
 const limit=20*1024*1024;
@@ -13,9 +14,9 @@ export const directMediaCommands=new Set(["select_direct_media","stage_direct_fi
 export class DirectMedia {
   private previews=new Map<string,Preview>();
   private cleanups=new Set<Promise<void>>();
-  constructor(private bridge:Pick<DesktopBridge,"call">,private host:Host){}
+  constructor(private bridge:Pick<DesktopBridge,"call">,private host:Host,private workspace?:MediaWorkspace){}
   private cleanup(directory:string):Promise<void>{
-    const work=fs.rm(directory,{recursive:true,force:true,maxRetries:3,retryDelay:100});this.cleanups.add(work);
+    const work=this.workspace&&path.dirname(directory)===this.workspace.root?this.workspace.remove(directory):fs.rm(directory,{recursive:true,force:true,maxRetries:3,retryDelay:100});this.cleanups.add(work);
     void work.finally(()=>this.cleanups.delete(work)).catch(()=>{});return work;
   }
   async settle():Promise<void>{await Promise.all([...this.cleanups]);}
@@ -45,7 +46,7 @@ export class DirectMedia {
       const pending=input.pending===true;const info=await this.info(scope,id,pending);await this.current(epoch,scope);
       if(input.preview&&!['image/png','image/jpeg','image/webp','audio/webm'].includes(info.mime))throw new Error("此文件请另存为查看");
       const destination=input.preview?null:await this.host.save(info.name);await this.current(epoch,scope);if(!input.preview&&!destination)return null;
-      const directory=await fs.mkdtemp(path.join(input.preview?this.host.temp():path.dirname(destination!),".liteseal-direct-media-"));const file=path.join(directory,"verified");let retained=false;
+      const directory=input.preview&&this.workspace?await this.workspace.allocate():await fs.mkdtemp(path.join(input.preview?this.host.temp():path.dirname(destination!),".liteseal-direct-media-"));const file=path.join(directory,"verified");let retained=false;
       try{
         const written=await this.bridge.call("write_direct_media",{scope,id,path:file,pending});await this.current(epoch,scope);
         const latest=await this.info(scope,id,pending);await this.current(epoch,scope);
@@ -53,7 +54,7 @@ export class DirectMedia {
         if(input.preview){if(this.previews.size>=16)throw new Error("请先关闭部分媒体预览");const token=randomUUID();this.previews.set(token,{scope,id,epoch,directory,file,digest:written.digest,info:written.info,pending});retained=true;return `liteseal-media://preview/${token}`;}
         // No await between the final scope check and the exclusive commit.
         this.host.check(epoch);linkSync(file,destination!);return "已保存认证附件";
-      }finally{if(!retained)await fs.rm(directory,{recursive:true,force:true});}
+      }finally{if(!retained)await this.cleanup(directory);}
     }
     const allowed=name==="stage_direct_file"?["scope","account","path"]:name==="stage_direct_voice"?["scope","account","bytes","durationMs"]:["scope","account"];
     const input=this.input(args,allowed);const {scope,account}=this.route(input);await this.current(epoch,scope);
@@ -64,9 +65,9 @@ export class DirectMedia {
     let bytes:Buffer;
     if(voice){if(!(input.bytes instanceof ArrayBuffer)||input.bytes.byteLength<1||input.bytes.byteLength>11*1024*1024||!Number.isInteger(input.durationMs)||Number(input.durationMs)<1||Number(input.durationMs)>60000)throw new Error("录音时长或大小无效");bytes=Buffer.from(input.bytes);}
     else{bytes=await this.host.clipboard();if(bytes.length>limit)throw new Error("剪贴板图片超过 20 MiB");}
-    await this.current(epoch,scope);const directory=await fs.mkdtemp(path.join(this.host.temp(),".liteseal-direct-input-"));const file=path.join(directory,voice?"voice.webm":"clipboard.png");
+    await this.current(epoch,scope);const directory=this.workspace?await this.workspace.allocate():await fs.mkdtemp(path.join(this.host.temp(),".liteseal-direct-input-"));const file=path.join(directory,voice?"voice.webm":"clipboard.png");
     try{await fs.writeFile(file,bytes,{flag:"wx",mode:0o600});await this.current(epoch,scope);return await this.stage(scope,account,file,epoch,voice?Number(input.durationMs):undefined);}
-    finally{bytes.fill(0);await fs.rm(directory,{recursive:true,force:true});}
+    finally{bytes.fill(0);await this.cleanup(directory);}
   }
   async response(request:Request):Promise<Response>{
     let token:string;try{token=this.token(request.url);}catch{return new Response(null,{status:404});}

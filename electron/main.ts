@@ -7,6 +7,7 @@ import { DesktopBridge } from "./bridge";
 import { commandNames } from "./contracts";
 import { deviceCommands, DeviceControlGate } from "./device-control";
 import {DirectMedia,directMediaCommands} from "./direct-media";
+import {MediaWorkspace} from "./media-workspace";
 
 protocol.registerSchemesAsPrivileged([{ scheme: "liteseal", privileges: { standard: true, secure: true, supportFetchAPI: true } },{scheme:"liteseal-media",privileges:{standard:true,secure:true,supportFetchAPI:true,stream:true}}]);
 const devUrl = "http://127.0.0.1:1420";
@@ -74,7 +75,7 @@ else {
     quitting = true;
     notifications.clear();
     tray?.destroy();
-    void bridge.stop().finally(() => { cleanedUp = true; app.quit(); });
+    void bridge.stop().then(()=>directMedia?.settle()).catch(error=>dialog.showErrorBox("媒体临时文件整理失败",String(error))).finally(() => { cleanedUp = true; app.quit(); });
   });
   bridge.on("failure", (error: Error) => {
     if (!quitting && mainWindow) {
@@ -83,6 +84,7 @@ else {
     }
   });
   void app.whenReady().then(async () => {
+    const mediaWorkspace=await MediaWorkspace.open(app.getPath("userData"));
     const root = app.getAppPath();
     const assetRoot = path.join(root, "ui", "dist");
     const executable = path.join(app.isPackaged ? process.resourcesPath : path.join(root, "target", "debug"),
@@ -159,7 +161,7 @@ else {
       open:async()=>{const r=await dialog.showOpenDialog(mainWindow!,{title:"选择加密文件或图片（20 MiB）",properties:["openFile"]});return r.canceled?null:r.filePaths[0]??null;},
       save:async name=>{const r=await dialog.showSaveDialog(mainWindow!,{title:"认证附件另存为（新文件）",defaultPath:name});return r.canceled?null:r.filePath??null;},
       clipboard:async()=>{const items=await clipboard.read();const image=items.flatMap(item=>item.types.filter(type=>type.startsWith("image/")).map(type=>({item,type})))[0];if(!image)throw new Error("剪贴板没有图片");const blob=await image.item.getType(image.type);if(!(blob instanceof Blob)||blob.size>20*1024*1024)throw new Error("剪贴板图片过大或无效");const source=Buffer.from(await blob.arrayBuffer());if(image.type==="image/png")return source;const picture=nativeImage.createFromBuffer(source);if(picture.isEmpty())throw new Error("剪贴板图片损坏");return picture.toPNG();},
-    });
+    },mediaWorkspace);
     protocol.handle("liteseal-media",request=>directMedia!.response(request));
     const csp = `default-src 'self'; script-src 'self'${app.isPackaged ? "" : " 'unsafe-inline'"}; style-src 'self' 'unsafe-inline'; img-src 'self' data: liteseal-media:; media-src 'self' data: blob: liteseal-media:; connect-src 'self'${app.isPackaged ? "" : " ws://127.0.0.1:1420"}; object-src 'none'; base-uri 'none'; frame-src 'none'`;
     protocol.handle("liteseal", async request => {
