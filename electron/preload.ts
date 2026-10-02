@@ -21,3 +21,4 @@ ipcRenderer.on("liteseal:device-paused", () => window.dispatchEvent(new Event("l
 ipcRenderer.on("liteseal:scheduled-changed", () => window.dispatchEvent(new Event("liteseal-scheduled-changed")));
 ipcRenderer.on("liteseal:groups-changed", () => window.dispatchEvent(new Event("liteseal-groups-changed")));
 ipcRenderer.on("liteseal:session-refresh-changed", () => window.dispatchEvent(new Event("liteseal-session-refresh-changed")));
+ipcRenderer.on("liteseal:normal-profile-changed", () => window.dispatchEvent(new Event("liteseal-normal-profile-changed")));

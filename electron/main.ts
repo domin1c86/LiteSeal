@@ -432,6 +432,10 @@ else {
           if (locked || generation !== lockGeneration) throw new Error("应用已锁定");
           if (deviceEpoch !== null) deviceControl.check(deviceEpoch);
           if (name === "save_root_session") { notifications.context(null, null); deviceControl.invalidate(); }
+          if(name==="select_normal_profile"||name==="clear_normal_profile"){
+            lockGeneration++;invalidateBackups();notifications.context(null,null);deviceControl.invalidate();
+            mainWindow?.webContents.send("liteseal:normal-profile-changed");
+          }
           if (name === "poll_messages") {
             // A failed notification must never consume or fail a persisted relay batch.
             await notifications.receive(result as import("../ui/src/types").PollMessagesResult).catch(() => {});

@@ -16,6 +16,17 @@ pub struct Request {
 #[derive(Deserialize)]
 #[serde(tag = "name", content = "args", deny_unknown_fields)]
 pub enum Command {
+    #[serde(rename = "get_normal_profile")]
+    GetNormalProfile {},
+    #[serde(rename = "select_normal_profile")]
+    SelectNormalProfile {
+        target: commands::normal_profile::Target,
+        generation: u64,
+        #[serde(rename = "scopeFingerprint")]
+        scope_fingerprint: String,
+    },
+    #[serde(rename = "clear_normal_profile")]
+    ClearNormalProfile { generation: u64 },
     #[serde(rename = "get_session_refresh")]
     GetSessionRefresh {
         target: commands::session_refresh::Target,
@@ -943,6 +954,105 @@ impl Response {
 }
 
 pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, String> {
+    let identity_write = matches!(
+        &command,
+        Command::SaveSession { .. }
+            | Command::ClearKeypair {}
+            | Command::SignOut {}
+            | Command::LogoutAllSessions {}
+            | Command::ChangePassword { .. }
+    );
+    let transition = matches!(
+        &command,
+        Command::SelectNormalProfile { .. } | Command::ClearNormalProfile { .. }
+    );
+    let lifecycle = matches!(
+        &command,
+        Command::SuspendDeviceControl {} | Command::ResumeDeviceControl {}
+    );
+    let management = matches!(
+        &command,
+        Command::UnlockApp { .. }
+            | Command::SuspendScheduledMessages {}
+            | Command::GetNormalProfile {}
+            | Command::SelectNormalProfile { .. }
+            | Command::ClearNormalProfile { .. }
+            | Command::GetSessionRefresh { .. }
+            | Command::PrepareSessionRefresh { .. }
+            | Command::SessionRefreshStep { .. }
+            | Command::CancelSessionRefresh { .. }
+            | Command::ForgetSessionRefresh { .. }
+            | Command::ProcessSessionRefreshes {}
+            | Command::GetRootMessaging {}
+            | Command::CheckRootMessaging {}
+            | Command::PrepareRootMessaging { .. }
+            | Command::RootMessagingStep { .. }
+            | Command::CancelRootMessaging { .. }
+            | Command::ForgetRootMessaging { .. }
+            | Command::GetRootSession {}
+            | Command::PrepareRootSession { .. }
+            | Command::RootSessionStep { .. }
+            | Command::InspectRootSession { .. }
+            | Command::CancelRootSession { .. }
+            | Command::ForgetRootSession { .. }
+            | Command::SaveRootSession { .. }
+            | Command::GetJoinActivation { .. }
+            | Command::PrepareJoinActivation { .. }
+            | Command::JoinActivationStep { .. }
+            | Command::InspectJoinActivation { .. }
+            | Command::CancelJoinActivation { .. }
+            | Command::ForgetJoinActivation { .. }
+            | Command::SaveJoinActivation { .. }
+            | Command::ClearJoinActivationSession { .. }
+            | Command::ListDeviceJoinProfiles {}
+            | Command::CreateDeviceJoinProfile { .. }
+            | Command::GetDeviceJoinProfile { .. }
+            | Command::ConfirmDeviceJoinRoot { .. }
+            | Command::DeviceJoinStep { .. }
+            | Command::CancelDeviceJoin { .. }
+            | Command::AbandonDeviceJoin { .. }
+            | Command::ForgetDeviceJoinProfile { .. }
+            | Command::GetDeviceControl {}
+            | Command::InspectDeviceRequest { .. }
+            | Command::PrepareDeviceChallenge { .. }
+            | Command::PrepareDeviceGrant { .. }
+            | Command::PrepareDeviceRevoke { .. }
+            | Command::DeviceTaskStep { .. }
+            | Command::CancelDeviceTask { .. }
+            | Command::DiscardDeviceTask { .. }
+            | Command::SuspendDeviceControl {}
+            | Command::ResumeDeviceControl {}
+            | Command::StartBackupRestore { .. }
+            | Command::GetBackupJob { .. }
+            | Command::CancelBackupJob { .. }
+            | Command::OpenBackupArchive { .. }
+            | Command::CloseBackupArchive { .. }
+            | Command::GetBackupArchiveInfo { .. }
+            | Command::GetBackupConversations { .. }
+            | Command::GetBackupHistory { .. }
+            | Command::ExportBackupAttachment { .. }
+    );
+    let _normal_guard = if transition || lifecycle {
+        None
+    } else {
+        Some(state.normal_profile_gate.read().await)
+    };
+    let normal_epoch = if !management {
+        if !commands::normal_profile::allows_legacy(state)? {
+            return match &command {
+                Command::ProcessScheduledMessages {} => Ok(serde_json::json!(0)),
+                Command::ProcessGroups {} => Ok(
+                    serde_json::json!({"changed":0,"errors":[],"notifications":[],"notification_identity":null}),
+                ),
+                _ => Err(
+                    "当前选中的独立档案不能使用原设备接口；原身份和历史保留，请返回档案管理".into(),
+                ),
+            };
+        }
+        Some(commands::normal_profile::lease(state)?)
+    } else {
+        None
+    };
     // A single async read gate covers the full legacy business operation. Root
     // preparation waits for these operations to finish before its atomic check.
     let legacy_write = matches!(
@@ -987,6 +1097,25 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
         None
     };
     let result = match command {
+        Command::GetNormalProfile {} => {
+            serde_json::to_value(commands::normal_profile::snapshot(state)?)
+        }
+        Command::SelectNormalProfile {
+            target,
+            generation,
+            scope_fingerprint,
+        } => serde_json::to_value(
+            commands::normal_profile::select(
+                state,
+                Some(target),
+                generation,
+                Some(scope_fingerprint),
+            )
+            .await?,
+        ),
+        Command::ClearNormalProfile { generation } => serde_json::to_value(
+            commands::normal_profile::select(state, None, generation, None).await?,
+        ),
         Command::GetSessionRefresh { target } => {
             serde_json::to_value(commands::session_refresh::snapshot(state, target)?)
         }
@@ -1976,5 +2105,8 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
             serde_json::to_value(commands::storage::clear_downloaded_attachments(state).await?)
         }
     };
+    if let Some(epoch) = normal_epoch.filter(|_| !identity_write) {
+        commands::normal_profile::check(state, epoch)?;
+    }
     result.map_err(|_| "Failed to serialize response".to_string())
 }

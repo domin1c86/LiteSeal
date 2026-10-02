@@ -151,6 +151,53 @@ impl Fixture {
 }
 
 #[tokio::test]
+async fn normal_selection_ipc_rejects_injection_conflicts_and_preserves_root_identity() {
+    use liteseal_desktop::commands::normal_profile as n;
+    let f = Fixture::new("http://127.0.0.1:1");
+    for (name, args) in [
+        ("get_normal_profile", serde_json::json!({})),
+        (
+            "select_normal_profile",
+            serde_json::json!({"target":{"kind":"root"},"generation":0,"scopeFingerprint":"expected"}),
+        ),
+        ("clear_normal_profile", serde_json::json!({"generation":0})),
+    ] {
+        for extra in ["token", "path", "secretKey", "database"] {
+            let mut injected = args.clone();
+            injected[extra] = "injected".into();
+            assert!(serde_json::from_value::<Command>(
+                serde_json::json!({"name":name,"args":injected})
+            )
+            .is_err());
+        }
+    }
+    let before = n::snapshot(&f.state).unwrap();
+    let fingerprint = before.selected.as_ref().unwrap().scope_fingerprint.clone();
+    device_control::suspend(&f.state).unwrap();
+    assert!(n::select(
+        &f.state,
+        Some(n::Target::Root {}),
+        0,
+        Some(fingerprint.clone())
+    )
+    .await
+    .is_err());
+    device_control::resume(&f.state).unwrap();
+    let selected = n::select(&f.state, Some(n::Target::Root {}), 0, Some(fingerprint))
+        .await
+        .unwrap();
+    assert!(selected.explicit && selected.generation == 1);
+    assert!(n::select(&f.state, None, 0, None).await.is_err());
+    let cleared = n::select(&f.state, None, 1, None).await.unwrap();
+    assert!(cleared.selected.is_none());
+    assert!(protocol::dispatch(Command::GetContacts {}, &f.state)
+        .await
+        .is_err());
+    assert!(!refresh::process(&f.state).await.unwrap());
+    f.unchanged();
+}
+
+#[tokio::test]
 async fn refresh_ipc_requires_explicit_target_and_rejects_secret_injection() {
     let f = Fixture::new("http://127.0.0.1:1");
     for name in [

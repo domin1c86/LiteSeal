@@ -4,6 +4,7 @@ import "./activation-harness";
 import "./root-messaging-harness";
 import "./root-session-harness";
 import "./session-refresh-harness";
+import "./normal-profile-harness";
 import DeviceControlPanel from "../src/components/DeviceControlPanel";
 import type { DeviceControlSnapshot, DeviceRequest, DeviceTask } from "../../electron/contracts";
 import "../src/theme.css";

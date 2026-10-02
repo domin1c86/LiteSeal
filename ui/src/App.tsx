@@ -11,6 +11,9 @@ import ContactList from "./components/ContactList";
 import ContactDetail from "./components/ContactDetail";
 import AddContact from "./components/AddContact";
 import StorageManager from "./components/StorageManager";
+import NormalProfileHome from "./components/NormalProfileHome";
+import NormalProfilePanel from "./components/NormalProfilePanel";
+import type {NormalProfileSnapshot} from "../../electron/contracts";
 import { useDesktop } from "./hooks/useDesktop";
 import type { SidebarTab } from "./components/ContactList";
 import type { RegisterResult, Contact, IncomingMessage, RelayEvent, PublicProfile } from "./types";
@@ -31,7 +34,17 @@ interface Session {
   ed25519Pk: number[];
 }
 
-export default function App() {
+export default function App(){
+  const [view,setView]=useState<NormalProfileSnapshot|null>(null),[error,setError]=useState(""),[showProfiles,setShowProfiles]=useState(false);
+  const refresh=useRef<()=>void>(()=>{});
+  useEffect(()=>{let live=true,generation=0;const read=()=>{const n=++generation;setView(null);setError("");void getDesktopApi().get_normal_profile({}).then(next=>{if(live&&generation===n)setView(next);},failure=>{if(live&&generation===n)setError(String(failure));});};refresh.current=read;read();window.addEventListener("liteseal-normal-profile-changed",read);return()=>{live=false;generation++;window.removeEventListener("liteseal-normal-profile-changed",read);};},[]);
+  if(error)return <main style={{padding:"24px",maxWidth:"840px",margin:"0 auto",overflowWrap:"anywhere"}}><section><p role="alert">无法恢复选中档案：{error}</p><button onClick={()=>refresh.current()}>重新查询档案</button><button onClick={()=>setShowProfiles(true)}>选择正常档案</button>{showProfiles&&<NormalProfilePanel onClose={()=>setShowProfiles(false)}/>}</section></main>;
+  if(!view)return <div role="status">正在核对本机选中档案…</div>;
+  if(view.error||view.selected?.target.kind==="join"||view.explicit&&!view.selected)return <NormalProfileHome key={`${view.generation}:${view.selected?.scope_fingerprint??"none"}`} view={view}/>;
+  return <LegacyApp key={`${view.generation}:${view.selected?.scope_fingerprint??"unbound"}`}/>;
+}
+
+function LegacyApp() {
   const [session, setSession] = useState<Session | null>(null);
   const preferences = useConversationPreferences(session);
   const organizer = useOrganizer(session?.user_id);

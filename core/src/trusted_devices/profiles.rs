@@ -14,6 +14,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 
 const MAX_PROFILES: usize = 8;
 pub mod active;
+pub mod selection;
 const MAX_KEYFILE: u64 = 32768;
 #[derive(Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 #[serde(deny_unknown_fields)]

@@ -11,6 +11,7 @@ pub mod groups;
 pub mod groups_media;
 pub mod keystore;
 pub mod message_operations;
+pub mod normal_profile;
 pub mod reactions;
 pub mod read_receipts;
 pub mod root_messaging;

@@ -62,6 +62,7 @@ fn retire(runtime: &mut Runtime, cache: Cached) -> Result<(), String> {
     Ok(())
 }
 pub(crate) fn invalidate(state: &AppState, suspend: bool) -> Result<(), String> {
+    super::normal_profile::invalidate(state, suspend)?;
     super::session_refresh::invalidate(state, suspend)?;
     let mut runtime = state.device_activation_runtime.lock().map_err(|_| bad())?;
     runtime.epoch = runtime.epoch.checked_add(1).ok_or_else(bad)?;
@@ -74,6 +75,7 @@ pub(crate) fn invalidate(state: &AppState, suspend: bool) -> Result<(), String> 
     Ok(())
 }
 pub(crate) fn resume(state: &AppState) -> Result<(), String> {
+    super::normal_profile::resume(state)?;
     super::session_refresh::resume(state)?;
     let mut runtime = state.device_activation_runtime.lock().map_err(|_| bad())?;
     runtime.epoch = runtime.epoch.checked_add(1).ok_or_else(bad)?;

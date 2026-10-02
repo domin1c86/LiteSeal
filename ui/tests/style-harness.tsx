@@ -19,6 +19,7 @@ const organizer={version:1,aliases:{},lists:[{id:'work',name:'项目伙伴',peer
 3. 确认投票结果后安排会议`};
 let locked=false, signedIn=true, generation=0, attachment=false, imageMode=false;
 const api:any={
+ get_normal_profile:async()=>({generation:0,explicit:false,selected:signedIn?{target:{kind:'root'},scope_fingerprint:'a'.repeat(64),origin:'http://localhost:3000',account:me,device:'device-owner',device_name:'原设备',protocol:'legacy',has_session:true,eligible:true,access_expired:false}:null,error:null,profiles:[]}),
  load_identity:async()=>{if(!signedIn)throw new Error('No saved keypair');return {user_id:me,device_id:'device-owner',token:'synthetic-session',refresh_token:'synthetic-refresh',server_url:'http://localhost:3000',public_key:Array(32).fill(1),ed25519_pk:Array(32).fill(9),saved:true}},
  get_contacts:async()=>contacts,get_public_profile:async({userId}:any)=>({user_id:userId,username:contacts.find(c=>c.user_id===userId)?.username??'demo-owner',display_name:contacts.find(c=>c.user_id===userId)?.username??'陈知远',avatar_png:null}),
  get_personal_organizer:async()=>JSON.stringify(organizer),get_conversation_preferences:async()=>contacts.map((c,i)=>({peer_id:c.user_id,pinned:i===0,archived:false,muted:false,draft:[]})),

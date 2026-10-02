@@ -1,4 +1,5 @@
 //! Business-only refresh commands with one stable cache per identity target.
+pub use super::normal_profile::Target;
 use crate::AppState;
 use liteseal_core::trusted_devices::{
     activation::{jobs::Owner, refresh::jobs as r},
@@ -8,19 +9,10 @@ use liteseal_shared::{
     crypto::KeyPair,
     trusted_device::{canonical_origin, Anchor, DeviceIdentity},
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{collections::HashMap, sync::Arc};
 use zeroize::Zeroizing;
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum Target {
-    Root {},
-    Join {
-        #[serde(rename = "profileId")]
-        profile_id: String,
-    },
-}
 #[derive(Default)]
 pub(crate) struct Runtime {
     cache: HashMap<String, Cached>,
@@ -55,10 +47,10 @@ fn scope(
     state: &AppState,
     target: &Target,
 ) -> Result<(String, std::path::PathBuf, Owner, KeyPair), String> {
-    let saved = state.saved_identity()?;
-    let base = Zeroizing::new(serde_json::to_vec(&saved).map_err(|_| bad())?);
     match target {
         Target::Root {} => {
+            let saved = state.saved_identity()?;
+            let base = Zeroizing::new(serde_json::to_vec(&saved).map_err(|_| bad())?);
             let keys = liteseal_core::backup::identity_keys(&saved)?;
             let anchor = Anchor {
                 origin: canonical_origin(&saved.server_url).map_err(|_| bad())?,
@@ -91,7 +83,6 @@ fn scope(
             .ok_or("请先保存这个加入档案的正式会话")?;
             let binding = Zeroizing::new(
                 serde_json::to_vec(&(
-                    base.as_slice(),
                     profile.view(),
                     profile.task_id(),
                     &owner,
@@ -220,8 +211,8 @@ pub fn forget(state: &AppState, target: Target, id: String) -> Result<(), String
     ctx.actor.forget_ended(&id, &ctx.keys)?;
     current(state, &ctx)
 }
-// Only the original normal identity is selected today. Unselected joining
-// profiles never gain background network traffic through this scheduler.
+// Only the selected normal identity is driven by the scheduler. Other saved
+// profiles require explicit manual commands and gain no background traffic.
 fn next_task(tasks: &[r::View]) -> Option<&r::View> {
     // An explicitly requested family exit takes precedence even after a
     // successful refresh advanced the current generation. Otherwise a tick
@@ -240,14 +231,21 @@ fn next_task(tasks: &[r::View]) -> Option<&r::View> {
         })
 }
 pub async fn process(state: &AppState) -> Result<bool, String> {
-    let saved = match state.saved_identity() {
-        Ok(s) => s,
-        Err(_) => return Ok(false),
+    let Some(selected) = super::normal_profile::capture(state)? else {
+        return Ok(false);
     };
-    if super::root_refresh::store(state, &saved)?.is_none() {
+    if selected.identity.token.is_empty() {
         return Ok(false);
     }
-    let ctx = context(state, Target::Root {})?;
+    if scope(state, &selected.target)?.1 != selected.database {
+        return Err(bad());
+    }
+    if matches!(selected.target, Target::Root {})
+        && super::root_refresh::store(state, &state.saved_identity()?)?.is_none()
+    {
+        return Ok(false);
+    }
+    let ctx = context(state, selected.target.clone())?;
     let Some(view) = ctx.actor.current_view(&ctx.keys)? else {
         return Ok(false);
     };
@@ -269,6 +267,7 @@ pub async fn process(state: &AppState) -> Result<bool, String> {
         ctx.actor.prepare(&ctx.keys)?.id
     };
     let result = ctx.actor.step(&id, &ctx.keys).await?;
+    super::normal_profile::current(state, &selected)?;
     current(state, &ctx)?;
     Ok(matches!(
         result.condition,

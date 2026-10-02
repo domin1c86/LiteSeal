@@ -13,6 +13,9 @@ export interface GroupPoll { id: string; creator: string; question: string; opti
 export interface GroupCollaboration { polls: GroupPoll[]; pin: string | null; pin_unavailable: boolean; pin_revision: number; pending: boolean; conflict: boolean; pending_message: string | null }
 export type CollaborationCommand = { kind: "mention"; text: string; mentions: CollaborationMember[] } | { kind: "poll"; question: string; options: string[] } | { kind: "vote"; poll: string; option: string; revision: number } | { kind: "close"; poll: string; revision: number } | { kind: "pin"; message: string | null; revision: number };
 export interface CommandMap {
+  get_normal_profile:{args:{};result:NormalProfileSnapshot};
+  select_normal_profile:{args:{target:RefreshTarget;generation:number;scopeFingerprint:string};result:NormalProfileSnapshot};
+  clear_normal_profile:{args:{generation:number};result:NormalProfileSnapshot};
   get_session_refresh:{args:{target:RefreshTarget};result:RefreshSnapshot};
   prepare_session_refresh:{args:{target:RefreshTarget};result:RefreshTask};
   session_refresh_step:{args:{target:RefreshTarget;id:string};result:RefreshProgress};
@@ -230,6 +233,8 @@ export interface GroupSnapshot { groups: GroupView[]; invitations: { id: string;
 export interface ScheduledTask { id: string; peer_id: string; due_at: number; text: string; state: string; error: string; sealed: boolean }
 export interface AttachmentTask { id: string; peer_id: string; message_id: string; name: string; size: number; mime: string; duration_ms?: number; offset: number; total: number; direction: string }
 export type RefreshTarget={kind:"root"}|{kind:"join";profileId:string};
+export interface NormalProfileChoice{target:RefreshTarget;scope_fingerprint:string;origin:string;account:string;device:string;device_name:string;protocol:string;has_session:boolean;eligible:boolean;access_expired:boolean}
+export interface NormalProfileSnapshot{generation:number;explicit:boolean;selected:NormalProfileChoice|null;error:string|null;profiles:{target:RefreshTarget;profile:NormalProfileChoice|null;error:string|null}[]}
 export interface RefreshCurrent{generation:number;account:string;device:string;session:string;has_credentials:boolean;access_expired:boolean;eligible:boolean;access_expires_at:number;refresh_expires_at:number}
 export interface RefreshTask{id:string;revision:number;stage:"prepared"|"started"|"proving"|"conflict"|"complete"|"cancelled"|"ended";current:boolean;cancel_requested:boolean}
 export interface RefreshProgress{task:RefreshTask;condition:"complete"|"cancelled"|"ended"|"superseded"|"ineligible"|"retry"|"conflict"|"pending";http_status:number|null}
@@ -243,6 +248,7 @@ export interface GroupActivity { id:string;creator:string;title:string;start_at:
 export interface GroupExtensions { attachments:{id:string;blob:string;name:string;size:number;mime:string;duration_ms:number|null}[];activities:GroupActivity[];pending:boolean;conflict:boolean;pending_root:string|null }
 export type GroupExtensionCommand={kind:"activity";title:string;start_at:number;timezone:string;location:string;description:string}|{kind:"respond";activity:string;answer:GroupAnswer;revision:number}|{kind:"close"|"cancel";activity:string;revision:number};
 export const commandNames = [
+  "get_normal_profile","select_normal_profile","clear_normal_profile",
   "get_session_refresh","prepare_session_refresh","session_refresh_step","cancel_session_refresh","forget_session_refresh",
   "get_root_messaging", "check_root_messaging", "prepare_root_messaging", "root_messaging_step", "cancel_root_messaging", "forget_root_messaging",
   "get_root_session", "prepare_root_session", "root_session_step", "inspect_root_session", "cancel_root_session", "forget_root_session", "save_root_session",

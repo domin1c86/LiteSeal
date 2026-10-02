@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import BackupPanel from "./BackupPanel";
 import DeviceJoinPanel from "./DeviceJoinPanel";
 import RootSessionPanel from "./RootSessionPanel";
+import NormalProfilePanel from "./NormalProfilePanel";
 import { useDesktop, validateInvite } from "../hooks/useDesktop";
 import type { Identity, RegisterResult } from "../types";
 
@@ -14,6 +15,7 @@ export default function Login({ onLogin }: LoginProps) {
   const [showBackup, setShowBackup] = useState(false);
   const [showDeviceJoin, setShowDeviceJoin] = useState(false);
   const [showRootSession, setShowRootSession] = useState(false);
+  const [showProfiles,setShowProfiles]=useState(false);
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [inviteCode, setInviteCode] = useState("");
@@ -191,6 +193,8 @@ export default function Login({ onLogin }: LoginProps) {
         <button type="button" disabled={loading} onClick={()=>{setPassword("");setConfirmPassword("");setShowDeviceJoin(true);}}>加入另一台 Windows</button>
         <button type="button" disabled={loading} onClick={()=>{setPassword("");setConfirmPassword("");setShowRootSession(true);}}>恢复原设备正式会话</button>
         {showRootSession&&<RootSessionPanel initialUsername={username} onClose={()=>setShowRootSession(false)}/>}
+        <button type="button" disabled={loading} onClick={()=>setShowProfiles(true)}>选择正常档案</button>
+        {showProfiles&&<NormalProfilePanel onClose={()=>setShowProfiles(false)}/>}
         {showDeviceJoin&&<DeviceJoinPanel initialOrigin={serverUrl} initialUsername={username} onClose={()=>setShowDeviceJoin(false)}/>}
         {showBackup && <BackupPanel canExport={false} onClose={() => setShowBackup(false)} />}
       </div>

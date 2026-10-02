@@ -23,7 +23,7 @@ export default function SessionRefreshPanel({target,onClose}:{target:RefreshTarg
     return()=>{live.current=false;epoch.current++;window.removeEventListener("liteseal-app-locked",stop);window.removeEventListener("liteseal-device-paused",stop);window.removeEventListener("liteseal-session-refresh-changed",changed);};
   },[scope]);
   return <PanelDialog label="正式会话续期" onClose={onClose} wide><section aria-label="正式会话续期">
-    <p>{target.kind==="root"?"当前原设备会在到期前自动续期。锁定、休眠或退出后停止调度。":"此加入档案可手动续期；选择为正常聊天档案前不启动后台调度。"}口令、私钥和正式能力保留在 Rust。</p>
+    <p>当前选中的档案会在到期前自动续期，其他档案只由明确操作驱动。锁定、休眠、停止使用或本机退出后停止调度。口令、私钥和正式能力保留在 Rust。</p>
     <p>取消未发送申请只撤销该任务；取消已发送申请会退出该登录家族及续期后继，原身份和历史保留，独立登录不受影响。</p>
     <button disabled={busy||paused.current} onClick={()=>void run()}>查询本机续期状态</button>
     {view&&<><p>{view.current?`${view.current.has_credentials?"本机有正式会话":"本机已退出"} · ${view.current.eligible?"原设备资格仍有效":"原设备资格已失效"}`:"尚未保存正式会话，请先完成原正式登录"}</p>

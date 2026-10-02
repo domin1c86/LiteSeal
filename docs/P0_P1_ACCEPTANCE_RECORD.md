@@ -1,5 +1,18 @@
 # P0/P1 验收记录（待执行）
 
+## 2026-10-02 正常档案选择、恢复与选中续期短测
+
+基线 `fb665a9` 和本轮改动工作树；只用合成身份、随机临时数据库/密钥文件及隔离原生目标。报告在 `target/test-results/`，没有启动新长期、停止旧后台或读取真实用户资料。
+
+- `profile-selection-engineering-2026-10-02.txt`：完整 `npm test` 18 Node/Electron、314 普通 Rust 通过，0 失败，71 PostgreSQL 用例 ignored；格式、全 workspace/all-targets Clippy（-D warnings）、核心 FFI 通过。`profile-selection-build-2026-10-02.txt` 完整生产构建通过，release 43.99 秒，既有链接警告保留。后续最终 Node 和定向源码回归分别保存在下方报告，忽略的库测试不计通过。
+- `profile-selection-core-2026-10-02.txt`、`profile-selection-final-focused-2026-10-02.txt`：两个保护选择测试及 4 加入/10 原设备测试通过。明确原设备→加入→空选择重开、代次 CAS 竞争拒绝、无效目标拒绝、回滚 SQLite 拒绝通过；首次夹具未创建数据库导致原生目标定位失败，修正夹具后通过。公开视图无合成会话能力，错误指纹/过时代次/暂停选择拒绝，身份文件原字节保留。
+- 加入端实际 Rust/合成 HTTP：保存原正式会话后选择同一服务端设备编号，在同目录但无原设备密钥文件的 AppState 中重开选择与续期视图；选中续期使用自己的任务库，旧身份/联系人/清理接口拒绝，旧定时/群调度返回零。清除加入会话后无自动请求，停止使用重开不回退，明确选回原设备恢复原接口。合成 HTTP 与本机保护测试不等于真实 PostgreSQL、多端或 Windows 系统验收。
+- `profile-selection-node-final-2026-10-02.txt`：18 Node 通过，3.08 秒。选择命令在锁屏和离线窗口拒绝，固定选择事件透传；选择确认接受自己的结果、失效旧授权结果，清除通知/备份窗口与 IPC 代次；既有暂停/迟到续期保护继续通过。
+- `profile-selection-ui-completed-2026-10-02.txt`、`devices-ui-anS6Ge/`：真实 Chromium、模拟业务接口，四种宽窄/浅深色组合，28 组共 208 项检查，84 秒，无 renderer 错误/横向溢出。各新增 7 项覆盖明确选择目标/代次/完整指纹、拒绝确认、停止无回退、不可用档案、暂停/迟到、加入重启不调用旧根接口、范围变化清旧首页及绑定错误不回退。最终首页按钮留白也复跑；此前 `devices-ui-R8FCIK/` 暴露 StrictMode 首次查询跳过，修正后通过。浅色窄选择与深色宽首页截图已核对。
+- `profile-selection-group-ui-2026-10-02.txt`、`group-ui-C94EJV/` 群宽窄/16 类检查通过；`profile-selection-style-verified-2026-10-02.txt`、`ui-style-xrNZXf/` 72 张风格截图及四种配置检查通过。首次风格夹具缺新启动选择接口导致聊天未挂载，补合成 API 后复跑，失败证据保留。最终工程以通过结果为准，不把模拟麦克风/系统暂停当作实机验收。
+- `profile-selection-database-2026-10-02.txt`、`profile-selection-integration-2026-10-02.txt`：既有隔离入口环境检查均 `not_executed`；当前无专用测试库进程配置，DockerDesktopLinuxEngine 管道仍缺失，没有访问业务库/卷或重置引擎。真实数据库、多人、双 Windows、系统锁屏/休眠及独立审查继续待验收。
+- 正常选择和选中续期已接；v3 收发/历史/媒体/备份/选定历史未因此完成，独立加入首页明确尚未开放聊天，T23 整体不关闭。没有推送，原预览文件及 `src-tauri/` 保留未跟踪。
+
 ## 2026-10-02 正式会话续期桌面与调度短测
 
 基线 `f5268a4` 与本轮改动工作树；仅合成身份、随机临时数据库/密钥文件和隔离原生保护目标，报告在 `target/test-results/`。只做短测，没有启动新长期或操作真实用户资料。

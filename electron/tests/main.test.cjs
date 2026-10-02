@@ -95,6 +95,7 @@ for (const startupLocked of [false, true]) test(`main restricts IPC, locks and a
   assert.equal(handlers.has('liteseal:resume_device_control'), false);
   assert.equal(handlers.has('liteseal:suspend_device_control'), false);
   assert.equal(handlers.has('liteseal:process_session_refreshes'), false);
+  for(const name of ['get_normal_profile','select_normal_profile','clear_normal_profile'])assert.ok(handlers.has(`liteseal:${name}`));
   if (startupLocked) {
     assert.equal((await handlers.get('liteseal:app_lock_state')(valid, {})).result, true);
     assert.equal((await handlers.get('liteseal:get_device_control')(valid, {})).ok, false);
@@ -113,6 +114,7 @@ for (const startupLocked of [false, true]) test(`main restricts IPC, locks and a
   assert.ok(heldDevice);
   electron.powerMonitor.emit('lock-screen');
   const beforeLockedRefresh = commands.filter(n=>n==='process_session_refreshes').length;
+  for(const name of ['get_normal_profile','select_normal_profile','clear_normal_profile'])assert.equal((await handlers.get(`liteseal:${name}`)(valid,{})).ok,false,name);
   intervals[2](); await new Promise(resolve=>setTimeout(resolve,0));
   assert.equal(commands.filter(n=>n==='process_session_refreshes').length,beforeLockedRefresh);
   for(const name of ['get_session_refresh','prepare_session_refresh','session_refresh_step','cancel_session_refresh','forget_session_refresh']) {
@@ -162,6 +164,12 @@ for (const startupLocked of [false, true]) test(`main restricts IPC, locks and a
   assert.equal((await handlers.get('liteseal:save_root_session')(valid,{id:'original-root-login'})).ok,true,'authorized root save must not reject its own result');
   child.stdout.write(JSON.stringify({id:heldDevice.id,result:{late:true}})+'\n');
   assert.equal((await beforeRootSave).ok,false,'root credential save invalidates previous authorization result');
+  const beforeProfileChange=devices(valid,{});
+  await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal((await handlers.get('liteseal:select_normal_profile')(valid,{target:{kind:'root'},generation:0,scopeFingerprint:'a'.repeat(64)})).ok,true,'selection accepts its own confirmed result');
+  child.stdout.write(JSON.stringify({id:heldDevice.id,result:{late:true}})+'\n');
+  assert.equal((await beforeProfileChange).ok,false,'selection invalidates old authorization scope');
+  assert.ok(rendererEvents.some(event=>event[0]==='liteseal:normal-profile-changed'));
   holdDevice=false;
   intervals[0](); await new Promise(resolve => setTimeout(resolve, 0));
   assert.ok(rendererEvents.some(args => args[0] === 'liteseal:scheduled-changed' && args.length === 1));
@@ -196,6 +204,7 @@ for (const startupLocked of [false, true]) test(`main restricts IPC, locks and a
   const reader = windows[1];
   assert.ok(reader);
   const readerEvent = { sender: reader.webContents, senderFrame: reader.webContents.mainFrame };
+  for(const name of ['get_normal_profile','select_normal_profile','clear_normal_profile'])assert.equal((await handlers.get(`liteseal:${name}`)(readerEvent,{})).ok,false,name);
   for(const name of ['get_session_refresh','prepare_session_refresh','session_refresh_step','cancel_session_refresh','forget_session_refresh']) {
     assert.equal((await handlers.get(`liteseal:${name}`)(readerEvent,{})).ok,false,name);
   }

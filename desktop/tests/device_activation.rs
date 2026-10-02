@@ -11,7 +11,10 @@ use liteseal_core::{
     },
 };
 use liteseal_desktop::{
-    commands::{device_activation as a, device_control, device_join},
+    commands::{
+        device_activation as a, device_control, device_join, normal_profile as normal,
+        session_refresh as refresh,
+    },
     protocol::{self, Command},
     AppState,
 };
@@ -507,7 +510,118 @@ async fn accepted_original_session_saves_only_independent_profile_and_clear_fenc
             assert!(
                 !public.contains(&session.access_token) && !public.contains(&session.refresh_token)
             );
+            let before = normal::snapshot(&f.state).unwrap();
+            let target = normal::Target::Join {
+                profile_id: f.id.clone(),
+            };
+            let choice = before
+                .profiles
+                .iter()
+                .find(|p| p.target == target)
+                .unwrap()
+                .profile
+                .as_ref()
+                .unwrap();
+            let fingerprint = choice.scope_fingerprint.clone();
+            assert!(normal::select(
+                &f.state,
+                Some(target.clone()),
+                before.generation,
+                Some("wrong".into())
+            )
+            .await
+            .is_err());
+            let chosen = normal::select(
+                &f.state,
+                Some(target.clone()),
+                before.generation,
+                Some(fingerprint),
+            )
+            .await
+            .unwrap();
+            assert_eq!(chosen.selected.as_ref().unwrap().device, session.device);
+            assert_eq!(chosen.generation, 1);
+            let selected_public = serde_json::to_string(&chosen).unwrap();
+            assert!(
+                !selected_public.contains(&session.access_token)
+                    && !selected_public.contains(&session.refresh_token)
+            );
+            // Joining selection also reopens on a machine without a bound root identity.
+            let reopened = AppState::with_device_protection(
+                f.state.db_path.to_str().unwrap(),
+                Some(f.work.0.join("absent-root.bin")),
+                f.protection.clone(),
+            )
+            .unwrap();
+            assert_eq!(
+                normal::snapshot(&reopened)
+                    .unwrap()
+                    .selected
+                    .unwrap()
+                    .device,
+                session.device
+            );
+            assert!(
+                refresh::snapshot(&reopened, target.clone())
+                    .unwrap()
+                    .current
+                    .unwrap()
+                    .has_credentials
+            );
+            for value in [
+                serde_json::json!({"name":"load_identity","args":{}}),
+                serde_json::json!({"name":"get_contacts","args":{}}),
+                serde_json::json!({"name":"clear_expired_messages","args":{}}),
+            ] {
+                assert!(
+                    protocol::dispatch(serde_json::from_value(value).unwrap(), &f.state)
+                        .await
+                        .is_err()
+                );
+            }
+            assert_eq!(
+                protocol::dispatch(Command::ProcessScheduledMessages {}, &f.state)
+                    .await
+                    .unwrap(),
+                serde_json::json!(0)
+            );
+            assert_eq!(
+                protocol::dispatch(Command::ProcessGroups {}, &f.state)
+                    .await
+                    .unwrap()["changed"],
+                0
+            );
+            assert!(normal::select(&f.state, None, 0, None).await.is_err());
+            assert!(!refresh::process(&f.state).await.unwrap());
+            let pending = refresh::snapshot(&f.state, target.clone()).unwrap().tasks;
+            assert_eq!(pending.len(), 1);
+            assert!(pending[0].current);
             a::clear_session(&f.state, f.id.clone()).unwrap();
+            assert!(!refresh::process(&f.state).await.unwrap());
+            let stopped = normal::select(&f.state, None, chosen.generation, None)
+                .await
+                .unwrap();
+            assert!(stopped.selected.is_none());
+            assert!(normal::snapshot(&reopened).unwrap().selected.is_none());
+            let root = stopped
+                .profiles
+                .iter()
+                .find(|p| p.target == normal::Target::Root {})
+                .unwrap()
+                .profile
+                .as_ref()
+                .unwrap();
+            normal::select(
+                &f.state,
+                Some(normal::Target::Root {}),
+                stopped.generation,
+                Some(root.scope_fingerprint.clone()),
+            )
+            .await
+            .unwrap();
+            assert!(protocol::dispatch(Command::GetContacts {}, &f.state)
+                .await
+                .is_ok());
             assert!(
                 !a::snapshot(&f.state, f.id.clone())
                     .unwrap()
