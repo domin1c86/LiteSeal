@@ -1,9 +1,352 @@
 use super::direct_message_tests::enable_mode;
 use super::*;
+use liteseal_core::{
+    backup::WorkDirectory,
+    trusted_devices::{
+        activation::jobs::{
+            Condition as ActivationCondition, Coordinator as ActivationCoordinator,
+            Owner as ActivationOwner, Stage as ActivationStage, Store as ActivationStore,
+        },
+        witness::platform::Protection,
+        Checkpoint, DeviceTrustStore,
+    },
+};
 use liteseal_shared::device_activation::{
     ActivationCancel, ActivationCancelResult, Challenge as SessionChallenge, Enable, EnableCancel,
     EnableCancelResult, Envelope, Proof, Start,
 };
+fn activation_actor(
+    path: &std::path::Path,
+    directory: &DeviceState,
+    device: &str,
+    keys: &crypto::KeyPair,
+    protection: &Protection,
+) -> ActivationCoordinator {
+    ActivationCoordinator::open_with_protection(
+        path,
+        ActivationOwner::new(directory.anchor().clone(), device, keys).unwrap(),
+        keys,
+        protection.clone(),
+    )
+    .unwrap()
+}
+fn seed_activation(
+    path: &std::path::Path,
+    directory: &DeviceState,
+    events: &[DeviceEvent],
+    protection: &Protection,
+) {
+    let mut trust = DeviceTrustStore::open(path).unwrap();
+    trust.protect(protection.witness(path).unwrap()).unwrap();
+    let initial = trust.pin(directory.anchor()).unwrap();
+    if !events.is_empty() {
+        trust
+            .import_verified(
+                directory.anchor(),
+                &Checkpoint::from_state(&initial),
+                events,
+            )
+            .unwrap();
+    }
+}
+async fn activation_events(f: &Fixture, root: &Account) -> Vec<DeviceEvent> {
+    f.manifest(root, &root.id, 0, 100)
+        .await
+        .json::<DeviceManifestPage>()
+        .await
+        .unwrap()
+        .events
+}
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn durable_enable_and_activation_jobs_recover_all_lost_successes_without_new_identity() {
+    let (f, lose) = Fixture::start_with_loss().await;
+    let root = f.account().await;
+    let (join, directory) = authorized(&f, &root).await;
+    let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
+    let path = work.0.join("root-activation.db");
+    let protection = Protection::isolated_test();
+    let events = activation_events(&f, &root).await;
+    seed_activation(&path, &directory, &events, &protection);
+    let actor = activation_actor(&path, &directory, &root.device, &root.keys, &protection);
+    actor.renew_session(root.token.clone()).unwrap();
+    let enable = actor.prepare_enable(&root.keys).unwrap();
+    *lose.lock().unwrap() = Some("/devices/messaging/enable".into());
+    let progress = actor.step(&enable.id, None, &root.keys).await.unwrap();
+    assert_eq!(progress.condition, ActivationCondition::Retry);
+    assert_eq!(progress.http_status, Some(503));
+    drop(actor);
+    let mut stored = ActivationStore::open(
+        &path,
+        ActivationOwner::new(directory.anchor().clone(), &root.device, &root.keys).unwrap(),
+        &root.keys,
+        protection.witness(&path).unwrap(),
+    )
+    .unwrap();
+    let original_mode = stored
+        .task(&enable.id, &root.keys)
+        .unwrap()
+        .enable()
+        .clone();
+    drop(stored);
+    let actor = activation_actor(&path, &directory, &root.device, &root.keys, &protection);
+    // Root login and the unresolved enable have separate pending lanes. No old
+    // access/refresh bearer is needed to prove this new root session.
+    let login = actor
+        .prepare_login(&root.username, original_mode, &root.keys)
+        .unwrap();
+    assert_eq!(
+        actor
+            .step(&login.id, Some(&root.password), &root.keys)
+            .await
+            .unwrap()
+            .condition,
+        ActivationCondition::Complete
+    );
+    let session = actor.session(&login.id, &root.keys).unwrap();
+    actor.renew_session(session.access_token.clone()).unwrap();
+    assert_eq!(
+        actor
+            .step(&enable.id, None, &root.keys)
+            .await
+            .unwrap()
+            .condition,
+        ActivationCondition::Complete
+    );
+    let mode = liteseal_core::trusted_devices::activation::ActivationApi::new(&f.url)
+        .unwrap()
+        .status(&root.token, directory.anchor())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(mode.id, enable.id);
+    drop(actor);
+    let path = work.0.join("secondary-activation.db");
+    seed_activation(&path, &directory, &events, &protection);
+    let device = &join.status.ticket.device.device_id;
+    let actor = activation_actor(&path, &directory, device, &join.keys, &protection);
+    let task = actor
+        .prepare_login(&root.username, mode.clone(), &join.keys)
+        .unwrap();
+    assert_eq!(
+        actor
+            .step(&task.id, None, &join.keys)
+            .await
+            .unwrap()
+            .condition,
+        ActivationCondition::NeedsPassword
+    );
+    *lose.lock().unwrap() = Some("/auth/v3/begin".into());
+    assert_eq!(
+        actor
+            .step(&task.id, Some(&root.password), &join.keys)
+            .await
+            .unwrap()
+            .http_status,
+        Some(503)
+    );
+    drop(actor);
+    let actor = activation_actor(&path, &directory, device, &join.keys, &protection);
+    *lose.lock().unwrap() = Some(format!("/auth/v3/{}/proof", task.id));
+    assert_eq!(
+        actor
+            .step(&task.id, None, &join.keys)
+            .await
+            .unwrap()
+            .http_status,
+        Some(503)
+    );
+    drop(actor);
+    let mut stored = ActivationStore::open(
+        &path,
+        ActivationOwner::new(directory.anchor().clone(), device, &join.keys).unwrap(),
+        &join.keys,
+        protection.witness(&path).unwrap(),
+    )
+    .unwrap();
+    let original = stored.task(&task.id, &join.keys).unwrap();
+    let proof = serde_json::to_vec(&original.proof().unwrap().unwrap()).unwrap();
+    let challenge = original.challenge().unwrap().clone();
+    drop(stored);
+    let actor = activation_actor(&path, &directory, device, &join.keys, &protection);
+    assert_eq!(
+        actor
+            .step(&task.id, None, &join.keys)
+            .await
+            .unwrap()
+            .condition,
+        ActivationCondition::Complete
+    );
+    let session = actor.session(&task.id, &join.keys).unwrap();
+    assert!(f
+        .db
+        .validate_access_token(&auth::service::hash_token(&session.access_token), device)
+        .await
+        .unwrap()
+        .is_some());
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions WHERE device_id=$1")
+        .bind(device)
+        .fetch_one(f.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+    drop(actor);
+    let mut stored = ActivationStore::open(
+        &path,
+        ActivationOwner::new(directory.anchor().clone(), device, &join.keys).unwrap(),
+        &join.keys,
+        protection.witness(&path).unwrap(),
+    )
+    .unwrap();
+    let original = stored.task(&task.id, &join.keys).unwrap();
+    assert_eq!(original.challenge().unwrap(), &challenge);
+    assert_eq!(
+        serde_json::to_vec(&original.proof().unwrap().unwrap()).unwrap(),
+        proof
+    );
+    assert_eq!(original.view().stage, ActivationStage::Complete);
+}
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn durable_activation_cancellation_reopens_after_lost_begin_and_cancel_response() {
+    let (f, lose) = Fixture::start_with_loss().await;
+    let root = f.account().await;
+    let (join, directory) = authorized(&f, &root).await;
+    let mode = enable_mode(&f, &root).await;
+    let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
+    let path = work.0.join("secondary-cancel.db");
+    let protection = Protection::isolated_test();
+    let events = activation_events(&f, &root).await;
+    seed_activation(&path, &directory, &events, &protection);
+    let device = &join.status.ticket.device.device_id;
+    let actor = activation_actor(&path, &directory, device, &join.keys, &protection);
+    let task = actor
+        .prepare_login(&root.username, mode, &join.keys)
+        .unwrap();
+    *lose.lock().unwrap() = Some("/auth/v3/begin".into());
+    assert_eq!(
+        actor
+            .step(&task.id, Some(&root.password), &join.keys)
+            .await
+            .unwrap()
+            .http_status,
+        Some(503)
+    );
+    assert!(
+        actor
+            .request_cancel(&task.id, &join.keys)
+            .unwrap()
+            .cancel_requested
+    );
+    *lose.lock().unwrap() = Some("/auth/v3/cancel".into());
+    assert_eq!(
+        actor
+            .step(&task.id, None, &join.keys)
+            .await
+            .unwrap()
+            .http_status,
+        Some(503)
+    );
+    drop(actor);
+    let actor = activation_actor(&path, &directory, device, &join.keys, &protection);
+    assert!(actor.views(&join.keys).unwrap()[0].cancel_requested);
+    assert_eq!(
+        actor
+            .step(&task.id, None, &join.keys)
+            .await
+            .unwrap()
+            .condition,
+        ActivationCondition::Cancelled
+    );
+    assert!(actor.session(&task.id, &join.keys).is_err());
+    let mut stored = ActivationStore::open(
+        &path,
+        ActivationOwner::new(directory.anchor().clone(), device, &join.keys).unwrap(),
+        &join.keys,
+        protection.witness(&path).unwrap(),
+    )
+    .unwrap();
+    let original = stored
+        .task(&task.id, &join.keys)
+        .unwrap()
+        .start(&root.password)
+        .unwrap();
+    assert_eq!(begin(&f, &original).await.status(), StatusCode::GONE);
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions WHERE device_id=$1")
+        .bind(device)
+        .fetch_one(f.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+}
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn durable_cancel_after_unknown_proof_acceptance_recovers_the_original_session() {
+    let (f, lose) = Fixture::start_with_loss().await;
+    let root = f.account().await;
+    let (join, directory) = authorized(&f, &root).await;
+    let mode = enable_mode(&f, &root).await;
+    let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
+    let path = work.0.join("accepted-cancel.db");
+    let protection = Protection::isolated_test();
+    let events = activation_events(&f, &root).await;
+    seed_activation(&path, &directory, &events, &protection);
+    let device = &join.status.ticket.device.device_id;
+    let actor = activation_actor(&path, &directory, device, &join.keys, &protection);
+    let task = actor
+        .prepare_login(&root.username, mode, &join.keys)
+        .unwrap();
+    *lose.lock().unwrap() = Some(format!("/auth/v3/{}/proof", task.id));
+    assert_eq!(
+        actor
+            .step(&task.id, Some(&root.password), &join.keys)
+            .await
+            .unwrap()
+            .http_status,
+        Some(503)
+    );
+    assert!(
+        actor
+            .request_cancel(&task.id, &join.keys)
+            .unwrap()
+            .cancel_requested
+    );
+    *lose.lock().unwrap() = Some("/auth/v3/cancel".into());
+    assert_eq!(
+        actor
+            .step(&task.id, None, &join.keys)
+            .await
+            .unwrap()
+            .http_status,
+        Some(503)
+    );
+    drop(actor);
+    let actor = activation_actor(&path, &directory, device, &join.keys, &protection);
+    let result = actor.step(&task.id, None, &join.keys).await.unwrap();
+    assert_eq!(result.condition, ActivationCondition::Complete);
+    assert!(result.task.cancel_requested);
+    let session = actor.session(&task.id, &join.keys).unwrap();
+    assert!(f
+        .db
+        .validate_access_token(&auth::service::hash_token(&session.access_token), device)
+        .await
+        .unwrap()
+        .is_some());
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions WHERE device_id=$1")
+        .bind(device)
+        .fetch_one(f.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+    assert_eq!(
+        actor
+            .step(&task.id, None, &join.keys)
+            .await
+            .unwrap()
+            .condition,
+        ActivationCondition::Complete
+    );
+}
 async fn state(f: &Fixture, root: &Account) -> DeviceState {
     let page = f
         .manifest(root, &root.id, 0, 100)

@@ -464,6 +464,26 @@ impl Challenge {
         keys: &KeyPair,
     ) -> Result<Proof> {
         self.verify_state(state, mode, at)?;
+        let secret = self.open_secret(keys)?;
+        let mut proof = Proof {
+            version: 1,
+            id: self.id.clone(),
+            challenge: self.digest()?,
+            secret: secret.0,
+            signature: vec![0; 64],
+        };
+        let signing = Plain(proof.signing()?);
+        proof.signature = crypto::sign(&signing.0, &keys.ed25519_sk).map_err(|_| bad())?;
+        proof.verify(self)?;
+        Ok(proof)
+    }
+    /// Authenticate saved ciphertext without generating a proof. Historical
+    /// validation does not assert that the challenge is still live now.
+    pub fn authenticate(&self, state: &DeviceState, mode: &Enable, keys: &KeyPair) -> Result<()> {
+        self.verify_state(state, mode, self.issued_at)?;
+        self.open_secret(keys).map(|_| ())
+    }
+    fn open_secret(&self, keys: &KeyPair) -> Result<Secret> {
         key_check(keys, &self.device)?;
         let plain = Plain(
             crypto::decrypt(&self.encrypted, &self.server_key, &keys.secret_key)
@@ -476,17 +496,7 @@ impl Challenge {
         if hash(&secret.0) != self.secret_hash {
             return Err(bad());
         }
-        let mut proof = Proof {
-            version: 1,
-            id: self.id.clone(),
-            challenge: self.digest()?,
-            secret: secret.0,
-            signature: vec![0; 64],
-        };
-        let signing = Plain(proof.signing()?);
-        proof.signature = crypto::sign(&signing.0, &keys.ed25519_sk).map_err(|_| bad())?;
-        proof.verify(self)?;
-        Ok(proof)
+        Ok(secret)
     }
 }
 #[derive(Serialize, Deserialize)]

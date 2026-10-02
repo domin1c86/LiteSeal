@@ -9,6 +9,7 @@ use liteseal_shared::{
 };
 use reqwest::{Method, RequestBuilder};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+pub mod jobs;
 #[derive(Debug)]
 pub struct ActivationError {
     pub status: Option<u16>,

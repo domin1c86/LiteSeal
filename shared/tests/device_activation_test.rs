@@ -117,6 +117,7 @@ fn challenge_expiry_version_ciphertext_and_scope_fail_before_session() {
         .is_err());
     let mut altered = challenge.clone();
     altered.encrypted[40] ^= 1;
+    assert!(altered.authenticate(&f.joined, &f.mode, &f.second).is_err());
     assert!(altered.answer(&f.joined, &f.mode, 2001, &f.second).is_err());
     altered = challenge.clone();
     altered.version = 2;
