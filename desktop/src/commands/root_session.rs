@@ -152,7 +152,7 @@ pub async fn save(state: &AppState, id: String) -> Result<Saved, String> {
     if ctx.jobs.inspect(&id, &ctx.keys).await?.condition != jobs::Condition::Complete {
         return Err("原正式会话尚未确认有效，请继续查询原申请".into());
     }
-    let (session, mode, state_dir) = {
+    let (session, original, state_dir, generation) = {
         let _current = root::current(state, &ctx)?;
         let mut store = jobs::Store::open(
             &state.db_path,
@@ -162,26 +162,33 @@ pub async fn save(state: &AppState, id: String) -> Result<Saved, String> {
         )?;
         (
             ctx.jobs.session(&id, &ctx.keys)?,
-            store.task(&id, &ctx.keys)?.enable().clone(),
+            store.task(&id, &ctx.keys)?,
             directory(state, &ctx)?,
+            liteseal_core::trusted_devices::activation::refresh::jobs::Store::open(
+                &state.db_path,
+                jobs::Owner::new(ctx.anchor.clone(), &ctx.anchor.root.device_id, &ctx.keys)?,
+                &ctx.keys,
+                state.device_witness(&state.db_path)?,
+            )?
+            .current_view(&ctx.keys)?
+            .map(|v| v.generation),
         )
     };
     if session.account != ctx.anchor.account || session.device != ctx.anchor.root.device_id {
         return Err(bad());
     }
-    let session = ActivationApi::new(&ctx.anchor.origin)
+    let checked = ActivationApi::new(&ctx.anchor.origin)
         .map_err(|e| e.to_string())?
         .check_session(
             &session.access_token,
             &state_dir,
-            &mode,
+            original.enable(),
             &ctx.anchor.root,
             &ctx.keys,
         )
         .await
-        .map_err(|e| e.to_string())?
-        .bind(session)?;
-    let saved = {
+        .map_err(|e| e.to_string())?;
+    {
         let _commit = state.backup_commit.lock().map_err(|_| "身份提交锁不可用")?;
         let _current = root::current(state, &ctx)?;
         if legacy::Store::open(
@@ -194,11 +201,18 @@ pub async fn save(state: &AppState, id: String) -> Result<Saved, String> {
         {
             return Err("请先查询并确认原设备启用配置，正式凭据未保存".into());
         }
-        state.commit_root_credentials(&ctx.saved, &session.access_token, &session.refresh_token)?
-    };
+        liteseal_core::trusted_devices::activation::refresh::jobs::Store::open(
+            &state.db_path,
+            jobs::Owner::new(ctx.anchor.clone(), &ctx.anchor.root.device_id, &ctx.keys)?,
+            &ctx.keys,
+            state.device_witness(&state.db_path)?,
+        )?
+        .adopt_expected(&original, checked, &ctx.keys, generation)?;
+    }
     // Retire old session contexts after the CAS and all transition locks drop.
     super::device_control::invalidate(state)?;
     super::groups::invalidate(state, &ctx.saved)?;
+    let saved = state.identity()?;
     Ok(Saved {
         user_id: saved.user_id,
         device_id: saved.device_id,

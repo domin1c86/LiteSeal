@@ -65,6 +65,9 @@ impl AppState {
 
     /// The saved identity including secret keys. Never return it to the renderer.
     pub fn identity(&self) -> Result<KeystoreData, String> {
+        commands::root_refresh::overlay(self, self.saved_identity()?)
+    }
+    pub(crate) fn saved_identity(&self) -> Result<KeystoreData, String> {
         let mut cached = self.identity.lock().map_err(|e| e.to_string())?;
         if let Some(identity) = cached.as_ref() {
             return Ok(identity.clone());
@@ -81,6 +84,17 @@ impl AppState {
         let _commit = self.backup_commit.lock().map_err(|_| "备份提交锁不可用")?;
         let mut cached = self.identity.lock().map_err(|e| e.to_string())?;
         let previous = cached.clone();
+        if let Some(previous) = &previous {
+            if previous.user_id != data.user_id
+                || previous.device_id != data.device_id
+                || previous.server_url != data.server_url
+                || previous.public_key != data.public_key
+                || previous.ed25519_pk != data.ed25519_pk
+                || data.token.is_empty()
+            {
+                commands::root_refresh::clear(self, previous)?;
+            }
+        }
         if previous.as_ref().is_some_and(|old| {
             old.user_id != data.user_id
                 || old.device_id != data.device_id
@@ -122,6 +136,9 @@ impl AppState {
         commands::device_control::invalidate(self)?;
         let mut cached = self.identity.lock().map_err(|e| e.to_string())?;
         let previous = cached.clone();
+        if let Some(previous) = &previous {
+            commands::root_refresh::clear(self, previous)?;
+        }
         match &self.keystore_path {
             Some(path) => keystore::clear_keypair_at(path)?,
             None => keystore::clear_keypair()?,
@@ -133,34 +150,6 @@ impl AppState {
         }
         Ok(())
     }
-    /// Root recovery holds backup_commit and its current runtime admission
-    /// during this synchronous CAS. Invalidation is done after both guards drop.
-    pub(crate) fn commit_root_credentials(
-        &self,
-        expected: &KeystoreData,
-        access: &str,
-        refresh: &str,
-    ) -> Result<KeystoreData, String> {
-        let mut cached = self.identity.lock().map_err(|_| "身份提交锁不可用")?;
-        let current = cached.as_ref().ok_or("原身份已失效")?;
-        let left =
-            zeroize::Zeroizing::new(serde_json::to_vec(current).map_err(|_| "身份无法核对")?);
-        let right =
-            zeroize::Zeroizing::new(serde_json::to_vec(expected).map_err(|_| "原身份无法核对")?);
-        if left.as_slice() != right.as_slice() {
-            return Err("身份或会话已变化，原恢复结果未覆盖当前账号".into());
-        }
-        let mut next = current.clone();
-        next.token = access.into();
-        next.refresh_token = refresh.into();
-        match &self.keystore_path {
-            Some(path) => keystore::save_keypair_to(path, next.clone())?,
-            None => keystore::save_keypair(next.clone())?,
-        }
-        *cached = Some(next.clone());
-        Ok(next)
-    }
-
     /// Keys for an account that is not bound yet; generated once and kept in
     /// memory until a session is saved with them.
     pub fn pending_keys(&self) -> Result<KeystoreData, String> {

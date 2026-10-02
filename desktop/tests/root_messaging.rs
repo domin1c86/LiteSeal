@@ -490,6 +490,22 @@ async fn root_formal_save_preserves_original_identity_masks_credentials_and_fenc
                 keystore::load_identity(&reopened).unwrap().token,
                 "rust-owned-session"
             );
+            // Formal tokens now live in the native-protected current record.
+            // The original DPAPI identity and keys are byte-for-byte retained.
+            f.unchanged();
+            let mut current =
+                liteseal_core::trusted_devices::activation::refresh::jobs::Store::open(
+                    &f.state.db_path,
+                    jobs::Owner::new(f.anchor.clone(), &f.anchor.root.device_id, &f.keys).unwrap(),
+                    &f.keys,
+                    f.protection.witness(&f.state.db_path).unwrap(),
+                )
+                .unwrap();
+            assert_eq!(current.session(&f.keys).unwrap().id, session.id);
+            current.clear_local(&f.keys).unwrap();
+            assert!(f.state.identity().unwrap().token.is_empty());
+            assert!(reopened.identity().unwrap().refresh_token.is_empty());
+            f.unchanged();
         } else {
             assert!(result.is_err());
             assert_eq!(

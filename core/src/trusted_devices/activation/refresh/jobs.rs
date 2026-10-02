@@ -292,6 +292,25 @@ fn current(
     }
     Ok(Some(record))
 }
+pub(crate) fn credentials_in(
+    conn: &Connection,
+    owner: &Owner,
+    keys: &KeyPair,
+) -> Result<Option<Session>, String> {
+    let Some(record) = current(conn, owner, keys)? else {
+        return Ok(None);
+    };
+    let mut session = copy_session(&record.session)?;
+    if !record.active
+        || owner.member(&t::read(conn, owner.anchor(), None)?).ok() != Some(session.authorization)
+    {
+        session.access_token.zeroize();
+        session.refresh_token.zeroize();
+        session.expires_at = 0;
+        session.refresh_expires_at = 0;
+    }
+    Ok(Some(session))
+}
 fn put_current(
     conn: &Connection,
     record: &mut CurrentRecord,
@@ -307,6 +326,81 @@ fn put_current(
     };
     if count != 1 {
         return Err(bad());
+    }
+    Ok(())
+}
+pub(crate) fn generation_in(
+    conn: &Connection,
+    owner: &Owner,
+    keys: &KeyPair,
+) -> Result<Option<u64>, String> {
+    Ok(current(conn, owner, keys)?.map(|c| c.generation))
+}
+pub(crate) struct Adoption {
+    record: CurrentRecord,
+}
+impl Adoption {
+    pub(crate) fn new(
+        owner: Owner,
+        activation: &crate::trusted_devices::activation::jobs::Task,
+        checked: CheckedSession,
+        keys: &KeyPair,
+    ) -> Result<Self, String> {
+        owner.keys(keys)?;
+        let mode = activation.enable().clone();
+        let session = checked.bind(activation.initial_session(&owner, keys)?)?;
+        mode.verify_root(owner.anchor()).map_err(|_| bad())?;
+        Ok(Self {
+            record: CurrentRecord {
+                domain: "LiteSeal/refresh-current/v1".into(),
+                version: 1,
+                owner,
+                generation: 0,
+                family: session.id.clone(),
+                mode,
+                session,
+                active: true,
+            },
+        })
+    }
+    pub(crate) fn commit(
+        mut self,
+        conn: &Connection,
+        keys: &KeyPair,
+        expected: Option<u64>,
+    ) -> Result<(), String> {
+        let owner = &self.record.owner;
+        let state = t::read(conn, owner.anchor(), None)?;
+        t::read_at(
+            conn,
+            owner.anchor(),
+            &Checkpoint {
+                revision: self.record.mode.revision,
+                hash: self.record.mode.head.to_vec(),
+            },
+        )?;
+        if self.record.session.account != owner.anchor().account
+            || self.record.session.device != owner.device().device_id
+            || self.record.session.authorization != owner.member(&state)?
+            || self.record.session.mode != self.record.mode.digest().map_err(|_| bad())?
+        {
+            return Err(bad());
+        }
+        if generation_in(conn, owner, keys)? != expected {
+            return Err("正式会话代次已变化，原保存未覆盖当前记录".into());
+        }
+        let owner = owner.clone();
+        put_current(conn, &mut self.record, expected, keys)?;
+        prune_receipts(conn, &owner, keys)
+    }
+}
+pub(crate) fn clear_in(conn: &Connection, owner: &Owner, keys: &KeyPair) -> Result<(), String> {
+    if let Some(mut record) = current(conn, owner, keys)? {
+        let previous = record.generation;
+        record.active = false;
+        record.session.access_token.zeroize();
+        record.session.refresh_token.zeroize();
+        put_current(conn, &mut record, Some(previous), keys)?;
     }
     Ok(())
 }
@@ -428,6 +522,10 @@ pub struct Store {
     owner: Owner,
 }
 impl Store {
+    pub fn credentials(&mut self, keys: &KeyPair) -> Result<Option<Session>, String> {
+        self.trust
+            .read_checked(|conn| credentials_in(conn, &self.owner, keys))
+    }
     pub fn open(
         path: &Path,
         owner: Owner,
@@ -477,42 +575,19 @@ impl Store {
         checked: CheckedSession,
         keys: &KeyPair,
     ) -> Result<CurrentView, String> {
-        self.owner.keys(keys)?;
-        let mode = activation.enable().clone();
-        let session = activation.initial_session(&self.owner, keys)?;
-        let session = checked.bind(session)?;
-        mode.verify_root(self.owner.anchor()).map_err(|_| bad())?;
-        self.trust.write_checked(|conn| {
-            let state = t::read(conn, self.owner.anchor(), None)?;
-            t::read_at(
-                conn,
-                self.owner.anchor(),
-                &Checkpoint {
-                    revision: mode.revision,
-                    hash: mode.head.to_vec(),
-                },
-            )?;
-            if session.device != self.owner.device().device_id
-                || session.account != self.owner.anchor().account
-                || session.authorization != self.owner.member(&state)?
-                || session.mode != mode.digest().map_err(|_| bad())?
-            {
-                return Err(bad());
-            }
-            let previous = current(conn, &self.owner, keys)?.map(|r| r.generation);
-            let mut record = CurrentRecord {
-                domain: "LiteSeal/refresh-current/v1".into(),
-                version: 1,
-                owner: self.owner.clone(),
-                generation: 0,
-                family: session.id.clone(),
-                mode,
-                session,
-                active: true,
-            };
-            put_current(conn, &mut record, previous, keys)?;
-            prune_receipts(conn, &self.owner, keys)
-        })?;
+        let expected = self.current_view(keys)?.map(|v| v.generation);
+        self.adopt_expected(activation, checked, keys, expected)
+    }
+    pub fn adopt_expected(
+        &mut self,
+        activation: &crate::trusted_devices::activation::jobs::Task,
+        checked: CheckedSession,
+        keys: &KeyPair,
+        expected: Option<u64>,
+    ) -> Result<CurrentView, String> {
+        let adoption = Adoption::new(self.owner.clone(), activation, checked, keys)?;
+        self.trust
+            .write_checked(|conn| adoption.commit(conn, keys, expected))?;
         self.current_view(keys)?.ok_or_else(bad)
     }
     pub fn task(&mut self, id: &str, keys: &KeyPair) -> Result<Task, String> {
@@ -695,16 +770,8 @@ impl Store {
         })
     }
     pub fn clear_local(&mut self, keys: &KeyPair) -> Result<(), String> {
-        self.trust.write_checked(|conn| {
-            if let Some(mut c) = current(conn, &self.owner, keys)? {
-                let previous = c.generation;
-                c.active = false;
-                c.session.access_token.zeroize();
-                c.session.refresh_token.zeroize();
-                put_current(conn, &mut c, Some(previous), keys)?;
-            }
-            Ok(())
-        })
+        self.trust
+            .write_checked(|conn| clear_in(conn, &self.owner, keys))
     }
     pub fn forget_ended(&mut self, id: &str, keys: &KeyPair) -> Result<(), String> {
         self.trust.write_checked(|conn| {

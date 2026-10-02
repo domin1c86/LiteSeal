@@ -1,6 +1,7 @@
 //! Independent normal-session records for an authorized joining identity. The
 //! original DPAPI identity is immutable; no new keys or device IDs are minted.
 use super::{JoinProfile, JoinProfileStore};
+use crate::trusted_devices::activation::refresh::jobs as refresh;
 use crate::{
     keystore::KeystoreData,
     secret_store,
@@ -257,7 +258,7 @@ impl Store {
         Ok(())
     }
     pub fn load(&mut self) -> Result<Option<ActiveProfile>, String> {
-        let Some(record) = self.record()? else {
+        let Some(mut record) = self.record()? else {
             return Ok(None);
         };
         let state = self.state()?;
@@ -266,6 +267,17 @@ impl Store {
         if self.parent_binding(&profile)? != self.binding {
             return Err(bad());
         }
+        let keys = profile.keys()?;
+        let owner = self.job_owner()?;
+        if let Some(session) = self
+            .trust
+            .read_checked(|conn| refresh::credentials_in(conn, &owner, &keys))?
+        {
+            if session.authorization != self.authority {
+                return Err(bad());
+            }
+            record.session = session;
+        }
         Ok(Some(ActiveProfile {
             profile,
             record,
@@ -273,7 +285,12 @@ impl Store {
             root_fingerprint: hex::encode(self.anchor.hash()),
         }))
     }
-    fn save(&mut self, mut record: Record, previous: Option<u64>) -> Result<(), String> {
+    fn save_with(
+        &mut self,
+        mut record: Record,
+        previous: Option<u64>,
+        extra: impl FnOnce(&rusqlite::Connection) -> Result<(), String>,
+    ) -> Result<(), String> {
         record.revision = previous.unwrap_or(0).checked_add(1).ok_or_else(bad)?;
         self.validate(&record)?;
         let plain = Zeroizing::new(serde_json::to_vec(&record).map_err(|_| bad())?);
@@ -301,16 +318,34 @@ impl Store {
             let count = if let Some(previous) = previous {
                 conn.execute("UPDATE device_control_tasks SET revision=?3,body=?4 WHERE scope=?1 AND id=?2 AND revision=?5 AND kind='active_profile' AND terminal=1",params![self.scope,self.profile_id,record.revision,protected,previous]).map_err(db)?
             } else { conn.execute("INSERT INTO device_control_tasks(scope,id,revision,kind,terminal,body) VALUES(?1,?2,?3,'active_profile',1,?4)",params![self.scope,self.profile_id,record.revision,protected]).map_err(db)? };
-            if count != 1 { return Err(bad()); } Ok(())
+            if count != 1 { return Err(bad()); } extra(conn)
         })
     }
     pub fn save_checked(
         &mut self,
         activation: &str,
         mode: Enable,
+        session: Session,
+        checked: CheckedSession,
+        previous: Option<u64>,
+    ) -> Result<(), String> {
+        let generation = self.refresh_generation()?;
+        self.save_checked_expected(activation, mode, session, checked, previous, generation)
+    }
+    fn refresh_generation(&mut self) -> Result<Option<u64>, String> {
+        let keys = self.profiles.load(&self.profile_id)?.keys()?;
+        let owner = self.job_owner()?;
+        self.trust
+            .read_checked(|conn| refresh::generation_in(conn, &owner, &keys))
+    }
+    fn save_checked_expected(
+        &mut self,
+        activation: &str,
+        mode: Enable,
         mut session: Session,
         checked: CheckedSession,
         previous: Option<u64>,
+        generation: Option<u64>,
     ) -> Result<(), String> {
         let keys = self.profiles.load(&self.profile_id)?.keys()?;
         let path = self.database()?;
@@ -351,7 +386,28 @@ impl Store {
         }
         session.expires_at = checked.info.expires_at;
         session.refresh_expires_at = checked.info.refresh_expires_at;
-        self.save(
+        let owner = self.job_owner()?;
+        let adoption = if original.view().stage == t::activation::jobs::Stage::Complete {
+            Some(refresh::Adoption::new(
+                owner.clone(),
+                &original,
+                checked,
+                &keys,
+            )?)
+        } else {
+            let current = self
+                .trust
+                .read_checked(|conn| refresh::credentials_in(conn, &owner, &keys))?
+                .ok_or_else(bad)?;
+            if current.id != session.id
+                || current.access_token != session.access_token
+                || current.refresh_token != session.refresh_token
+            {
+                return Err(bad());
+            }
+            None
+        };
+        self.save_with(
             Record {
                 domain: "LiteSeal/active-join-session/v1".into(),
                 version: 1,
@@ -363,6 +419,15 @@ impl Store {
                 session,
             },
             previous,
+            |conn| {
+                if refresh::generation_in(conn, &owner, &keys)? != generation {
+                    return Err(bad());
+                }
+                if let Some(adoption) = adoption {
+                    adoption.commit(conn, &keys, generation)?;
+                }
+                Ok(())
+            },
         )
     }
     pub fn clear_session(&mut self) -> Result<(), String> {
@@ -374,7 +439,11 @@ impl Store {
         record.session.refresh_token.zeroize();
         record.session.expires_at = 0;
         record.session.refresh_expires_at = 0;
-        self.save(record, Some(previous))
+        let keys = self.profiles.load(&self.profile_id)?.keys()?;
+        let owner = self.job_owner()?;
+        self.save_with(record, Some(previous), |conn| {
+            refresh::clear_in(conn, &owner, &keys)
+        })
     }
     fn parent_binding(&self, profile: &JoinProfile) -> Result<[u8; 32], String> {
         Ok(Sha256::digest(
@@ -467,7 +536,12 @@ impl Coordinator {
         }
         self.with(&lease, |s| {
             let current = s.load()?.ok_or_else(bad)?;
-            if current.record.revision != previous || !current.eligible {
+            if current.record.revision != previous
+                || !current.eligible
+                || current.record.session.id != profile.record.session.id
+                || current.record.session.access_token != profile.record.session.access_token
+                || current.record.session.refresh_token != profile.record.session.refresh_token
+            {
                 return Err(bad());
             }
             Ok(current.identity())
@@ -476,17 +550,19 @@ impl Coordinator {
     pub async fn activate(&self, id: &str) -> Result<View, String> {
         let lease = self.gate.lease()?;
         let _network = self.network.lock().await;
-        let (path, owner, keys, protection, previous, state, device) = self.with(&lease, |s| {
-            Ok((
-                s.database()?,
-                s.job_owner()?,
-                s.profiles.load(&s.profile_id)?.keys()?,
-                s.protection.clone(),
-                s.record()?.map(|r| r.revision),
-                s.state()?,
-                s.device.clone(),
-            ))
-        })?;
+        let (path, owner, keys, protection, previous, state, device, generation) =
+            self.with(&lease, |s| {
+                Ok((
+                    s.database()?,
+                    s.job_owner()?,
+                    s.profiles.load(&s.profile_id)?.keys()?,
+                    s.protection.clone(),
+                    s.record()?.map(|r| r.revision),
+                    s.state()?,
+                    s.device.clone(),
+                    s.refresh_generation()?,
+                ))
+            })?;
         let jobs = Jobs::open_with_protection(&path, owner, &keys, protection)?;
         if jobs.inspect(id, &keys).await?.condition != Condition::Complete {
             return Err("原激活尚未确认有效会话，请查询原申请".into());
@@ -507,7 +583,7 @@ impl Coordinator {
             .await
             .map_err(|_| bad())?;
         self.with(&lease, |s| {
-            s.save_checked(id, mode, session, checked, previous)?;
+            s.save_checked_expected(id, mode, session, checked, previous, generation)?;
             s.load()?.map(|p| p.view()).ok_or_else(bad)
         })
     }

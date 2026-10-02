@@ -149,6 +149,117 @@ use tokio::{
     net::TcpListener,
     sync::Notify,
 };
+#[tokio::test]
+async fn refreshed_current_credentials_overlay_join_profile_and_local_clear_is_atomic() {
+    use liteseal_core::trusted_devices::activation::refresh::jobs as refresh;
+    use liteseal_shared::device_activation::refresh as wire;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let socket = listener.into_std().unwrap();
+    let save_listener = TcpListener::from_std(socket.try_clone().unwrap()).unwrap();
+    let listener = TcpListener::from_std(socket).unwrap();
+    let f = SessionFixture::new(&origin);
+    f.save(save_listener, None).await.unwrap();
+    let local = f.open();
+    let path = local.database().unwrap();
+    let owner = local.job_owner().unwrap();
+    drop(local);
+    let actor =
+        refresh::Coordinator::open_with_protection(&path, owner, &f.keys, f.protection.clone())
+            .unwrap();
+    assert!(
+        actor
+            .current_view(&f.keys)
+            .unwrap()
+            .unwrap()
+            .has_credentials
+    );
+    let job = actor.prepare(&f.keys).unwrap();
+    let start = refresh::Store::open(
+        &path,
+        f.open().job_owner().unwrap(),
+        &f.keys,
+        f.protection.witness(&path).unwrap(),
+    )
+    .unwrap()
+    .task(&job.id, &f.keys)
+    .unwrap()
+    .request()
+    .clone();
+    let state = f.state.clone();
+    let mode = f.mode.clone();
+    let next = Session {
+        id: uuid::Uuid::new_v4().to_string(),
+        account: start.account.clone(),
+        device: start.device.device_id.clone(),
+        authorization: start.authorization,
+        mode: start.mode,
+        access_token: "synthetic-refreshed-profile-access".into(),
+        refresh_token: "synthetic-refreshed-profile-refresh".into(),
+        expires_at: chrono::Utc::now().timestamp_millis() + 60_000,
+        refresh_expires_at: chrono::Utc::now().timestamp_millis() + 120_000,
+    };
+    let challenge = Challenge::make(
+        &state,
+        &mode,
+        &start.id,
+        &start.device.device_id,
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .unwrap();
+    let pending = serde_json::to_vec(&wire::Reply::Pending {
+        request: start.digest().unwrap(),
+        challenge: Box::new(challenge.clone()),
+    })
+    .unwrap();
+    let accepted = serde_json::to_vec(&wire::Reply::Accepted {
+        request: start.digest().unwrap(),
+        challenge: Box::new(challenge.clone()),
+        envelope: wire::Envelope::seal(&start, &challenge, &next).unwrap(),
+    })
+    .unwrap();
+    let server = async {
+        for body in [pending, accepted] {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut bytes = Vec::new();
+            let mut chunk = [0; 4096];
+            loop {
+                let n = stream.read(&mut chunk).await.unwrap();
+                assert!(n > 0);
+                bytes.extend_from_slice(&chunk[..n]);
+                if bytes.windows(4).any(|v| v == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let header=format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",body.len());
+            stream.write_all(header.as_bytes()).await.unwrap();
+            stream.write_all(&body).await.unwrap();
+        }
+    };
+    let (result, _) = tokio::join!(actor.step(&job.id, &f.keys), server);
+    assert_eq!(result.unwrap().condition, refresh::Condition::Complete);
+    let mut reopened = f.open();
+    let profile = reopened.load().unwrap().unwrap();
+    assert_eq!(profile.identity().token, next.access_token);
+    assert_eq!(profile.identity().refresh_token, next.refresh_token);
+    assert_eq!(profile.view().revision, 1);
+    reopened.clear_session().unwrap();
+    assert!(reopened
+        .load()
+        .unwrap()
+        .unwrap()
+        .identity()
+        .token
+        .is_empty());
+    assert!(
+        !actor
+            .current_view(&f.keys)
+            .unwrap()
+            .unwrap()
+            .has_credentials
+    );
+    assert!(actor.session(&f.keys).is_err());
+}
 struct SessionFixture {
     _work: WorkDirectory,
     root: std::path::PathBuf,
