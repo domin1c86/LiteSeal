@@ -243,3 +243,86 @@ async fn accepted_cancel_result_requires_exact_challenge_and_authentic_session_c
         server.await.unwrap();
     }
 }
+#[tokio::test]
+async fn structured_inspection_rejects_wrong_digest_and_impossible_terminal_facts() {
+    use liteseal_shared::device_activation::{ClosedReason, Closure, Inspection, InspectionResult};
+    for case in 0..4 {
+        let (listener, url, state, keys) = setup().await;
+        let mode = Enable::make(&state, &uuid::Uuid::new_v4().to_string(), &keys).unwrap();
+        let token = "synthetic-inspection-credential-at-least-thirty-two";
+        let request = Inspection::make(
+            &state,
+            &mode,
+            &uuid::Uuid::new_v4().to_string(),
+            token,
+            &state.anchor().root.device_id,
+            &keys,
+        )
+        .unwrap();
+        let mut closed =
+            Closure::make(&request, Some([1; 32]), false, ClosedReason::Expired).unwrap();
+        if case == 1 {
+            closed.request[0] ^= 1;
+        }
+        if case == 2 {
+            closed.accepted = true;
+        }
+        if case == 3 {
+            closed.version = 2;
+        }
+        let body = InspectionResult::Closed {
+            closure: Box::new(closed),
+        };
+        let server = tokio::spawn(reply(
+            listener,
+            response(&serde_json::to_vec(&body).unwrap()),
+        ));
+        assert_eq!(
+            ActivationApi::new(&url)
+                .unwrap()
+                .inspect(token, &request, &state, &mode, &keys)
+                .await
+                .is_ok(),
+            case == 0
+        );
+        server.await.unwrap();
+    }
+}
+#[tokio::test]
+async fn unknown_inspection_requires_the_original_request_digest() {
+    use liteseal_shared::device_activation::{Inspection, InspectionResult};
+    for wrong in [false, true] {
+        let (listener, url, state, keys) = setup().await;
+        let mode = Enable::make(&state, &uuid::Uuid::new_v4().to_string(), &keys).unwrap();
+        let token = "synthetic-inspection-credential-at-least-thirty-two";
+        let request = Inspection::make(
+            &state,
+            &mode,
+            &uuid::Uuid::new_v4().to_string(),
+            token,
+            &state.anchor().root.device_id,
+            &keys,
+        )
+        .unwrap();
+        let body = InspectionResult::Unknown {
+            request: if wrong {
+                [0; 32]
+            } else {
+                request.digest().unwrap()
+            },
+        };
+        let server = tokio::spawn(reply(
+            listener,
+            response(&serde_json::to_vec(&body).unwrap()),
+        ));
+        assert_eq!(
+            ActivationApi::new(&url)
+                .unwrap()
+                .inspect(token, &request, &state, &mode, &keys)
+                .await
+                .is_ok(),
+            !wrong
+        );
+        server.await.unwrap();
+    }
+}

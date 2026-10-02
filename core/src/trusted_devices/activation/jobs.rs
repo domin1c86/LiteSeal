@@ -8,8 +8,9 @@ use liteseal_shared::{
     backup_crypto,
     crypto::{self, KeyPair},
     device_activation::{
-        ActivationCancel, ActivationCancelResult, Challenge, Enable, EnableCancel,
-        EnableCancelResult, Envelope, Proof, Session, Start,
+        ActivationCancel, ActivationCancelResult, Challenge, ClosedReason, Closure, Enable,
+        EnableCancel, EnableCancelResult, Envelope, Inspection, InspectionResult, Proof, Session,
+        Start,
     },
     direct_message::Directory,
     trusted_device::{Anchor, DeviceIdentity, DeviceState},
@@ -96,10 +97,14 @@ pub enum Stage {
     Complete,
     Cancelled,
     Ineligible,
+    Ended,
 }
 impl Stage {
     fn terminal(self) -> bool {
-        matches!(self, Self::Complete | Self::Cancelled | Self::Ineligible)
+        matches!(
+            self,
+            Self::Complete | Self::Cancelled | Self::Ineligible | Self::Ended
+        )
     }
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -115,6 +120,13 @@ pub struct View {
     pub kind: Kind,
     pub stage: Stage,
     pub cancel_requested: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub closed: Option<ClosedSummary>,
+}
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct ClosedSummary {
+    pub reason: ClosedReason,
+    pub accepted: bool,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -127,6 +139,8 @@ struct Login {
     proof: Option<Vec<u8>>,
     result: Option<Envelope>,
     cancel: Option<ActivationCancel>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    closed: Option<Closure>,
 }
 impl Drop for Login {
     fn drop(&mut self) {
@@ -166,6 +180,13 @@ impl Stored {
             },
             stage: self.stage,
             cancel_requested: self.cancel_requested,
+            closed: match &self.data {
+                Data::Login(login) => login.closed.as_ref().map(|c| ClosedSummary {
+                    reason: c.reason,
+                    accepted: c.accepted,
+                }),
+                _ => None,
+            },
         }
     }
 }
@@ -202,7 +223,7 @@ impl Task {
         let Data::Login(login) = &self.stored.data else {
             return Err(bad());
         };
-        if password.len() > 1024 || password.is_empty() {
+        if !self.stored.started || password.len() > 1024 || password.is_empty() {
             return Err(bad());
         }
         Ok(Start {
@@ -244,7 +265,7 @@ fn validate(conn: &Connection, owner: &Owner, task: &Stored, keys: &KeyPair) -> 
         Data::Enable { cancel } => {
             if owner.device != owner.anchor.root
                 || task.id != task.mode.id
-                || task.stage == Stage::Proving
+                || matches!(task.stage, Stage::Proving | Stage::Ended)
             {
                 return Err(bad());
             }
@@ -280,8 +301,13 @@ fn validate(conn: &Connection, owner: &Owner, task: &Stored, keys: &KeyPair) -> 
                 return Err(bad());
             }
             if let Some(challenge) = &login.challenge {
+                let checkpoint = Checkpoint {
+                    revision: challenge.revision,
+                    hash: challenge.head.to_vec(),
+                };
+                let challenge_state = t::read_at(conn, &owner.anchor, &checkpoint)?;
                 challenge
-                    .authenticate(&original, &task.mode, keys)
+                    .authenticate(&challenge_state, &task.mode, keys)
                     .map_err(|_| bad())?;
                 if challenge.id != task.id
                     || challenge.device != owner.device
@@ -305,7 +331,10 @@ fn validate(conn: &Connection, owner: &Owner, task: &Stored, keys: &KeyPair) -> 
                     .map_err(|_| bad())?;
             }
             if task.stage == Stage::Complete && login.result.is_none()
-                || task.stage != Stage::Complete && login.result.is_some()
+                || !matches!(
+                    task.stage,
+                    Stage::Complete | Stage::Ended | Stage::Ineligible
+                ) && login.result.is_some()
                 || task.stage == Stage::Proving && login.proof.is_none()
             {
                 return Err(bad());
@@ -325,6 +354,32 @@ fn validate(conn: &Connection, owner: &Owner, task: &Stored, keys: &KeyPair) -> 
             }
             if task.cancel_requested != login.cancel.is_some() {
                 return Err(bad());
+            }
+            if (task.stage == Stage::Ended) != login.closed.is_some() {
+                return Err(bad());
+            }
+            if let Some(closed) = &login.closed {
+                let request = Inspection::make(
+                    &original,
+                    &task.mode,
+                    &task.id,
+                    &login.credential,
+                    &owner.device.device_id,
+                    keys,
+                )
+                .map_err(|_| bad())?;
+                closed.verify(&request).map_err(|_| bad())?;
+                if login
+                    .challenge
+                    .as_ref()
+                    .is_some_and(|c| c.digest().ok() != closed.challenge)
+                    || login.proof.is_some()
+                        && closed.reason == ClosedReason::Cancelled
+                        && closed.accepted
+                    || login.result.is_some() && !closed.accepted
+                {
+                    return Err(bad());
+                }
             }
         }
     }
@@ -480,6 +535,13 @@ impl Store {
             },
             Data::Login(login) => login.base.clone(),
         };
+        let base = task
+            .challenge()
+            .map(|c| Checkpoint {
+                revision: c.revision,
+                hash: c.head.to_vec(),
+            })
+            .unwrap_or(base);
         self.trust.at_checkpoint(&self.owner.anchor, &base)
     }
     pub fn prepare_enable(&mut self, keys: &KeyPair) -> Result<Task, String> {
@@ -519,6 +581,7 @@ impl Store {
             proof: None,
             result: None,
             cancel: None,
+            closed: None,
         };
         let task = Stored {
             version: 1,
@@ -595,7 +658,12 @@ impl Store {
                 return Err(bad());
             }
             if login.proof.is_none() {
-                let state = t::read_at(conn, &task.owner.anchor, &login.base)?;
+                let challenge = login.challenge.as_ref().ok_or_else(bad)?;
+                let checkpoint = Checkpoint {
+                    revision: challenge.revision,
+                    hash: challenge.head.to_vec(),
+                };
+                let state = t::read_at(conn, &task.owner.anchor, &checkpoint)?;
                 let proof = login
                     .challenge
                     .as_ref()
@@ -735,6 +803,102 @@ impl Store {
             .open(login.challenge.as_ref().ok_or_else(bad)?, keys)
             .map_err(|_| bad())
     }
+    /// Only a scoped, authenticated transport result can end an unknown task.
+    fn apply_inspected(
+        &mut self,
+        expected: &View,
+        response: super::Inspected,
+        keys: &KeyPair,
+    ) -> Result<(Task, Condition), String> {
+        let condition = match &response.result {
+            InspectionResult::Unknown { .. } => Condition::Retry,
+            InspectionResult::Pending { .. } => Condition::Pending,
+            InspectionResult::Accepted { .. } => Condition::Complete,
+            InspectionResult::Closed { .. } => Condition::Ended,
+        };
+        let task = self.edit(expected, keys, |task, conn| {
+            let Data::Login(login) = &mut task.data else {
+                return Err(bad());
+            };
+            let original = t::read_at(conn, &task.owner.anchor, &login.base)?;
+            let request = Inspection::make(
+                &original,
+                &task.mode,
+                &task.id,
+                &login.credential,
+                &task.owner.device.device_id,
+                keys,
+            )
+            .map_err(|_| bad())?;
+            if response.request != request
+                || task.stage == Stage::Ended
+                || task.stage == Stage::Cancelled
+                || task.stage == Stage::Ineligible
+            {
+                return Err(bad());
+            }
+            match response.result {
+                InspectionResult::Unknown { .. } => {
+                    if login.result.is_some() {
+                        return Err(bad());
+                    }
+                }
+                InspectionResult::Pending { challenge, .. } => {
+                    if login.result.is_some()
+                        || login.challenge.as_ref().is_some_and(|c| *c != *challenge)
+                    {
+                        return Err(bad());
+                    }
+                    login.challenge = Some(*challenge);
+                }
+                InspectionResult::Accepted {
+                    challenge,
+                    envelope,
+                    ..
+                } => {
+                    if login.challenge.as_ref().is_some_and(|c| *c != *challenge)
+                        || login.result.as_ref().is_some_and(|old| *old != envelope)
+                    {
+                        return Err(bad());
+                    }
+                    login.challenge = Some(*challenge);
+                    login.result = Some(envelope);
+                    task.stage = Stage::Complete;
+                }
+                InspectionResult::Closed { closure } => {
+                    login.closed = Some(*closure);
+                    task.stage = Stage::Ended;
+                }
+            }
+            task.started = true;
+            if task.stage == Stage::Prepared {
+                task.stage = Stage::Started;
+            }
+            Ok(())
+        })?;
+        Ok((task, condition))
+    }
+    pub fn forget_ended(&mut self, id: &str, keys: &KeyPair) -> Result<(), String> {
+        self.trust.write_checked(|conn| {
+            let task = get(conn, &self.owner, id, keys)?;
+            if !matches!(
+                task.stage,
+                Stage::Ended | Stage::Cancelled | Stage::Ineligible
+            ) {
+                return Err("只能整理明确结束的任务；请保留原申请".into());
+            }
+            let changed = conn
+                .execute(
+                    "DELETE FROM device_control_tasks WHERE scope=?1 AND id=?2 AND revision=?3",
+                    params![self.owner.scope(task.view().kind), id, task.revision],
+                )
+                .map_err(db)?;
+            if changed != 1 {
+                return Err(bad());
+            }
+            Ok(())
+        })
+    }
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -747,6 +911,8 @@ pub enum Condition {
     SessionRequired,
     Retry,
     Conflict,
+    Pending,
+    Ended,
 }
 #[derive(Debug, Serialize)]
 pub struct Progress {
@@ -839,6 +1005,84 @@ impl Coordinator {
         let lease = self.gate.lease()?;
         self.with(&lease, |s| s.session(id, keys))
     }
+    pub fn forget_ended(&self, id: &str, keys: &KeyPair) -> Result<(), String> {
+        let lease = self.gate.lease()?;
+        self.with(&lease, |s| s.forget_ended(id, keys))
+    }
+    pub async fn inspect(&self, id: &str, keys: &KeyPair) -> Result<Progress, String> {
+        self.owner.keys(keys)?;
+        let lease = self.gate.lease()?;
+        let _network = self.network.lock().await;
+        let mut task = self.with(&lease, |s| s.task(id, keys))?;
+        let Data::Login(login) = &task.stored.data else {
+            return Err(bad());
+        };
+        if matches!(
+            task.stored.stage,
+            Stage::Ended | Stage::Cancelled | Stage::Ineligible
+        ) {
+            return Ok(Progress {
+                condition: match task.stored.stage {
+                    Stage::Ended => Condition::Ended,
+                    Stage::Cancelled => Condition::Cancelled,
+                    _ => Condition::Ineligible,
+                },
+                task: task.view(),
+                http_status: None,
+            });
+        }
+        let current = self.with(&lease, |s| s.state(keys))?;
+        if self.owner.member(&current).ok() != Some(login.authority) {
+            task = self.with(&lease, |s| s.ineligible(&task.view(), keys))?;
+            return Ok(Progress {
+                task: task.view(),
+                condition: Condition::Ineligible,
+                http_status: None,
+            });
+        }
+        if !task.stored.started {
+            task = self.with(&lease, |s| s.begin(&task.view(), keys))?;
+        }
+        let credential = task.credential()?;
+        let request = Inspection::make(
+            &current,
+            &task.stored.mode,
+            id,
+            &credential,
+            &self.owner.device.device_id,
+            keys,
+        )
+        .map_err(|_| bad())?;
+        match self
+            .api
+            .inspect(&credential, &request, &current, &task.stored.mode, keys)
+            .await
+        {
+            Ok(response) => {
+                let (task, condition) =
+                    self.with(&lease, |s| s.apply_inspected(&task.view(), response, keys))?;
+                Ok(Progress {
+                    task: task.view(),
+                    condition,
+                    http_status: None,
+                })
+            }
+            Err(error) => {
+                // Failed inspection never becomes a terminal result, even 410.
+                self.with(&lease, |s| {
+                    if s.task(id, keys)?.view() != task.view() {
+                        return Err(bad());
+                    }
+                    Ok(())
+                })?;
+                Ok(Progress {
+                    task: task.view(),
+                    condition: Condition::Retry,
+                    http_status: error.status,
+                })
+            }
+        }
+    }
     pub async fn step(
         &self,
         id: &str,
@@ -853,6 +1097,7 @@ impl Coordinator {
             Stage::Complete => Some(Condition::Complete),
             Stage::Cancelled => Some(Condition::Cancelled),
             Stage::Ineligible => Some(Condition::Ineligible),
+            Stage::Ended => Some(Condition::Ended),
             _ => None,
         };
         if let Some(condition) = terminal {

@@ -389,6 +389,17 @@ fn accepted_identity_cannot_be_opened_after_verified_revocation() {
         Stage::Complete
     );
     assert!(store.session(&task.view().id, &f.second).is_err());
+    drop(store);
+    drop(trust);
+    let actor =
+        Coordinator::open_with_protection(&f.path, f.owner(false), &f.second, f.protection.clone())
+            .unwrap();
+    let result = tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(actor.inspect(&task.view().id, &f.second))
+        .unwrap();
+    assert_eq!(result.condition, Condition::Ineligible);
+    actor.forget_ended(&task.view().id, &f.second).unwrap();
 }
 #[tokio::test]
 async fn cancellation_lock_and_session_rotation_reject_late_lookup_without_followup() {
@@ -518,5 +529,189 @@ async fn late_unknown_login_never_returns_a_password_prompt_after_cancellation_o
         release.notify_one();
         assert!(step.await.unwrap().is_err());
         server.await.unwrap();
+    }
+}
+#[tokio::test]
+async fn only_bound_positive_closure_frees_the_pending_slot_and_survives_restart() {
+    use liteseal_shared::device_activation::{ClosedReason, Closure, Inspection, InspectionResult};
+    for http_error in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let f = Fixture::new(&format!("http://{}", listener.local_addr().unwrap()));
+        let actor = Coordinator::open_with_protection(
+            &f.path,
+            f.owner(false),
+            &f.second,
+            f.protection.clone(),
+        )
+        .unwrap();
+        let task = actor
+            .prepare_login("synthetic-user", f.mode.clone(), &f.second)
+            .unwrap();
+        assert!(actor.forget_ended(&task.id, &f.second).is_err());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = vec![];
+            let mut chunk = [0; 4096];
+            let body = loop {
+                let n = socket.read(&mut chunk).await.unwrap();
+                assert!(n > 0);
+                request.extend_from_slice(&chunk[..n]);
+                if let Some(end) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&request[..end]);
+                    let len: usize = headers
+                        .lines()
+                        .find_map(|l| {
+                            l.to_ascii_lowercase()
+                                .strip_prefix("content-length: ")
+                                .map(|n| n.parse().unwrap())
+                        })
+                        .unwrap();
+                    if request.len() >= end + 4 + len {
+                        break request[end + 4..end + 4 + len].to_vec();
+                    }
+                }
+            };
+            if http_error {
+                socket
+                    .write_all(
+                        b"HTTP/1.1 410 Gone\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    )
+                    .await
+                    .unwrap();
+            } else {
+                let request: Inspection = serde_json::from_slice(&body).unwrap();
+                let body = serde_json::to_vec(&InspectionResult::Closed {
+                    closure: Box::new(
+                        Closure::make(&request, Some([1; 32]), false, ClosedReason::Expired)
+                            .unwrap(),
+                    ),
+                })
+                .unwrap();
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+                socket.write_all(&body).await.unwrap();
+            }
+        });
+        let result = actor.inspect(&task.id, &f.second).await.unwrap();
+        server.await.unwrap();
+        drop(actor);
+        let actor = Coordinator::open_with_protection(
+            &f.path,
+            f.owner(false),
+            &f.second,
+            f.protection.clone(),
+        )
+        .unwrap();
+        let current = actor.views(&f.second).unwrap().pop().unwrap();
+        if http_error {
+            assert_eq!(result.condition, Condition::Retry);
+            assert_eq!(current.stage, Stage::Started);
+            assert!(current.closed.is_none());
+            assert!(actor
+                .prepare_login("synthetic-user", f.mode.clone(), &f.second)
+                .is_err());
+            assert!(actor.forget_ended(&task.id, &f.second).is_err());
+        } else {
+            assert_eq!(result.condition, Condition::Ended);
+            assert_eq!(current.stage, Stage::Ended);
+            assert_eq!(current.closed.unwrap().reason, ClosedReason::Expired);
+            assert!(actor
+                .prepare_login("synthetic-user", f.mode.clone(), &f.second)
+                .is_ok());
+            actor.forget_ended(&task.id, &f.second).unwrap();
+        }
+    }
+}
+#[tokio::test]
+async fn positive_closure_cannot_overwrite_concurrent_cancel_or_unlock_a_retired_lease() {
+    use liteseal_shared::device_activation::{ClosedReason, Closure, Inspection, InspectionResult};
+    for lock in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let f = Fixture::new(&format!("http://{}", listener.local_addr().unwrap()));
+        let actor = Arc::new(
+            Coordinator::open_with_protection(
+                &f.path,
+                f.owner(false),
+                &f.second,
+                f.protection.clone(),
+            )
+            .unwrap(),
+        );
+        let task = actor
+            .prepare_login("synthetic-user", f.mode.clone(), &f.second)
+            .unwrap();
+        let seen = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let seen_ = seen.clone();
+        let release_ = release.clone();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = vec![];
+            let mut chunk = [0; 4096];
+            let body = loop {
+                let n = socket.read(&mut chunk).await.unwrap();
+                assert!(n > 0);
+                bytes.extend_from_slice(&chunk[..n]);
+                if let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&bytes[..end]);
+                    let len: usize = headers
+                        .lines()
+                        .find_map(|l| {
+                            l.to_ascii_lowercase()
+                                .strip_prefix("content-length: ")
+                                .map(|n| n.parse().unwrap())
+                        })
+                        .unwrap();
+                    if bytes.len() >= end + 4 + len {
+                        break bytes[end + 4..end + 4 + len].to_vec();
+                    }
+                }
+            };
+            let request: Inspection = serde_json::from_slice(&body).unwrap();
+            let response = serde_json::to_vec(&InspectionResult::Closed {
+                closure: Box::new(
+                    Closure::make(&request, Some([1; 32]), false, ClosedReason::Expired).unwrap(),
+                ),
+            })
+            .unwrap();
+            seen_.notify_one();
+            release_.notified().await;
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        response.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            socket.write_all(&response).await.unwrap();
+        });
+        let actor_ = actor.clone();
+        let keys_ = f.second.clone();
+        let id = task.id.clone();
+        let inspect = tokio::spawn(async move { actor_.inspect(&id, &keys_).await });
+        seen.notified().await;
+        if lock {
+            actor.invalidate().unwrap();
+            actor.resume().unwrap();
+        } else {
+            actor.request_cancel(&task.id, &f.second).unwrap();
+        }
+        release.notify_one();
+        assert!(inspect.await.unwrap().is_err());
+        server.await.unwrap();
+        let current = actor.views(&f.second).unwrap().pop().unwrap();
+        assert_eq!(current.stage, Stage::Started);
+        assert!(current.closed.is_none());
     }
 }

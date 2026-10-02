@@ -240,6 +240,19 @@ impl ActivationCancel {
         device: &str,
         keys: &KeyPair,
     ) -> Result<Self> {
+        let mut cancel = Self::unsigned(state, mode, id_, token, device, keys)?;
+        cancel.signature = crypto::sign(&cancel.signing()?, &keys.ed25519_sk).map_err(|_| bad())?;
+        cancel.verify(state, mode, token)?;
+        Ok(cancel)
+    }
+    fn unsigned(
+        state: &DeviceState,
+        mode: &Enable,
+        id_: &str,
+        token: &str,
+        device: &str,
+        keys: &KeyPair,
+    ) -> Result<Self> {
         mode.verify_root(state.anchor())?;
         if token.len() < 32 || token.len() > 256 || token.bytes().any(|b| !b.is_ascii_graphic()) {
             return Err(bad());
@@ -250,7 +263,7 @@ impl ActivationCancel {
             .find(|m| m.device.device_id == device)
             .ok_or_else(bad)?;
         key_check(keys, &member.device)?;
-        let mut cancel = Self {
+        let cancel = Self {
             version: 1,
             id: id_.into(),
             origin: state.anchor().origin.clone(),
@@ -261,11 +274,10 @@ impl ActivationCancel {
             token_hash: hash(token.as_bytes()),
             signature: vec![0; 64],
         };
-        cancel.signature = crypto::sign(&cancel.signing()?, &keys.ed25519_sk).map_err(|_| bad())?;
-        cancel.verify(state, mode, token)?;
+        cancel.signing()?;
         Ok(cancel)
     }
-    pub fn verify(&self, state: &DeviceState, mode: &Enable, token: &str) -> Result<()> {
+    fn scope(&self, state: &DeviceState, mode: &Enable, token: &str) -> Result<()> {
         mode.verify_root(state.anchor())?;
         if self.origin != state.anchor().origin
             || self.account != state.anchor().account
@@ -278,12 +290,19 @@ impl ActivationCancel {
                 .members
                 .iter()
                 .any(|m| m.device == self.device && m.authorization_hash == self.authorization)
-            || !crypto::verify_with_public_key(
-                &self.signing()?,
-                &self.signature,
-                &self.device.signing_key,
-            )
-            .unwrap_or(false)
+        {
+            return Err(bad());
+        }
+        Ok(())
+    }
+    pub fn verify(&self, state: &DeviceState, mode: &Enable, token: &str) -> Result<()> {
+        self.scope(state, mode, token)?;
+        if !crypto::verify_with_public_key(
+            &self.signing()?,
+            &self.signature,
+            &self.device.signing_key,
+        )
+        .unwrap_or(false)
         {
             return Err(bad());
         }
@@ -294,6 +313,149 @@ impl ActivationCancel {
         data.extend_from_slice(&self.signature);
         Ok(hash(&data))
     }
+}
+/// Inspection signs a different domain and carries no usable cancel signature.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Inspection {
+    pub intent: ActivationCancel,
+    pub signature: Vec<u8>,
+}
+impl Inspection {
+    fn signing(&self) -> Result<Vec<u8>> {
+        if self.intent.signature != vec![0; 64] || self.signature.len() != 64 {
+            return Err(bad());
+        }
+        Ok(bytes(&(
+            "LiteSeal/inspect-device-session/v3",
+            hash(&self.intent.signing()?),
+        )))
+    }
+    pub fn make(
+        state: &DeviceState,
+        mode: &Enable,
+        id_: &str,
+        token: &str,
+        device: &str,
+        keys: &KeyPair,
+    ) -> Result<Self> {
+        let mut request = Self {
+            intent: ActivationCancel::unsigned(state, mode, id_, token, device, keys)?,
+            signature: vec![0; 64],
+        };
+        request.signature =
+            crypto::sign(&request.signing()?, &keys.ed25519_sk).map_err(|_| bad())?;
+        request.verify(state, mode, token)?;
+        Ok(request)
+    }
+    pub fn verify(&self, state: &DeviceState, mode: &Enable, token: &str) -> Result<()> {
+        self.intent.scope(state, mode, token)?;
+        if !crypto::verify_with_public_key(
+            &self.signing()?,
+            &self.signature,
+            &self.intent.device.signing_key,
+        )
+        .unwrap_or(false)
+        {
+            return Err(bad());
+        }
+        Ok(())
+    }
+    pub fn digest(&self) -> Result<[u8; 32]> {
+        let mut bytes = self.signing()?;
+        bytes.extend_from_slice(&self.signature);
+        Ok(hash(&bytes))
+    }
+}
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ClosedReason {
+    Cancelled,
+    Expired,
+    DirectoryChanged,
+    CredentialsChanged,
+    SessionEnded,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Closure {
+    pub version: u8,
+    pub id: String,
+    pub origin: String,
+    pub account: String,
+    pub device: DeviceIdentity,
+    pub authorization: [u8; 32],
+    pub mode: [u8; 32],
+    pub request: [u8; 32],
+    pub challenge: Option<[u8; 32]>,
+    pub accepted: bool,
+    pub reason: ClosedReason,
+}
+impl Closure {
+    pub fn make(
+        request: &Inspection,
+        challenge: Option<[u8; 32]>,
+        accepted: bool,
+        reason: ClosedReason,
+    ) -> Result<Self> {
+        let i = &request.intent;
+        let closed = Self {
+            version: 1,
+            id: i.id.clone(),
+            origin: i.origin.clone(),
+            account: i.account.clone(),
+            device: i.device.clone(),
+            authorization: i.authorization,
+            mode: i.mode,
+            request: request.digest()?,
+            challenge,
+            accepted,
+            reason,
+        };
+        closed.verify(request)?;
+        Ok(closed)
+    }
+    pub fn verify(&self, request: &Inspection) -> Result<()> {
+        let i = &request.intent;
+        if self.version != 1
+            || self.id != i.id
+            || self.origin != i.origin
+            || self.account != i.account
+            || self.device != i.device
+            || self.authorization != i.authorization
+            || self.mode != i.mode
+            || self.request != request.digest()?
+            || self.challenge == Some([0; 32])
+            || self.challenge.is_none() && self.reason != ClosedReason::Cancelled
+            || matches!(
+                self.reason,
+                ClosedReason::Cancelled | ClosedReason::Expired | ClosedReason::DirectoryChanged
+            ) && self.accepted
+            || self.reason == ClosedReason::SessionEnded && !self.accepted
+        {
+            return Err(bad());
+        }
+        Ok(())
+    }
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum InspectionResult {
+    Unknown {
+        request: [u8; 32],
+    },
+    Pending {
+        request: [u8; 32],
+        challenge: Box<Challenge>,
+    },
+    Accepted {
+        request: [u8; 32],
+        challenge: Box<Challenge>,
+        envelope: Envelope,
+    },
+    Closed {
+        closure: Box<Closure>,
+    },
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
@@ -481,6 +643,12 @@ impl Challenge {
     /// validation does not assert that the challenge is still live now.
     pub fn authenticate(&self, state: &DeviceState, mode: &Enable, keys: &KeyPair) -> Result<()> {
         self.verify_state(state, mode, self.issued_at)?;
+        self.open_secret(keys).map(|_| ())
+    }
+    /// Callers separately prove the directory checkpoint before persisting or
+    /// signing; this authenticates only the bound transport ciphertext.
+    pub fn authenticate_device(&self, keys: &KeyPair) -> Result<()> {
+        self.digest()?;
         self.open_secret(keys).map(|_| ())
     }
     fn open_secret(&self, keys: &KeyPair) -> Result<Secret> {

@@ -271,3 +271,49 @@ fn activation_cancellation_binds_all_fields_credential_and_original_phase() {
     let wire = serde_json::to_string(&cancel).unwrap();
     assert!(!wire.contains(token));
 }
+#[test]
+fn inspection_is_scoped_and_cannot_authorize_cancellation() {
+    let f = Fixture::new();
+    let token = "synthetic-inspection-credential-at-least-thirty-two";
+    let request = Inspection::make(&f.joined, &f.mode, REQUEST, token, SECOND, &f.second).unwrap();
+    request.verify(&f.joined, &f.mode, token).unwrap();
+    assert!(request.intent.verify(&f.joined, &f.mode, token).is_err());
+    let mut cancel = request.intent.clone();
+    cancel.signature = request.signature.clone();
+    assert!(cancel.verify(&f.joined, &f.mode, token).is_err());
+    assert!(request
+        .verify(
+            &f.joined,
+            &f.mode,
+            "synthetic-another-token-at-least-thirty-two"
+        )
+        .is_err());
+    let mut changed = request.clone();
+    changed.intent.id = MODE.into();
+    assert!(changed.verify(&f.joined, &f.mode, token).is_err());
+    changed = request.clone();
+    changed.intent.signature[0] = 1;
+    assert!(changed.verify(&f.joined, &f.mode, token).is_err());
+}
+#[test]
+fn closure_binds_original_inspection_and_distinguishes_accepted_from_cancelled() {
+    let f = Fixture::new();
+    let token = "synthetic-inspection-credential-at-least-thirty-two";
+    let request = Inspection::make(&f.joined, &f.mode, REQUEST, token, SECOND, &f.second).unwrap();
+    let closed = Closure::make(&request, Some([1; 32]), true, ClosedReason::SessionEnded).unwrap();
+    closed.verify(&request).unwrap();
+    let mut changed = closed.clone();
+    changed.request[0] ^= 1;
+    assert!(changed.verify(&request).is_err());
+    changed = closed.clone();
+    changed.device = f.joined.anchor().root.clone();
+    assert!(changed.verify(&request).is_err());
+    changed = closed.clone();
+    changed.reason = ClosedReason::Cancelled;
+    assert!(changed.verify(&request).is_err());
+    changed = closed.clone();
+    changed.version = 2;
+    assert!(changed.verify(&request).is_err());
+    assert!(Closure::make(&request, None, false, ClosedReason::Expired).is_err());
+    Closure::make(&request, None, false, ClosedReason::Cancelled).unwrap();
+}

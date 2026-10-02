@@ -3,13 +3,18 @@
 use liteseal_shared::{
     device_activation::{
         self as a, ActivationCancel, ActivationCancelResult, Challenge, Enable, EnableCancel,
-        EnableCancelResult, Envelope, Proof, Session, Start,
+        EnableCancelResult, Envelope, Inspection, InspectionResult, Proof, Session, Start,
     },
     trusted_device::{canonical_origin, Anchor, DeviceState},
 };
 use reqwest::{Method, RequestBuilder};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 pub mod jobs;
+/// Bound HTTP result, not a signed server statement or local commit receipt.
+pub struct Inspected {
+    pub(super) request: Inspection,
+    pub(super) result: InspectionResult,
+}
 #[derive(Debug)]
 pub struct ActivationError {
     pub status: Option<u16>,
@@ -312,6 +317,72 @@ impl ActivationApi {
             .await?
             .open(challenge, keys)
             .map_err(|_| invalid())
+    }
+    pub async fn inspect(
+        &self,
+        token: &str,
+        request: &Inspection,
+        state: &DeviceState,
+        mode: &Enable,
+        keys: &liteseal_shared::crypto::KeyPair,
+    ) -> Result<Inspected, ActivationError> {
+        self.root(state.anchor())?;
+        request.verify(state, mode, token).map_err(|_| invalid())?;
+        if request.intent.device.encryption_key != keys.public_key
+            || request.intent.device.signing_key != keys.ed25519_pk
+        {
+            return Err(invalid());
+        }
+        liteseal_shared::backup_crypto::validate_identity(
+            &keys.public_key,
+            &keys.secret_key,
+            &keys.ed25519_pk,
+            &keys.ed25519_sk,
+        )
+        .map_err(|_| invalid())?;
+        let result: InspectionResult = self
+            .send(self.body(
+                self.request(Method::POST, "/auth/v3/inspect", Some(token))?,
+                request,
+            )?)
+            .await?;
+        match &result {
+            InspectionResult::Unknown { request: digest }
+                if *digest == request.digest().map_err(|_| invalid())? => {}
+            InspectionResult::Closed { closure } => {
+                closure.verify(request).map_err(|_| invalid())?
+            }
+            InspectionResult::Pending {
+                request: digest,
+                challenge,
+            }
+            | InspectionResult::Accepted {
+                request: digest,
+                challenge,
+                ..
+            } => {
+                let i = &request.intent;
+                if *digest != request.digest().map_err(|_| invalid())?
+                    || challenge.id != i.id
+                    || challenge.origin != i.origin
+                    || challenge.account != i.account
+                    || challenge.device != i.device
+                    || challenge.authorization != i.authorization
+                    || challenge.mode != i.mode
+                {
+                    return Err(invalid());
+                }
+                challenge.authenticate_device(keys).map_err(|_| invalid())?;
+                if let InspectionResult::Accepted { envelope, .. } = &result {
+                    envelope.open(challenge, keys).map_err(|_| invalid())?;
+                }
+            }
+            _ => return Err(invalid()),
+        }
+        Ok(Inspected {
+            request: request.clone(),
+            result,
+        })
     }
     pub async fn prove_envelope(
         &self,

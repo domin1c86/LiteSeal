@@ -12,8 +12,8 @@ use liteseal_core::{
     },
 };
 use liteseal_shared::device_activation::{
-    ActivationCancel, ActivationCancelResult, Challenge as SessionChallenge, Enable, EnableCancel,
-    EnableCancelResult, Envelope, Proof, Start,
+    ActivationCancel, ActivationCancelResult, Challenge as SessionChallenge, ClosedReason, Enable,
+    EnableCancel, EnableCancelResult, Envelope, Inspection, InspectionResult, Proof, Start,
 };
 fn activation_actor(
     path: &std::path::Path,
@@ -346,6 +346,285 @@ async fn durable_cancel_after_unknown_proof_acceptance_recovers_the_original_ses
             .condition,
         ActivationCondition::Complete
     );
+}
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn signed_inspection_unknown_pending_and_wrong_scope_do_not_cancel_or_issue_sessions() {
+    let f = Fixture::start(true).await;
+    let root = f.account().await;
+    let (input, directory, mode) = attempt(&f, &root, &root.device).await;
+    let query = Inspection::make(
+        &directory,
+        &mode,
+        &input.id,
+        &input.request_token,
+        &root.device,
+        &root.keys,
+    )
+    .unwrap();
+    let lookup = |query: &Inspection| {
+        f.client
+            .post(format!("{}/auth/v3/inspect", f.url))
+            .bearer_auth(&input.request_token)
+            .json(query)
+            .send()
+    };
+    assert!(matches!(
+        lookup(&query)
+            .await
+            .unwrap()
+            .json::<InspectionResult>()
+            .await
+            .unwrap(),
+        InspectionResult::Unknown { .. }
+    ));
+    let challenge: SessionChallenge = begin(&f, &input).await.json().await.unwrap();
+    assert!(
+        matches!(lookup(&query).await.unwrap().json::<InspectionResult>().await.unwrap(), InspectionResult::Pending { challenge: actual, .. } if *actual == challenge)
+    );
+    let mut altered = query.clone();
+    altered.signature[0] ^= 1;
+    assert_eq!(
+        lookup(&altered).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        cancel(&f, &input, &query.intent).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM device_session_closures WHERE id=$1")
+        .bind(&input.id)
+        .fetch_one(f.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+    let proof = challenge
+        .answer(&directory, &mode, now(), &root.keys)
+        .unwrap();
+    assert_eq!(prove(&f, &input, &proof).await.status(), StatusCode::OK);
+    assert!(matches!(
+        lookup(&query)
+            .await
+            .unwrap()
+            .json::<InspectionResult>()
+            .await
+            .unwrap(),
+        InspectionResult::Accepted { .. }
+    ));
+}
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn expired_unknown_activation_closes_after_lost_response_and_explicit_new_request_succeeds() {
+    let (f, lose) = Fixture::start_with_loss().await;
+    let root = f.account().await;
+    let (join, directory) = authorized(&f, &root).await;
+    let mode = enable_mode(&f, &root).await;
+    let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
+    let path = work.0.join("expired-job.db");
+    let protection = Protection::isolated_test();
+    seed_activation(
+        &path,
+        &directory,
+        &activation_events(&f, &root).await,
+        &protection,
+    );
+    let device = &join.status.ticket.device.device_id;
+    let actor = activation_actor(&path, &directory, device, &join.keys, &protection);
+    let task = actor
+        .prepare_login(&root.username, mode.clone(), &join.keys)
+        .unwrap();
+    *lose.lock().unwrap() = Some("/auth/v3/begin".into());
+    assert_eq!(
+        actor
+            .step(&task.id, Some(&root.password), &join.keys)
+            .await
+            .unwrap()
+            .http_status,
+        Some(503)
+    );
+    sqlx::query("UPDATE device_session_attempts SET expires_at=$2 WHERE id=$1")
+        .bind(&task.id)
+        .bind(now() - 1)
+        .execute(f.db.pool())
+        .await
+        .unwrap();
+    *lose.lock().unwrap() = Some("/auth/v3/inspect".into());
+    assert_eq!(
+        actor
+            .inspect(&task.id, &join.keys)
+            .await
+            .unwrap()
+            .http_status,
+        Some(503)
+    );
+    drop(actor);
+    let actor = activation_actor(&path, &directory, device, &join.keys, &protection);
+    let result = actor.inspect(&task.id, &join.keys).await.unwrap();
+    assert_eq!(result.condition, ActivationCondition::Ended);
+    let closed = result.task.closed.unwrap();
+    assert_eq!(closed.reason, ClosedReason::Expired);
+    assert!(!closed.accepted);
+    let mut store = ActivationStore::open(
+        &path,
+        ActivationOwner::new(directory.anchor().clone(), device, &join.keys).unwrap(),
+        &join.keys,
+        protection.witness(&path).unwrap(),
+    )
+    .unwrap();
+    let original = store
+        .task(&task.id, &join.keys)
+        .unwrap()
+        .start(&root.password)
+        .unwrap();
+    assert_eq!(begin(&f, &original).await.status(), StatusCode::GONE);
+    drop(store);
+    let next = actor
+        .prepare_login(&root.username, mode, &join.keys)
+        .unwrap();
+    assert_ne!(next.id, task.id);
+    assert_eq!(
+        actor
+            .step(&next.id, Some(&root.password), &join.keys)
+            .await
+            .unwrap()
+            .condition,
+        ActivationCondition::Complete
+    );
+    assert!(actor.forget_ended(&next.id, &join.keys).is_err());
+    actor.forget_ended(&task.id, &join.keys).unwrap();
+    assert!(actor
+        .views(&join.keys)
+        .unwrap()
+        .iter()
+        .all(|v| v.id != task.id));
+}
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn ended_original_session_does_not_revoke_its_refreshed_successor_or_issue_another_session() {
+    let f = Fixture::start(true).await;
+    let root = f.account().await;
+    let (join, directory) = authorized(&f, &root).await;
+    let mode = enable_mode(&f, &root).await;
+    let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
+    let path = work.0.join("session-end.db");
+    let protection = Protection::isolated_test();
+    seed_activation(
+        &path,
+        &directory,
+        &activation_events(&f, &root).await,
+        &protection,
+    );
+    let device = &join.status.ticket.device.device_id;
+    let actor = activation_actor(&path, &directory, device, &join.keys, &protection);
+    let task = actor
+        .prepare_login(&root.username, mode, &join.keys)
+        .unwrap();
+    assert_eq!(
+        actor
+            .step(&task.id, Some(&root.password), &join.keys)
+            .await
+            .unwrap()
+            .condition,
+        ActivationCondition::Complete
+    );
+    let session = actor.session(&task.id, &join.keys).unwrap();
+    let access = auth::service::generate_token();
+    let refresh = auth::service::generate_token();
+    assert!(f
+        .db
+        .rotate_refresh_session(
+            &auth::service::hash_token(&session.refresh_token),
+            &auth::service::hash_token(&access),
+            &auth::service::hash_token(&refresh)
+        )
+        .await
+        .unwrap()
+        .is_some());
+    let result = actor.inspect(&task.id, &join.keys).await.unwrap();
+    assert_eq!(result.condition, ActivationCondition::Ended);
+    assert_eq!(
+        result.task.closed.unwrap().reason,
+        ClosedReason::SessionEnded
+    );
+    assert!(actor.session(&task.id, &join.keys).is_err());
+    assert!(f
+        .db
+        .validate_access_token(&auth::service::hash_token(&access), device)
+        .await
+        .unwrap()
+        .is_some());
+    assert_eq!(
+        actor.inspect(&task.id, &join.keys).await.unwrap().condition,
+        ActivationCondition::Ended
+    );
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions WHERE device_id=$1")
+        .bind(device)
+        .fetch_one(f.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(count, 2);
+}
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn password_and_directory_change_close_unaccepted_originals_without_resigning_or_recalling_sessions(
+) {
+    for password_change in [false, true] {
+        let (f, lose) = Fixture::start_with_loss().await;
+        let root = f.account().await;
+        let mode = enable_mode(&f, &root).await;
+        let directory = state(&f, &root).await;
+        let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
+        let path = work.0.join("changed-job.db");
+        let protection = Protection::isolated_test();
+        seed_activation(&path, &directory, &[], &protection);
+        let actor = activation_actor(&path, &directory, &root.device, &root.keys, &protection);
+        let task = actor
+            .prepare_login(&root.username, mode, &root.keys)
+            .unwrap();
+        *lose.lock().unwrap() = Some("/auth/v3/begin".into());
+        assert_eq!(
+            actor
+                .step(&task.id, Some(&root.password), &root.keys)
+                .await
+                .unwrap()
+                .http_status,
+            Some(503)
+        );
+        if password_change {
+            sqlx::query("UPDATE users SET password_hash=$2 WHERE id=$1")
+                .bind(&root.id)
+                .bind(auth::service::hash_password("synthetic-changed-password").unwrap())
+                .execute(f.db.pool())
+                .await
+                .unwrap();
+        } else {
+            let (_, current) = authorized(&f, &root).await;
+            seed_activation(
+                &path,
+                &current,
+                &activation_events(&f, &root).await,
+                &protection,
+            );
+        }
+        let result = actor.inspect(&task.id, &root.keys).await.unwrap();
+        assert_eq!(result.condition, ActivationCondition::Ended);
+        assert_eq!(
+            result.task.closed.unwrap().reason,
+            if password_change {
+                ClosedReason::CredentialsChanged
+            } else {
+                ClosedReason::DirectoryChanged
+            }
+        );
+        assert!(actor.session(&task.id, &root.keys).is_err());
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM device_session_closures WHERE id=$1")
+                .bind(&task.id)
+                .fetch_one(f.db.pool())
+                .await
+                .unwrap();
+        assert_eq!(count, 1);
+    }
 }
 async fn state(f: &Fixture, root: &Account) -> DeviceState {
     let page = f

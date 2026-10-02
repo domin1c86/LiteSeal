@@ -12,8 +12,9 @@ use axum::{
 };
 use liteseal_shared::{
     device_activation::{
-        self as a, ActivationCancel, ActivationCancelResult, Challenge, Enable, EnableCancel,
-        EnableCancelResult, Envelope, Proof, Session, Start,
+        self as a, ActivationCancel, ActivationCancelResult, Challenge, ClosedReason, Closure,
+        Enable, EnableCancel, EnableCancelResult, Envelope, Inspection, InspectionResult, Proof,
+        Session, Start,
     },
     direct_message::Directory,
 };
@@ -46,6 +47,13 @@ CREATE TABLE device_session_cancellations (
  token_hash TEXT NOT NULL,digest BYTEA NOT NULL CHECK(octet_length(digest)=32)
 );
 CREATE INDEX device_session_cancel_user ON device_session_cancellations(user_id);
+";
+pub const CLOSURE_MIGRATION: &str = "
+CREATE TABLE device_session_closures (
+ id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),device_id TEXT NOT NULL,
+ token_hash TEXT NOT NULL,payload BYTEA NOT NULL CHECK(octet_length(payload)<=8192)
+);
+CREATE INDEX device_session_closure_user ON device_session_closures(user_id);
 ";
 fn storage(_: sqlx::Error) -> Failure {
     (
@@ -117,6 +125,7 @@ pub fn router() -> Router<AppState> {
         .route("/users/:user/device_messaging", get(status))
         .route("/auth/v3/begin", post(begin))
         .route("/auth/v3/cancel", post(cancel_activation))
+        .route("/auth/v3/inspect", post(inspect))
         .route("/auth/v3/:id", get(challenge))
         .route("/auth/v3/:id/proof", post(prove))
         .layer(DefaultBodyLimit::max(a::MAX_WIRE))
@@ -285,6 +294,9 @@ async fn fenced(tx: &mut Tx<'_>, table: &str, id: &str) -> Result<bool, Failure>
         }
         "device_session_cancellations" => {
             "SELECT EXISTS(SELECT 1 FROM device_session_cancellations WHERE id=$1)"
+        }
+        "device_session_closures" => {
+            "SELECT EXISTS(SELECT 1 FROM device_session_closures WHERE id=$1)"
         }
         _ => return Err(bad()),
     };
@@ -489,6 +501,9 @@ async fn begin(
     if fenced(&mut tx, "device_session_cancellations", &input.id).await? {
         return Err(gone());
     }
+    if fenced(&mut tx, "device_session_closures", &input.id).await? {
+        return Err(gone());
+    }
     let old=sqlx::query("SELECT user_id,device_id,token_hash,password_state,challenge,expires_at FROM device_session_attempts WHERE id=$1").bind(&input.id).fetch_optional(&mut *tx).await.map_err(storage)?;
     let challenge = if let Some(row) = old {
         if row.get::<String, _>("user_id") != user.id
@@ -529,6 +544,200 @@ async fn begin(
     tx.commit().await.map_err(storage)?;
     Ok(Json(challenge))
 }
+async fn close_inspected(
+    tx: &mut Tx<'_>,
+    request: &Inspection,
+    token_hash: &str,
+    challenge: Option<[u8; 32]>,
+    accepted: bool,
+    reason: ClosedReason,
+) -> Result<InspectionResult, Failure> {
+    let closed = Closure::make(request, challenge, accepted, reason).map_err(|_| bad())?;
+    sqlx::query("INSERT INTO device_session_closures(id,user_id,device_id,token_hash,payload) VALUES($1,$2,$3,$4,$5)")
+        .bind(&closed.id).bind(&closed.account).bind(&closed.device.device_id).bind(token_hash).bind(encode(&closed)?)
+        .execute(&mut **tx).await.map_err(storage)?;
+    Ok(InspectionResult::Closed {
+        closure: Box::new(closed),
+    })
+}
+async fn inspect(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<Inspection>,
+) -> Result<Json<InspectionResult>, Failure> {
+    let realm = origin(&state)?;
+    let intent = &request.intent;
+    let token = bearer(&headers)?;
+    let mut tx = state.db.pool().begin().await.map_err(storage)?;
+    trusted_devices::lock(&mut tx, &intent.account).await?;
+    let (directory, mode) = live(
+        &mut tx,
+        &intent.account,
+        &intent.device.device_id,
+        intent.authorization,
+        realm,
+    )
+    .await?;
+    request
+        .verify(&directory, &mode, token)
+        .map_err(|_| denied())?;
+    let token_hash = service::hash_token(token);
+    let old = sqlx::query(
+        "SELECT user_id,device_id,token_hash,payload FROM device_session_closures WHERE id=$1",
+    )
+    .bind(&intent.id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(storage)?;
+    if let Some(old) = old {
+        if old.get::<String, _>("user_id") != intent.account
+            || old.get::<String, _>("device_id") != intent.device.device_id
+            || old.get::<String, _>("token_hash") != token_hash
+        {
+            return Err(conflict());
+        }
+        let mut closed: Closure =
+            serde_json::from_slice(&old.get::<Vec<u8>, _>("payload")).map_err(|_| denied())?;
+        // The facts are immutable; bind each response to this signed inspection.
+        closed.request = request.digest().map_err(|_| bad())?;
+        closed.verify(&request).map_err(|_| denied())?;
+        tx.commit().await.map_err(storage)?;
+        return Ok(Json(InspectionResult::Closed {
+            closure: Box::new(closed),
+        }));
+    }
+    let row = sqlx::query("SELECT a.*,u.password_hash FROM device_session_attempts a JOIN users u ON u.id=a.user_id WHERE a.id=$1 FOR UPDATE OF a")
+        .bind(&intent.id).fetch_optional(&mut *tx).await.map_err(storage)?;
+    let mut challenge = None;
+    if let Some(row) = &row {
+        if row.get::<String, _>("user_id") != intent.account
+            || row.get::<String, _>("device_id") != intent.device.device_id
+            || row.get::<String, _>("token_hash") != token_hash
+        {
+            return Err(conflict());
+        }
+        let saved: Challenge =
+            serde_json::from_slice(&row.get::<Vec<u8>, _>("challenge")).map_err(|_| denied())?;
+        if saved.origin != realm
+            || saved.account != intent.account
+            || saved.device != intent.device
+            || saved.authorization != intent.authorization
+            || saved.mode != intent.mode
+        {
+            return Err(conflict());
+        }
+        saved.digest().map_err(|_| denied())?;
+        challenge = Some(saved);
+    }
+    let fence = sqlx::query(
+        "SELECT user_id,device_id,token_hash FROM device_session_cancellations WHERE id=$1",
+    )
+    .bind(&intent.id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(storage)?;
+    let result = if let Some(fence) = fence {
+        if fence.get::<String, _>("user_id") != intent.account
+            || fence.get::<String, _>("device_id") != intent.device.device_id
+            || fence.get::<String, _>("token_hash") != token_hash
+        {
+            return Err(conflict());
+        }
+        if row
+            .as_ref()
+            .is_some_and(|r| r.get::<Option<Vec<u8>>, _>("proof_hash").is_some())
+        {
+            return Err(denied());
+        }
+        close_inspected(
+            &mut tx,
+            &request,
+            &token_hash,
+            challenge
+                .as_ref()
+                .map(|c| c.digest())
+                .transpose()
+                .map_err(|_| bad())?,
+            false,
+            ClosedReason::Cancelled,
+        )
+        .await?
+    } else if let (Some(row), Some(challenge)) = (row, challenge) {
+        let accepted = row.get::<Option<Vec<u8>>, _>("proof_hash").is_some();
+        let digest = Some(challenge.digest().map_err(|_| bad())?);
+        if row.get::<String, _>("password_state") != row.get::<String, _>("password_hash") {
+            close_inspected(
+                &mut tx,
+                &request,
+                &token_hash,
+                digest,
+                accepted,
+                ClosedReason::CredentialsChanged,
+            )
+            .await?
+        } else if accepted {
+            let session = sqlx::query("SELECT user_id,device_id,v3_authority,revoked,refresh_expires_at>now() AS live FROM sessions WHERE id=$1")
+                .bind(row.get::<String,_>("session_id")).fetch_one(&mut *tx).await.map_err(storage)?;
+            if session.get::<String, _>("user_id") != intent.account
+                || session.get::<String, _>("device_id") != intent.device.device_id
+                || session.get::<Option<Vec<u8>>, _>("v3_authority").as_deref()
+                    != Some(intent.authorization.as_slice())
+            {
+                return Err(denied());
+            }
+            if session.get::<bool, _>("revoked") || !session.get::<bool, _>("live") {
+                close_inspected(
+                    &mut tx,
+                    &request,
+                    &token_hash,
+                    digest,
+                    true,
+                    ClosedReason::SessionEnded,
+                )
+                .await?
+            } else {
+                let envelope: Envelope = serde_json::from_slice(&row.get::<Vec<u8>, _>("response"))
+                    .map_err(|_| denied())?;
+                InspectionResult::Accepted {
+                    request: request.digest().map_err(|_| bad())?,
+                    challenge: Box::new(challenge),
+                    envelope,
+                }
+            }
+        } else if row.get::<i64, _>("expires_at") <= now() || challenge.expires_at <= now() {
+            close_inspected(
+                &mut tx,
+                &request,
+                &token_hash,
+                digest,
+                false,
+                ClosedReason::Expired,
+            )
+            .await?
+        } else if challenge.verify_state(&directory, &mode, now()).is_err() {
+            close_inspected(
+                &mut tx,
+                &request,
+                &token_hash,
+                digest,
+                false,
+                ClosedReason::DirectoryChanged,
+            )
+            .await?
+        } else {
+            InspectionResult::Pending {
+                request: request.digest().map_err(|_| bad())?,
+                challenge: Box::new(challenge),
+            }
+        }
+    } else {
+        InspectionResult::Unknown {
+            request: request.digest().map_err(|_| bad())?,
+        }
+    };
+    tx.commit().await.map_err(storage)?;
+    Ok(Json(result))
+}
 async fn attempt<'a>(
     state: &'a AppState,
     headers: &HeaderMap,
@@ -548,6 +757,9 @@ async fn attempt<'a>(
     let mut tx = state.db.pool().begin().await.map_err(storage)?;
     trusted_devices::lock(&mut tx, &user).await?;
     if fenced(&mut tx, "device_session_cancellations", id).await? {
+        return Err(gone());
+    }
+    if fenced(&mut tx, "device_session_closures", id).await? {
         return Err(gone());
     }
     let row=sqlx::query("SELECT a.*,u.password_hash FROM device_session_attempts a JOIN users u ON u.id=a.user_id WHERE a.id=$1 AND a.token_hash=$2 FOR UPDATE OF a").bind(id).bind(service::hash_token(bearer(headers)?)).fetch_optional(&mut *tx).await.map_err(storage)?.ok_or_else(unauthorized)?;
