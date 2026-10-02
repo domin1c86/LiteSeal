@@ -42,6 +42,239 @@ fn response(body: &[u8]) -> Vec<u8> {
     wire
 }
 #[tokio::test]
+async fn refresh_sdk_recovers_bound_encrypted_session_and_rejects_invalid_replies() {
+    use liteseal_shared::device_activation::{refresh as r, Challenge, Session};
+    for case in 0..5 {
+        let (listener, url, state, keys) = setup().await;
+        let mode = Enable::make(&state, &uuid::Uuid::new_v4().to_string(), &keys).unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        let original = Session {
+            id: uuid::Uuid::new_v4().to_string(),
+            account: state.anchor().account.clone(),
+            device: state.anchor().root.device_id.clone(),
+            authorization: state.anchor().hash().try_into().unwrap(),
+            mode: mode.digest().unwrap(),
+            access_token: "synthetic-original-access".into(),
+            refresh_token: "synthetic-original-refresh".into(),
+            expires_at: now - 1,
+            refresh_expires_at: now + 120_000,
+        };
+        let request = r::Start::make(
+            &state,
+            &mode,
+            &original,
+            &uuid::Uuid::new_v4().to_string(),
+            now,
+            &keys,
+        )
+        .unwrap();
+        let challenge = Challenge::make(&state, &mode, &request.id, &original.device, now).unwrap();
+        let next = Session {
+            id: uuid::Uuid::new_v4().to_string(),
+            account: original.account.clone(),
+            device: original.device.clone(),
+            authorization: original.authorization,
+            mode: original.mode,
+            access_token: "synthetic-next-access".into(),
+            refresh_token: "synthetic-next-refresh".into(),
+            expires_at: now + 60_000,
+            refresh_expires_at: now + 120_000,
+        };
+        let envelope = r::Envelope::seal(&request, &challenge, &next).unwrap();
+        let accepted = r::Reply::Accepted {
+            request: request.digest().unwrap(),
+            challenge: Box::new(challenge),
+            envelope,
+        };
+        let mut body = serde_json::to_value(&accepted).unwrap();
+        match case {
+            1 => body["request"] = serde_json::json!(vec![0; 32]),
+            2 => body["envelope"]["encrypted"][30] = serde_json::json!(256),
+            3 => body["unknown"] = true.into(),
+            4 => {
+                body["challenge"]["device"]["device_id"] =
+                    serde_json::json!(uuid::Uuid::new_v4().to_string())
+            }
+            _ => {}
+        }
+        let expected_request = request.clone();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut wire = Vec::new();
+            let mut chunk = [0; 4096];
+            let (start, len) = loop {
+                let n = socket.read(&mut chunk).await.unwrap();
+                assert!(n > 0);
+                wire.extend_from_slice(&chunk[..n]);
+                if let Some(end) = wire.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let header = String::from_utf8_lossy(&wire[..end]).to_lowercase();
+                    assert!(header.starts_with("post /auth/v3/refresh/begin "));
+                    assert!(header.contains("authorization: bearer synthetic-original-refresh"));
+                    let len = header
+                        .lines()
+                        .find_map(|l| l.strip_prefix("content-length:"))
+                        .unwrap()
+                        .trim()
+                        .parse::<usize>()
+                        .unwrap();
+                    break (end + 4, len);
+                }
+            };
+            while wire.len() < start + len {
+                let n = socket.read(&mut chunk).await.unwrap();
+                assert!(n > 0);
+                wire.extend_from_slice(&chunk[..n]);
+            }
+            assert_eq!(
+                serde_json::from_slice::<r::Start>(&wire[start..start + len]).unwrap(),
+                expected_request
+            );
+            socket
+                .write_all(&response(&serde_json::to_vec(&body).unwrap()))
+                .await
+                .unwrap();
+        });
+        let result = ActivationApi::new(&url)
+            .unwrap()
+            .begin_refresh(&request, &original, &state, &mode, &keys)
+            .await;
+        if case == 0 {
+            let observation = result.unwrap();
+            assert_eq!(observation.request(), &request);
+            let session = observation.into_session().unwrap();
+            assert_eq!(session.id, next.id);
+            assert_eq!(session.access_token, next.access_token);
+        } else {
+            assert!(result.is_err());
+        }
+        server.await.unwrap();
+    }
+}
+#[tokio::test]
+async fn refresh_sdk_rejects_wrong_origin_capability_and_private_keys_before_network() {
+    use liteseal_shared::device_activation::{refresh as r, Session};
+    let (listener, url, state, keys) = setup().await;
+    let mode = Enable::make(&state, &uuid::Uuid::new_v4().to_string(), &keys).unwrap();
+    let now = chrono::Utc::now().timestamp_millis();
+    let mut original = Session {
+        id: uuid::Uuid::new_v4().to_string(),
+        account: state.anchor().account.clone(),
+        device: state.anchor().root.device_id.clone(),
+        authorization: state.anchor().hash().try_into().unwrap(),
+        mode: mode.digest().unwrap(),
+        access_token: "synthetic-old-access".into(),
+        refresh_token: "synthetic-old-refresh".into(),
+        expires_at: now - 1,
+        refresh_expires_at: now + 120_000,
+    };
+    let request = r::Start::make(
+        &state,
+        &mode,
+        &original,
+        &uuid::Uuid::new_v4().to_string(),
+        now,
+        &keys,
+    )
+    .unwrap();
+    let api = ActivationApi::new(&url).unwrap();
+    let other = crypto::generate_keypair().unwrap();
+    assert!(api
+        .begin_refresh(&request, &original, &state, &mode, &other)
+        .await
+        .is_err());
+    let wrong_origin = ActivationApi::new("http://127.0.0.1:1").unwrap();
+    assert!(wrong_origin
+        .begin_refresh(&request, &original, &state, &mode, &keys)
+        .await
+        .is_err());
+    original.refresh_token = "wrong-refresh".into();
+    assert!(api
+        .begin_refresh(&request, &original, &state, &mode, &keys)
+        .await
+        .is_err());
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(30), listener.accept())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn refresh_proof_transport_requires_exact_saved_challenge_and_accepted_ciphertext() {
+    use liteseal_shared::device_activation::{refresh as r, Challenge, Session};
+    for case in 0..3 {
+        let (listener, url, state, keys) = setup().await;
+        let mode = Enable::make(&state, &uuid::Uuid::new_v4().to_string(), &keys).unwrap();
+        let at = chrono::Utc::now().timestamp_millis();
+        let original = Session {
+            id: uuid::Uuid::new_v4().to_string(),
+            account: state.anchor().account.clone(),
+            device: state.anchor().root.device_id.clone(),
+            authorization: state.anchor().hash().try_into().unwrap(),
+            mode: mode.digest().unwrap(),
+            access_token: "synthetic-old-access".into(),
+            refresh_token: "synthetic-old-refresh".into(),
+            expires_at: at - 1,
+            refresh_expires_at: at + 120_000,
+        };
+        let request = r::Start::make(
+            &state,
+            &mode,
+            &original,
+            &uuid::Uuid::new_v4().to_string(),
+            at,
+            &keys,
+        )
+        .unwrap();
+        let challenge = Challenge::make(&state, &mode, &request.id, &original.device, at).unwrap();
+        let proof = challenge.answer(&state, &mode, at, &keys).unwrap();
+        let returned = if case == 1 {
+            Challenge::make(&state, &mode, &request.id, &original.device, at).unwrap()
+        } else {
+            challenge.clone()
+        };
+        let next = Session {
+            id: uuid::Uuid::new_v4().to_string(),
+            account: original.account.clone(),
+            device: original.device.clone(),
+            authorization: original.authorization,
+            mode: original.mode,
+            access_token: "synthetic-next-access".into(),
+            refresh_token: "synthetic-next-refresh".into(),
+            expires_at: at + 60_000,
+            refresh_expires_at: at + 120_000,
+        };
+        let envelope = r::Envelope::seal(&request, &returned, &next).unwrap();
+        let refresh_reply = if case == 2 {
+            r::Reply::Pending {
+                request: request.digest().unwrap(),
+                challenge: Box::new(returned),
+            }
+        } else {
+            r::Reply::Accepted {
+                request: request.digest().unwrap(),
+                challenge: Box::new(returned),
+                envelope,
+            }
+        };
+        let server = tokio::spawn(reply(
+            listener,
+            response(&serde_json::to_vec(&refresh_reply).unwrap()),
+        ));
+        let result = ActivationApi::new(&url)
+            .unwrap()
+            .prove_refresh(
+                &request, &proof, &challenge, &original, &state, &mode, &keys,
+            )
+            .await;
+        assert_eq!(result.is_ok(), case == 0);
+        if case == 0 {
+            assert_eq!(result.unwrap().into_session().unwrap().id, next.id);
+        }
+        server.await.unwrap();
+    }
+}
+#[tokio::test]
 async fn mode_status_requires_exact_boolean_root_signature_and_known_fields() {
     for case in 0..4 {
         let (listener, url, state, keys) = setup().await;

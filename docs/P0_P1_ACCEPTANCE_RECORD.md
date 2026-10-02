@@ -1,5 +1,15 @@
 # P0/P1 验收记录（待执行）
 
+## 2026-10-02 续期协议、事务与 SDK 短测
+
+基线 `d0a73dd` 和改动工作树，汇总 `session-refresh-summary-2026-10-02.json`，报告位于 `target/test-results/`；只使用合成或既有隔离测试入口。
+
+- `session-refresh-engineering-2026-10-02.txt`：完整 18 Node/Electron、299 普通 Rust、0 失败，71 数据库用例 ignored；格式、全 workspace/all-targets Clippy 与核心 FFI 通过。共享激活最终 14 项，其中新增 2 项覆盖根/加入设备的原会话签名、窗口、双密钥、错刷新能力/私钥、原请求修改、原会话移植、未知字段、密文损坏和加密结果无明文令牌。SDK 最终 15 项，新增 3 项覆盖真实合成 HTTP 的路径/原刷新 bearer/原请求、正确 Accepted 解密、错摘要/字段/设备/密文、发送前错原点/能力/私钥零网络，以及 proof 的不同原挑战/非 Accepted 拒绝。合成 HTTP 不代表真实数据库事务。
+- `session-refresh-server-compile-2026-10-02.txt` 为服务测试编译通过。新增两项真实 PostgreSQL 测试待执行：begin/proof 成功回包丢失、重复/并发原证明得到同一后继和密文、过期访问仍可续期、仅一次消费、家族退出不影响原设备独立会话；多原编号并发只成功一次、同编号改签冲突、错 bearer、过期原刷新与签名设备撤销不产生新会话。既有“原激活结束不撤销有效后继”改为真实新续期路径；旧通用 v3 刷新拒绝另验。这些只有编译证据，不计业务通过。
+- `session-refresh-build-2026-10-02.txt`：UI/Electron/Rust 生产构建通过，release 1 分 08 秒，既有链接警告保留。此前编译中的测试借用/函数名遮蔽错误已修正，早期 Clippy 失败日志保留，最终工程绿结果为准。Windows 映射文件限制使首次格式写入失败，按相同 rustfmt 输出补齐后最终格式检查通过。没有 UI 或 IPC 变更，不重跑模拟截图来证明自动续期。
+- `session-refresh-database-preflight-2026-10-02.txt`：Docker 引擎管道仍不存在，专用 PostgreSQL/真实多人未执行，没有读取或修改业务库。没有新长期测试，不停止既有后台，不推送或纳入未跟踪预览/src-tauri。
+- 只交付共享格式、服务持久结果与 SDK 网络原语。客户端原任务持久化、完整元数据/CAS、重开恢复、自动调度和界面仍待实现，不据此关闭自动续期、退出生命周期或 T23。系统/双 Windows、磁盘故障和独立审查继续待验收。
+
 ## 2026-10-02 原设备正式会话恢复短测
 
 基线 `b05f18b` 与改动工作树，汇总 `root-session-summary-2026-10-02.json`；报告在 `target/test-results/`，没有真实身份或凭据。

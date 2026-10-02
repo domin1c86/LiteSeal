@@ -11,6 +11,7 @@ use sha2::{Digest, Sha256};
 pub const MAX_WIRE: usize = 16 * 1024;
 pub const LIFETIME: i64 = 10 * 60 * 1000;
 pub const MODE_QUERY_LIFETIME: i64 = 120_000;
+pub mod refresh;
 type Result<T> = std::result::Result<T, &'static str>;
 fn bad() -> &'static str {
     "设备激活身份、阶段或密钥证明不匹配"

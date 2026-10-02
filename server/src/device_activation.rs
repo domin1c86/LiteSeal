@@ -23,6 +23,7 @@ use serde::Serialize;
 use sqlx::{Postgres, Row, Transaction};
 type Tx<'a> = Transaction<'a, Postgres>;
 type Failure = (StatusCode, String);
+pub mod refresh;
 pub const MIGRATION:&str="
 CREATE TABLE device_messaging_modes (
  user_id TEXT PRIMARY KEY REFERENCES users(id),root_device TEXT NOT NULL REFERENCES devices(id),
@@ -121,6 +122,7 @@ fn encode(value: &impl Serialize) -> Result<Vec<u8>, Failure> {
 }
 pub fn router() -> Router<AppState> {
     Router::new()
+        .merge(refresh::router())
         .route("/devices/messaging/enable", post(enable))
         .route("/devices/messaging/cancel", post(cancel_enable))
         .route("/users/:user/device_messaging", get(status))
@@ -981,7 +983,7 @@ async fn prove(
         sqlx::query("INSERT INTO devices(id,user_id,name,public_key,ed25519_pk,created_at,last_seen) VALUES($1,$2,$3,$4,$5,now(),now())").bind(&session.device).bind(&session.account).bind(name).bind(challenge.device.encryption_key.as_slice()).bind(challenge.device.signing_key.as_slice()).execute(&mut *tx).await.map_err(storage)?;
         sqlx::query("INSERT INTO device_keys(id,device_id,public_key,ed25519_pk,created_at) VALUES($1,$2,$3,$4,now())").bind(uuid::Uuid::new_v4().to_string()).bind(&session.device).bind(challenge.device.encryption_key.as_slice()).bind(challenge.device.signing_key.as_slice()).execute(&mut *tx).await.map_err(storage)?;
     }
-    sqlx::query("INSERT INTO sessions(id,user_id,device_id,access_token_hash,refresh_token_hash,expires_at,refresh_expires_at,created_at,v3_authority) VALUES($1,$2,$3,$4,$5,to_timestamp($6::DOUBLE PRECISION/1000),to_timestamp($7::DOUBLE PRECISION/1000),now(),$8)").bind(&session.id).bind(&session.account).bind(&session.device).bind(service::hash_token(&session.access_token)).bind(service::hash_token(&session.refresh_token)).bind(session.expires_at).bind(session.refresh_expires_at).bind(session.authorization.as_slice()).execute(&mut *tx).await.map_err(storage)?;
+    sqlx::query("INSERT INTO sessions(id,user_id,device_id,access_token_hash,refresh_token_hash,expires_at,refresh_expires_at,created_at,v3_authority,v3_family) VALUES($1,$2,$3,$4,$5,to_timestamp($6::DOUBLE PRECISION/1000),to_timestamp($7::DOUBLE PRECISION/1000),now(),$8,$1)").bind(&session.id).bind(&session.account).bind(&session.device).bind(service::hash_token(&session.access_token)).bind(service::hash_token(&session.refresh_token)).bind(session.expires_at).bind(session.refresh_expires_at).bind(session.authorization.as_slice()).execute(&mut *tx).await.map_err(storage)?;
     let envelope = Envelope::seal(&challenge, &session).map_err(|_| denied())?;
     sqlx::query(
         "UPDATE device_session_attempts SET proof_hash=$2,response=$3,session_id=$4 WHERE id=$1",

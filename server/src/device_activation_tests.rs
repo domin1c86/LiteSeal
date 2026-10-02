@@ -15,6 +15,310 @@ use liteseal_shared::device_activation::{
     ActivationCancel, ActivationCancelResult, Challenge as SessionChallenge, ClosedReason, Enable,
     EnableCancel, EnableCancelResult, Envelope, Inspection, InspectionResult, Proof, Start,
 };
+async fn refresh_session(
+    f: &Fixture,
+    session: &liteseal_shared::device_activation::Session,
+    state: &DeviceState,
+    mode: &Enable,
+    keys: &crypto::KeyPair,
+) -> liteseal_shared::device_activation::Session {
+    use liteseal_shared::device_activation::refresh::{Reply, Start as RefreshStart};
+    let request = RefreshStart::make(
+        state,
+        mode,
+        session,
+        &uuid::Uuid::new_v4().to_string(),
+        now(),
+        keys,
+    )
+    .unwrap();
+    let api = liteseal_core::trusted_devices::activation::ActivationApi::new(&f.url).unwrap();
+    let observed = api
+        .begin_refresh(&request, session, state, mode, keys)
+        .await
+        .unwrap();
+    let Reply::Pending { challenge, .. } = observed.reply() else {
+        panic!("first refresh must be pending")
+    };
+    let proof = challenge.answer(state, mode, now(), keys).unwrap();
+    api.prove_refresh(&request, &proof, challenge, session, state, mode, keys)
+        .await
+        .unwrap()
+        .into_session()
+        .unwrap()
+}
+
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn refresh_lost_begin_and_proof_replay_exact_successor_and_logout_ends_family() {
+    use liteseal_shared::device_activation::refresh::{Reply, Start as RefreshStart};
+    let (f, lose) = Fixture::start_with_loss().await;
+    let root = f.account().await;
+    let (join, directory) = authorized(&f, &root).await;
+    let session = super::direct_message_tests::verified_activation(
+        &f,
+        &root,
+        &join.status.ticket.device.device_id,
+        &join.keys,
+    )
+    .await;
+    let mode = enable_mode(&f, &root).await;
+    sqlx::query("UPDATE sessions SET expires_at=now()-interval '1 second' WHERE id=$1")
+        .bind(&session.id)
+        .execute(f.db.pool())
+        .await
+        .unwrap();
+    let request = RefreshStart::make(
+        &directory,
+        &mode,
+        &session,
+        &uuid::Uuid::new_v4().to_string(),
+        now(),
+        &join.keys,
+    )
+    .unwrap();
+    let begin_refresh = || {
+        f.client
+            .post(format!("{}/auth/v3/refresh/begin", f.url))
+            .bearer_auth(&session.refresh_token)
+            .json(&request)
+            .send()
+    };
+    *lose.lock().unwrap() = Some("/auth/v3/refresh/begin".into());
+    assert_eq!(
+        begin_refresh().await.unwrap().status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    let pending: Reply = begin_refresh().await.unwrap().json().await.unwrap();
+    let Reply::Pending { challenge, .. } = &pending else {
+        panic!("pending")
+    };
+    assert_eq!(
+        begin_refresh()
+            .await
+            .unwrap()
+            .json::<Reply>()
+            .await
+            .unwrap(),
+        pending
+    );
+    let proof = challenge
+        .answer(&directory, &mode, now(), &join.keys)
+        .unwrap();
+    let path = format!("/auth/v3/refresh/{}/proof", request.id);
+    let send_proof = || {
+        f.client
+            .post(format!("{}{}", f.url, path))
+            .bearer_auth(&session.refresh_token)
+            .json(&proof)
+            .send()
+    };
+    *lose.lock().unwrap() = Some(path.clone());
+    assert_eq!(
+        send_proof().await.unwrap().status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    let (one, two) = tokio::join!(send_proof(), send_proof());
+    let one = one.unwrap();
+    let two = two.unwrap();
+    assert_eq!(one.status(), StatusCode::OK);
+    assert_eq!(two.status(), StatusCode::OK);
+    let accepted: Reply = one.json().await.unwrap();
+    assert_eq!(two.json::<Reply>().await.unwrap(), accepted);
+    assert_eq!(
+        begin_refresh()
+            .await
+            .unwrap()
+            .json::<Reply>()
+            .await
+            .unwrap(),
+        accepted
+    );
+    let successor = accepted
+        .verify(&request, &directory, &mode, &join.keys)
+        .unwrap()
+        .unwrap();
+    assert!(f
+        .db
+        .validate_access_token(
+            &auth::service::hash_token(&successor.access_token),
+            &session.device
+        )
+        .await
+        .unwrap()
+        .is_some());
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions WHERE device_id=$1")
+        .bind(&session.device)
+        .fetch_one(f.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(count, 2);
+    let family: String = sqlx::query_scalar("SELECT v3_family FROM sessions WHERE id=$1")
+        .bind(&successor.id)
+        .fetch_one(f.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(family, session.id);
+    // Explicit logout with the retired original access capability closes a
+    // successor whose successful response may never have reached the client.
+    f.db.revoke_session(&auth::service::hash_token(&session.access_token))
+        .await
+        .unwrap();
+    assert!(f
+        .db
+        .validate_access_token(
+            &auth::service::hash_token(&successor.access_token),
+            &session.device
+        )
+        .await
+        .unwrap()
+        .is_none());
+    assert_eq!(begin_refresh().await.unwrap().status(), StatusCode::GONE);
+    let root_revoked: bool =
+        sqlx::query_scalar("SELECT revoked FROM sessions WHERE access_token_hash=$1")
+            .bind(auth::service::hash_token(&root.token))
+            .fetch_one(f.db.pool())
+            .await
+            .unwrap();
+    assert!(!root_revoked);
+}
+
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn refresh_conflicts_revocation_expiration_and_parallel_consumption_preserve_originals() {
+    use liteseal_shared::device_activation::refresh::{Reply, Start as RefreshStart};
+    for case in 0..4 {
+        let f = Fixture::start(true).await;
+        let root = f.account().await;
+        let (join, directory) = authorized(&f, &root).await;
+        let session = super::direct_message_tests::verified_activation(
+            &f,
+            &root,
+            &join.status.ticket.device.device_id,
+            &join.keys,
+        )
+        .await;
+        let mode = enable_mode(&f, &root).await;
+        let request = RefreshStart::make(
+            &directory,
+            &mode,
+            &session,
+            &uuid::Uuid::new_v4().to_string(),
+            now(),
+            &join.keys,
+        )
+        .unwrap();
+        let begin = |request: &RefreshStart| {
+            f.client
+                .post(format!("{}/auth/v3/refresh/begin", f.url))
+                .bearer_auth(&session.refresh_token)
+                .json(request)
+                .send()
+        };
+        let response = begin(&request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let pending: Reply = response.json().await.unwrap();
+        let Reply::Pending { challenge, .. } = &pending else {
+            panic!("pending")
+        };
+        let proof = challenge
+            .answer(&directory, &mode, now(), &join.keys)
+            .unwrap();
+        let send = || {
+            f.client
+                .post(format!("{}/auth/v3/refresh/{}/proof", f.url, request.id))
+                .bearer_auth(&session.refresh_token)
+                .json(&proof)
+                .send()
+        };
+        let changed = RefreshStart::make(
+            &directory,
+            &mode,
+            &session,
+            &request.id,
+            request.issued_at + 1,
+            &join.keys,
+        )
+        .unwrap();
+        assert_eq!(
+            begin(&changed).await.unwrap().status(),
+            StatusCode::CONFLICT
+        );
+        match case {
+            0 => {
+                let another = RefreshStart::make(
+                    &directory,
+                    &mode,
+                    &session,
+                    &uuid::Uuid::new_v4().to_string(),
+                    now(),
+                    &join.keys,
+                )
+                .unwrap();
+                let pending: Reply = begin(&another).await.unwrap().json().await.unwrap();
+                let Reply::Pending { challenge, .. } = &pending else {
+                    panic!("pending")
+                };
+                let other_proof = challenge
+                    .answer(&directory, &mode, now(), &join.keys)
+                    .unwrap();
+                let other = f
+                    .client
+                    .post(format!("{}/auth/v3/refresh/{}/proof", f.url, another.id))
+                    .bearer_auth(&session.refresh_token)
+                    .json(&other_proof)
+                    .send();
+                let (one, two) = tokio::join!(send(), other);
+                let codes = [one.unwrap().status(), two.unwrap().status()];
+                assert!(codes.contains(&StatusCode::OK) && codes.contains(&StatusCode::GONE));
+            }
+            1 => {
+                let response = f
+                    .client
+                    .post(format!("{}/auth/v3/refresh/{}/proof", f.url, request.id))
+                    .bearer_auth("wrong-refresh")
+                    .json(&proof)
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+                assert_eq!(send().await.unwrap().status(), StatusCode::OK);
+            }
+            2 => {
+                sqlx::query(
+                    "UPDATE sessions SET refresh_expires_at=now()-interval '1 second' WHERE id=$1",
+                )
+                .bind(&session.id)
+                .execute(f.db.pool())
+                .await
+                .unwrap();
+                assert_eq!(send().await.unwrap().status(), StatusCode::GONE);
+            }
+            3 => {
+                let event = make_event(
+                    &directory,
+                    uuid::Uuid::new_v4().to_string(),
+                    DeviceAction::Revoke {
+                        device_id: session.device.clone(),
+                        grant_hash: session.authorization.to_vec(),
+                    },
+                    now(),
+                    &root.keys,
+                )
+                .unwrap();
+                assert_eq!(f.submit(&root, &event).await.status(), StatusCode::OK);
+                assert_eq!(send().await.unwrap().status(), StatusCode::FORBIDDEN);
+            }
+            _ => unreachable!(),
+        }
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions WHERE device_id=$1")
+            .bind(&session.device)
+            .fetch_one(f.db.pool())
+            .await
+            .unwrap();
+        assert_eq!(count, if case <= 1 { 2 } else { 1 });
+    }
+}
 fn activation_actor(
     path: &std::path::Path,
     directory: &DeviceState,
@@ -221,7 +525,7 @@ async fn durable_activation_cancellation_reopens_after_lost_begin_and_cancel_res
     let device = &join.status.ticket.device.device_id;
     let actor = activation_actor(&path, &directory, device, &join.keys, &protection);
     let task = actor
-        .prepare_login(&root.username, mode, &join.keys)
+        .prepare_login(&root.username, mode.clone(), &join.keys)
         .unwrap();
     *lose.lock().unwrap() = Some("/auth/v3/begin".into());
     assert_eq!(
@@ -517,7 +821,7 @@ async fn ended_original_session_does_not_revoke_its_refreshed_successor_or_issue
     let device = &join.status.ticket.device.device_id;
     let actor = activation_actor(&path, &directory, device, &join.keys, &protection);
     let task = actor
-        .prepare_login(&root.username, mode, &join.keys)
+        .prepare_login(&root.username, mode.clone(), &join.keys)
         .unwrap();
     assert_eq!(
         actor
@@ -528,18 +832,7 @@ async fn ended_original_session_does_not_revoke_its_refreshed_successor_or_issue
         ActivationCondition::Complete
     );
     let session = actor.session(&task.id, &join.keys).unwrap();
-    let access = auth::service::generate_token();
-    let refresh = auth::service::generate_token();
-    assert!(f
-        .db
-        .rotate_refresh_session(
-            &auth::service::hash_token(&session.refresh_token),
-            &auth::service::hash_token(&access),
-            &auth::service::hash_token(&refresh)
-        )
-        .await
-        .unwrap()
-        .is_some());
+    let rotated = refresh_session(&f, &session, &directory, &mode, &join.keys).await;
     let result = actor.inspect(&task.id, &join.keys).await.unwrap();
     assert_eq!(result.condition, ActivationCondition::Ended);
     assert_eq!(
@@ -549,7 +842,7 @@ async fn ended_original_session_does_not_revoke_its_refreshed_successor_or_issue
     assert!(actor.session(&task.id, &join.keys).is_err());
     assert!(f
         .db
-        .validate_access_token(&auth::service::hash_token(&access), device)
+        .validate_access_token(&auth::service::hash_token(&rotated.access_token), device)
         .await
         .unwrap()
         .is_some());
@@ -1472,17 +1765,13 @@ async fn real_activation_lost_responses_return_same_encrypted_session_and_refres
     let (one, two) = tokio::join!(refresh(), refresh());
     let one = one.unwrap();
     let two = two.unwrap();
-    assert!([one.status(), two.status()].contains(&StatusCode::OK));
-    assert!([one.status(), two.status()].contains(&StatusCode::UNAUTHORIZED));
-    let rotated: serde_json::Value = if one.status() == StatusCode::OK {
-        one.json().await.unwrap()
-    } else {
-        two.json().await.unwrap()
-    };
+    assert_eq!(one.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(two.status(), StatusCode::UNAUTHORIZED);
+    let rotated = refresh_session(&f, &session, &state, &mode, &join.keys).await;
     assert!(f
         .db
         .validate_access_token(
-            &auth::service::hash_token(rotated["access_token"].as_str().unwrap()),
+            &auth::service::hash_token(&rotated.access_token),
             &session.device
         )
         .await

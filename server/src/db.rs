@@ -82,6 +82,7 @@ fn migrations() -> &'static [(i64, &'static str)] {
         (18, crate::device_activation::MIGRATION),
         (19, crate::device_activation::CANCEL_MIGRATION),
         (20, crate::device_activation::CLOSURE_MIGRATION),
+        (21, crate::device_activation::refresh::MIGRATION),
     ]
 }
 
@@ -266,12 +267,18 @@ impl Db {
         refresh_token_hash: &str,
     ) -> Result<Option<(String, String)>, sqlx::Error> {
         let mut tx = self.pool.begin().await?;
-        let owner =
-            sqlx::query("SELECT user_id,device_id FROM sessions WHERE refresh_token_hash=$1")
-                .bind(old_refresh_token_hash)
-                .fetch_optional(&mut *tx)
-                .await?;
+        let owner = sqlx::query(
+            "SELECT user_id,device_id,v3_authority FROM sessions WHERE refresh_token_hash=$1",
+        )
+        .bind(old_refresh_token_hash)
+        .fetch_optional(&mut *tx)
+        .await?;
         let Some(owner) = owner else { return Ok(None) };
+        // V3 requires the durable dual-key refresh path. Legacy JSON rotation
+        // must never consume a capability whose response cannot be recovered.
+        if owner.get::<Option<Vec<u8>>, _>("v3_authority").is_some() {
+            return Ok(None);
+        }
         let user: String = owner.get("user_id");
         let device: String = owner.get("device_id");
         sqlx::query("SELECT id FROM users WHERE id=$1 FOR UPDATE")
@@ -350,18 +357,38 @@ impl Db {
     }
 
     pub async fn revoke_session(&self, access_token_hash: &str) -> Result<(), sqlx::Error> {
-        sqlx::query("UPDATE sessions SET revoked = true WHERE access_token_hash = $1")
-            .bind(access_token_hash)
-            .execute(&self.pool)
+        let mut tx = self.pool.begin().await?;
+        let owner =
+            sqlx::query("SELECT user_id,id,v3_family FROM sessions WHERE access_token_hash=$1")
+                .bind(access_token_hash)
+                .fetch_optional(&mut *tx)
+                .await?;
+        let Some(owner) = owner else { return Ok(()) };
+        let user: String = owner.get("user_id");
+        let id: String = owner.get("id");
+        let family: Option<String> = owner.get("v3_family");
+        sqlx::query("SELECT id FROM users WHERE id=$1 FOR UPDATE")
+            .bind(&user)
+            .fetch_one(&mut *tx)
             .await?;
+        // A lost refresh response must not create a session surviving logout.
+        // Independent login families and other devices remain independent.
+        sqlx::query("UPDATE sessions SET revoked=true WHERE user_id=$1 AND (id=$2 OR ($3::TEXT IS NOT NULL AND v3_family=$3))").bind(user).bind(id).bind(family).execute(&mut *tx).await?;
+        tx.commit().await?;
         Ok(())
     }
 
     pub async fn revoke_all_sessions(&self, user_id: &str) -> Result<(), sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT id FROM users WHERE id=$1 FOR UPDATE")
+            .bind(user_id)
+            .fetch_one(&mut *tx)
+            .await?;
         sqlx::query("UPDATE sessions SET revoked = true WHERE user_id = $1")
             .bind(user_id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
+        tx.commit().await?;
         Ok(())
     }
 

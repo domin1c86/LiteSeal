@@ -5,6 +5,115 @@ const ROOT: &str = "22222222-2222-4222-8222-222222222222";
 const SECOND: &str = "33333333-3333-4333-8333-333333333333";
 const MODE: &str = "44444444-4444-4444-8444-444444444444";
 const REQUEST: &str = "55555555-5555-4555-8555-555555555555";
+fn refresh_session(state: &DeviceState, mode: &Enable, device: &str, new: bool) -> Session {
+    let member = liteseal_shared::direct_message::Directory::from_state(state)
+        .members
+        .into_iter()
+        .find(|m| m.device.device_id == device)
+        .unwrap();
+    Session {
+        id: if new {
+            "66666666-6666-4666-8666-666666666666"
+        } else {
+            "77777777-7777-4777-8777-777777777777"
+        }
+        .into(),
+        account: state.anchor().account.clone(),
+        device: device.into(),
+        authorization: member.authorization_hash,
+        mode: mode.digest().unwrap(),
+        access_token: if new {
+            "synthetic-next-access"
+        } else {
+            "synthetic-original-access"
+        }
+        .into(),
+        refresh_token: if new {
+            "synthetic-next-refresh"
+        } else {
+            "synthetic-original-refresh"
+        }
+        .into(),
+        expires_at: 200_000,
+        refresh_expires_at: 300_000,
+    }
+}
+#[test]
+fn refresh_request_and_dual_key_challenge_bind_root_and_secondary_original_sessions() {
+    let f = Fixture::new();
+    for (device, keys) in [(ROOT, &f.root), (SECOND, &f.second)] {
+        let session = refresh_session(&f.joined, &f.mode, device, false);
+        let request =
+            refresh::Start::make(&f.joined, &f.mode, &session, REQUEST, 100_000, keys).unwrap();
+        request.bind_original(&session).unwrap();
+        request.verify_state(&f.joined, &f.mode, 100_001).unwrap();
+        assert!(request
+            .verify_state(&f.joined, &f.mode, request.expires_at)
+            .is_err());
+        let challenge = Challenge::make(&f.joined, &f.mode, REQUEST, device, 100_001).unwrap();
+        request
+            .verify_challenge(&challenge, &f.joined, &f.mode, keys)
+            .unwrap();
+        let proof = challenge.answer(&f.joined, &f.mode, 100_002, keys).unwrap();
+        proof.verify(&challenge).unwrap();
+        let other = crypto::generate_keypair().unwrap();
+        assert!(challenge
+            .answer(&f.joined, &f.mode, 100_002, &other)
+            .is_err());
+        let mut changed = request.clone();
+        changed.refresh_hash[0] ^= 1;
+        assert!(changed.verify_state(&f.joined, &f.mode, 100_001).is_err());
+        let mut bad_session = refresh_session(&f.joined, &f.mode, device, false);
+        bad_session.refresh_token = "wrong-original".into();
+        assert!(request.bind_original(&bad_session).is_err());
+        assert!(!serde_json::to_string(&request)
+            .unwrap()
+            .contains(&session.refresh_token));
+    }
+}
+#[test]
+fn refresh_signature_and_reply_reject_transplants_unknown_fields_and_ciphertext_damage() {
+    let f = Fixture::new();
+    let original = refresh_session(&f.joined, &f.mode, SECOND, false);
+    let request =
+        refresh::Start::make(&f.joined, &f.mode, &original, REQUEST, 100_000, &f.second).unwrap();
+    let challenge = Challenge::make(&f.joined, &f.mode, REQUEST, SECOND, 100_001).unwrap();
+    let next = refresh_session(&f.joined, &f.mode, SECOND, true);
+    let envelope = refresh::Envelope::seal(&request, &challenge, &next).unwrap();
+    let reply = refresh::Reply::Accepted {
+        request: request.digest().unwrap(),
+        challenge: Box::new(challenge.clone()),
+        envelope: envelope.clone(),
+    };
+    let opened = reply
+        .verify(&request, &f.joined, &f.mode, &f.second)
+        .unwrap()
+        .unwrap();
+    assert_eq!(opened.id, next.id);
+    let public = serde_json::to_string(&reply).unwrap();
+    assert!(!public.contains(&next.access_token) && !public.contains(&next.refresh_token));
+    let mut bad = envelope.clone();
+    bad.encrypted[20] ^= 1;
+    assert!(bad.open(&request, &challenge, &f.second).is_err());
+    let mut old = refresh_session(&f.joined, &f.mode, SECOND, false);
+    old.id = "88888888-8888-4888-8888-888888888888".into();
+    let another =
+        refresh::Start::make(&f.joined, &f.mode, &old, REQUEST, 100_000, &f.second).unwrap();
+    let mut transplanted = envelope;
+    transplanted.request = another.digest().unwrap();
+    assert!(transplanted.open(&another, &challenge, &f.second).is_err());
+    for field in ["token", "refresh_token", "unknown", "secret_key"] {
+        let mut body = serde_json::to_value(&request).unwrap();
+        body[field] = true.into();
+        assert!(serde_json::from_value::<refresh::Start>(body).is_err());
+    }
+    assert!(reply.verify(&request, &f.joined, &f.mode, &f.root).is_err());
+    let mut expired = original;
+    expired.refresh_expires_at = 99_999;
+    assert!(
+        refresh::Start::make(&f.joined, &f.mode, &expired, REQUEST, 100_000, &f.second).is_err()
+    );
+}
 struct Fixture {
     root: crypto::KeyPair,
     second: crypto::KeyPair,

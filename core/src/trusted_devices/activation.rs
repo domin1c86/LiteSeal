@@ -15,6 +15,7 @@ use reqwest::{Method, RequestBuilder};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 pub mod jobs;
 pub mod legacy;
+pub mod refresh;
 /// Bound HTTP result, not a signed server statement or local commit receipt.
 pub struct Inspected {
     pub(super) request: Inspection,
