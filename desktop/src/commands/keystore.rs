@@ -33,15 +33,38 @@ fn missing_identity(error: &str) -> bool {
     error.contains("No saved keypair")
 }
 
+fn public_view(state: &AppState, data: &KeystoreData) -> Result<IdentityView, String> {
+    let mut result = view(data, true);
+    if super::root_messaging::admission(state)?
+        == liteseal_core::trusted_devices::activation::legacy::Admission::V3
+    {
+        // A nonsecret presence marker preserves the existing UI session shape.
+        // It is never accepted by the legacy save, refresh or relay endpoints.
+        result.token = if data.token.is_empty() {
+            String::new()
+        } else {
+            "rust-owned-session".into()
+        };
+        result.refresh_token = if data.refresh_token.is_empty() {
+            String::new()
+        } else {
+            "rust-owned-session".into()
+        };
+    }
+    Ok(result)
+}
+
 pub fn load_identity(state: &AppState) -> Result<IdentityView, String> {
-    Ok(view(&state.identity()?, true))
+    let _commit = state.backup_commit.lock().map_err(|_| "身份读取锁不可用")?;
+    public_view(state, &state.identity()?)
 }
 
 /// Returns the saved identity, or generates keys for a new account. Any other
 /// keystore error is returned so a damaged identity is never overwritten.
 pub fn prepare_identity(state: &AppState) -> Result<IdentityView, String> {
+    let _commit = state.backup_commit.lock().map_err(|_| "身份读取锁不可用")?;
     match state.identity() {
-        Ok(saved) => Ok(view(&saved, true)),
+        Ok(saved) => public_view(state, &saved),
         Err(error) if missing_identity(&error) => Ok(view(&state.pending_keys()?, false)),
         Err(error) => Err(error),
     }
@@ -57,6 +80,12 @@ pub fn save_session(
     server_url: String,
     state: &AppState,
 ) -> Result<IdentityView, String> {
+    if state.identity().is_ok()
+        && super::root_messaging::admission(state)?
+            == liteseal_core::trusted_devices::activation::legacy::Admission::V3
+    {
+        return Err("原设备单聊 v3 凭据仅由正式会话恢复保存，原密钥未修改".into());
+    }
     let keys = match state.identity() {
         Ok(saved) if saved.user_id == user_id => saved,
         Ok(_) => return Err("账号与本机历史不匹配，原密钥未修改。".to_string()),

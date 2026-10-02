@@ -31,6 +31,23 @@ pub enum Command {
     CancelRootMessaging { id: String },
     #[serde(rename = "forget_root_messaging")]
     ForgetRootMessaging { id: String },
+    #[serde(rename = "get_root_session")]
+    GetRootSession {},
+    #[serde(rename = "prepare_root_session")]
+    PrepareRootSession { username: String },
+    #[serde(rename = "root_session_step")]
+    RootSessionStep {
+        id: String,
+        password: Option<String>,
+    },
+    #[serde(rename = "inspect_root_session")]
+    InspectRootSession { id: String },
+    #[serde(rename = "cancel_root_session")]
+    CancelRootSession { id: String },
+    #[serde(rename = "forget_root_session")]
+    ForgetRootSession { id: String },
+    #[serde(rename = "save_root_session")]
+    SaveRootSession { id: String },
     #[serde(rename = "get_join_activation")]
     GetJoinActivation {
         #[serde(rename = "profileId")]
@@ -943,6 +960,27 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
         None
     };
     let result = match command {
+        Command::GetRootSession {} => {
+            serde_json::to_value(commands::root_session::snapshot(state)?)
+        }
+        Command::PrepareRootSession { username } => {
+            serde_json::to_value(commands::root_session::prepare(state, username).await?)
+        }
+        Command::RootSessionStep { id, password } => {
+            serde_json::to_value(commands::root_session::step(state, id, password).await?)
+        }
+        Command::InspectRootSession { id } => {
+            serde_json::to_value(commands::root_session::inspect(state, id).await?)
+        }
+        Command::CancelRootSession { id } => {
+            serde_json::to_value(commands::root_session::cancel(state, id)?)
+        }
+        Command::ForgetRootSession { id } => {
+            serde_json::to_value(commands::root_session::forget(state, id)?)
+        }
+        Command::SaveRootSession { id } => {
+            serde_json::to_value(commands::root_session::save(state, id).await?)
+        }
         Command::GetRootMessaging {} => {
             serde_json::to_value(commands::root_messaging::snapshot(state)?)
         }
@@ -1803,16 +1841,29 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
             public_key,
             ed25519_pk,
             device_id,
-        } => serde_json::to_value(
-            commands::auth::login(
-                username, password, server_url, public_key, ed25519_pk, device_id,
+        } => {
+            if state.identity().is_ok()
+                && commands::root_messaging::admission(state)?
+                    == liteseal_core::trusted_devices::activation::legacy::Admission::V3
+            {
+                return Err("原设备已启用单聊 v3，请使用原设备正式会话恢复".into());
+            }
+            serde_json::to_value(
+                commands::auth::login(
+                    username, password, server_url, public_key, ed25519_pk, device_id,
+                )
+                .await?,
             )
-            .await?,
-        ),
+        }
         Command::RefreshSession {
             server_url,
             refresh_token,
         } => {
+            if commands::root_messaging::admission(state)?
+                == liteseal_core::trusted_devices::activation::legacy::Admission::V3
+            {
+                return Err("请使用原设备正式会话恢复；单聊 v3 自动续期尚未接入".into());
+            }
             serde_json::to_value(commands::auth::refresh_session(server_url, refresh_token).await?)
         }
         Command::ConnectRelay {

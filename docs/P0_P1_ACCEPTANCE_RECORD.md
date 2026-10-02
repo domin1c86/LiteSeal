@@ -1,5 +1,18 @@
 # P0/P1 验收记录（待执行）
 
+## 2026-10-02 原设备正式会话恢复短测
+
+基线 `b05f18b` 与改动工作树，汇总 `root-session-summary-2026-10-02.json`；报告在 `target/test-results/`，没有真实身份或凭据。
+
+- `root-session-final-engineering-2026-10-02.txt`：完整 `npm test` 为 18 Node/Electron、294 普通 Rust、0 失败；69 PostgreSQL 用例 ignored，未计入通过。格式、全 workspace/all-targets Clippy、核心 FFI 通过。早期工程日志与专项保留，最终文件覆盖 SDK 正面事实和首次登录兼容修正；初次测试夹具缺少 begin、引用类型错误已修正，不计初次失败为通过。
+- 原设备桌面 `root_messaging.rs` 最终 8 项中新增 5 项，合成 TCP、随机隔离 SQLite/DPAPI/原生目标：七命令拒绝密钥/令牌/路径/mode/档案注入及 enable 类型任务；原正式会话成功保存只改变凭据，私钥、公钥、账号、设备和服务器一致，重开可读；锁定后解锁、退出、另一次凭据保存及错误刷新摘要均拒绝迟到结果，当前身份文件不改；退出后无 bearer 查询原签名配置，原编号准备/取消/整理；原启用响应未知时保存实际已启用事实，原启用任务保持；无已绑定身份的旧首次登录仍能请求服务器，不创建身份文件。成功后的 load/prepare 页面结果只有存在标记，旧保存/刷新/中继拒绝。这些不等于真实 PostgreSQL 或双机验收。
+- 核心 `activation_api_test.rs` 最终 12 项，新 binding 用例的 8 个分支：正确两凭据和原会话绑定成功并更新服务器期限；错访问凭据、刷新凭据、编号、账号、设备、授权和启用摘要均拒绝。原点、范围、过期、未知字段与签名引导既有回归通过。
+- `devices-ui-uM41s1/result.json`：实际 Electron Chromium、模拟业务 API、69 秒，浅深色/宽窄四配置各 9 原设备、11 加入、7 激活、6 切换、5 原会话用例，0 renderer 错误/横向溢出。登录入口、显式原任务和保存、口令清除、unknown 不重建、取消竞争与锁定迟到拒绝通过，最终窄浅截图已核对；此前 `devices-ui-T4k3FJ` 65 秒报告保留。主进程工程用例验证七接口系统锁/档案窗口拒绝，成功保存不会拒绝自身结果且失效之前的授权回包。
+- `root-session-build-2026-10-02.txt`：UI/Electron/Rust 生产构建通过，Rust release 45.60 秒，既有 LNK4098/LNK4099 保留；最初受沙箱限制的 esbuild EPERM 后在批准的本地执行环境构建成功。两个设备 UI 脚本语法检查通过，群 UI `group-ui-IXkXEN` 宽窄各 16 项通过。
+- 数据库预检 `root-session-database-preflight-2026-10-02.txt`：Docker 引擎管道缺失，专用 PostgreSQL 与真实多人本轮未执行；未读取/修改业务库或凭据文件。只做短测，未运行新长期、停止旧后台、修改真实资料、推送或纳入未跟踪预览/src-tauri。
+- 最终风格回归 `ui-style-0umxYs/result.json`：72 张截图入口通过、0 错误；`root-session-style-2026-10-02.txt` 保留实际输出。模拟风格与群 UI 不替代原生系统或真实服务验收。
+- 本轮没有新服务端迁移或线格式。正常档案选择/自动刷新、v3 后台/消息界面、媒体/操作、新备份与历史授权仍需实现；磁盘满/中断、双 Windows、系统交互和独立审查继续待验收，T23 不关闭。
+
 ## 2026-10-02 根设备切换产品接线与发送门禁短测
 
 - `root-messaging-engineering-2026-10-02.txt`：完整 `npm test` 18 Node/Electron、288 普通 Rust、0失败，69数据库用例 ignored，不计通过。新两个库单测验证切换等待持有的旧读许可、等待期间没有启用任务、暂停后解锁仍拒绝原准备，以及 dispatcher 在写许可释放后才重新检查旧发送准入。这个共享门禁是当前sidecar内存范围，不是所有任意SDK进程的跨进程发送锁。

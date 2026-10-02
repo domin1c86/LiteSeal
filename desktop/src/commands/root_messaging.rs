@@ -30,12 +30,13 @@ struct Cached {
     binding: String,
     jobs: Arc<jobs::Coordinator>,
 }
-struct Context {
-    binding: String,
-    epoch: u64,
-    anchor: Anchor,
-    keys: KeyPair,
-    jobs: Arc<jobs::Coordinator>,
+pub(super) struct Context {
+    pub(super) binding: String,
+    pub(super) epoch: u64,
+    pub(super) anchor: Anchor,
+    pub(super) keys: KeyPair,
+    pub(super) jobs: Arc<jobs::Coordinator>,
+    pub(super) saved: KeystoreData,
 }
 #[derive(Serialize)]
 pub struct Snapshot {
@@ -84,7 +85,7 @@ pub(crate) fn resume(state: &AppState) -> Result<(), String> {
     r.suspended = false;
     Ok(())
 }
-fn context(state: &AppState) -> Result<Context, String> {
+pub(super) fn context(state: &AppState) -> Result<Context, String> {
     let saved = state.identity()?;
     let bound = binding(&saved)?;
     let (anchor, keys) = root(&saved)?;
@@ -105,7 +106,7 @@ fn context(state: &AppState) -> Result<Context, String> {
             &keys,
             state.device_protection.clone(),
         )?);
-        jobs.renew_session(saved.token)?;
+        jobs.renew_session(saved.token.clone())?;
         runtime.cache = Some(Cached {
             binding: bound.clone(),
             jobs,
@@ -117,9 +118,13 @@ fn context(state: &AppState) -> Result<Context, String> {
         anchor,
         keys,
         jobs: runtime.cache.as_ref().unwrap().jobs.clone(),
+        saved,
     })
 }
-fn current<'a>(state: &'a AppState, ctx: &Context) -> Result<MutexGuard<'a, Runtime>, String> {
+pub(super) fn current<'a>(
+    state: &'a AppState,
+    ctx: &Context,
+) -> Result<MutexGuard<'a, Runtime>, String> {
     let runtime = state.root_messaging_runtime.lock().map_err(|_| bad())?;
     available(&runtime)?;
     if runtime.epoch != ctx.epoch

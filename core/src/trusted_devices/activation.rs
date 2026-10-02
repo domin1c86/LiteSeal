@@ -24,6 +24,26 @@ pub struct CheckedSession {
     pub(crate) info: SessionInfo,
     pub(crate) token_hash: [u8; 32],
 }
+impl CheckedSession {
+    /// Consume the transport provenance and bind both credentials to the exact
+    /// authenticated operational session. No token/secret DTO is produced.
+    pub fn bind(self, mut session: Session) -> Result<Session, String> {
+        use sha2::{Digest, Sha256};
+        if self.token_hash != Sha256::digest(session.access_token.as_bytes()).as_slice()
+            || self.info.refresh_hash != Sha256::digest(session.refresh_token.as_bytes()).as_slice()
+            || self.info.id != session.id
+            || self.info.account != session.account
+            || self.info.device.device_id != session.device
+            || self.info.authorization != session.authorization
+            || self.info.mode != session.mode
+        {
+            return Err("正式会话凭据与已验证的原结果不匹配".into());
+        }
+        session.expires_at = self.info.expires_at;
+        session.refresh_expires_at = self.info.refresh_expires_at;
+        Ok(session)
+    }
+}
 /// Origin-bound configuration observation. It cannot be supplied as a page
 /// field or constructed by deserializing a signed-but-unpublished Enable.
 pub struct VerifiedMode {
@@ -33,6 +53,9 @@ pub struct VerifiedMode {
 impl VerifiedMode {
     pub fn enabled(&self) -> bool {
         self.event.is_some()
+    }
+    pub fn event(&self) -> Option<&Enable> {
+        self.event.as_ref()
     }
 }
 #[derive(Debug)]

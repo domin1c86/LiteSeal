@@ -1,5 +1,15 @@
 # T23 两台 Windows 可信设备：设计与授权基础
 
+## 2026-10-02 原设备正式会话恢复边界
+
+`commands/root_session.rs` 提供 get/prepare/step/inspect/cancel/forget/save 七入口，固定当前原根身份与两把原密钥，仅处理该范围 login 任务。准备要求已有切换或已启用范围，以无 bearer 签名查询确认服务器已启用，再保存 SDK 来源绑定的正面事实维持 v3 准入；原 enable 任务、编号和签名保持。未启用、错误范围或迟到代次不创建登录任务；未知网络结果不重建身份。
+
+保存先检查原申请 Accepted，再取得受认证当前会话的 SDK 来源标记。`CheckedSession::bind` 绑定两凭据摘要、原会话编号/账号/设备/授权/启用摘要；最终锁顺序 backup_commit → 原运行代次 → identity，比较完整原身份后只更换 DPAPI 凭据。同步锁不跨 await；锁定、退出及凭据变化后的有效回包仍拒绝保存。提交后退休旧设备/群上下文，不启动新中继。页面仅获得公开身份元数据，不能提供密钥、令牌、mode、档案或路径参数。
+
+已启用原设备的 load/prepare identity 返回 `rust-owned-session` 非秘密存在标记，身份读取与提交锁串行；旧登录、通用保存、刷新和旧中继拒绝该路径。旧协议既有会话字段接口未在本轮整体重构，此保护范围限于 v3 原设备。登录与切换面板支持显式恢复、原任务查询/继续/取消/整理，锁定清除口令与指纹并丢弃迟到结果。保存后提示重新打开查看历史。
+
+正式会话保存不等于普通 v3 聊天已完成。加入正常档案选择、自动刷新及丢响应恢复、后台收发/历史、媒体/操作和新备份授权仍需后续实现；真实服务、双 Windows/系统与独立审查另行验收。
+
 ## 2026-10-02 原设备切换的桌面准入与任务界面
 
 新增 `commands/root_messaging.rs` 与六个业务IPC：`get_root_messaging`、`check_root_messaging`、`prepare_root_messaging`、`root_messaging_step`、`cancel_root_messaging`、`forget_root_messaging`。要求原设备授权页面先验证/同步本机原根目录；固定当前Rust身份两密钥、原点/账号/设备和会话绑定，页面只提供完整指纹确认或原任务编号，不提供mode/密钥/令牌/路径。只处理enable类型的当前根任务，不借接口操作另一类型任务。

@@ -45,6 +45,12 @@ app.whenReady().then(async () => {
     if(await window.webContents.executeJavaScript('document.documentElement.scrollWidth > window.innerWidth || [...document.querySelectorAll("dialog,section")].some(node => node.scrollWidth > node.clientWidth + 1)'))throw new Error('root messaging horizontal overflow');
     report.cases.push({name:name+'-root-messaging',results:messaging});
     await fs.writeFile(path.join(directory,name+'-root-messaging.png'),(await window.webContents.capturePage()).toPNG());
+    const session=await window.webContents.executeJavaScript('window.runRootSessionTests()');
+    await window.webContents.executeJavaScript('window.showRootSessionPanel()');
+    window.setContentSize(width+1,height);await new Promise(resolve=>setTimeout(resolve,100));window.setContentSize(width,height);await new Promise(resolve=>setTimeout(resolve,300));
+    if(await window.webContents.executeJavaScript('document.documentElement.scrollWidth > window.innerWidth || [...document.querySelectorAll("dialog,section")].some(node => node.scrollWidth > node.clientWidth + 1)'))throw new Error('root session horizontal overflow');
+    report.cases.push({name:name+'-root-session',results:session});
+    await fs.writeFile(path.join(directory,name+'-root-session.png'),(await window.webContents.capturePage()).toPNG());
   }
   if (report.errors.length) throw new Error('renderer errors'); report.status='passed';
 }).catch(error=>report.errors.push(String(error))).finally(async()=>{report.actual_seconds=Math.round((Date.now()-began)/1000);await fs.writeFile(path.join(directory,'result.json'),JSON.stringify(report,null,2));window?.destroy();app.exit(report.status==='passed'?0:1);});

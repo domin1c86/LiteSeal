@@ -133,6 +133,33 @@ impl AppState {
         }
         Ok(())
     }
+    /// Root recovery holds backup_commit and its current runtime admission
+    /// during this synchronous CAS. Invalidation is done after both guards drop.
+    pub(crate) fn commit_root_credentials(
+        &self,
+        expected: &KeystoreData,
+        access: &str,
+        refresh: &str,
+    ) -> Result<KeystoreData, String> {
+        let mut cached = self.identity.lock().map_err(|_| "身份提交锁不可用")?;
+        let current = cached.as_ref().ok_or("原身份已失效")?;
+        let left =
+            zeroize::Zeroizing::new(serde_json::to_vec(current).map_err(|_| "身份无法核对")?);
+        let right =
+            zeroize::Zeroizing::new(serde_json::to_vec(expected).map_err(|_| "原身份无法核对")?);
+        if left.as_slice() != right.as_slice() {
+            return Err("身份或会话已变化，原恢复结果未覆盖当前账号".into());
+        }
+        let mut next = current.clone();
+        next.token = access.into();
+        next.refresh_token = refresh.into();
+        match &self.keystore_path {
+            Some(path) => keystore::save_keypair_to(path, next.clone())?,
+            None => keystore::save_keypair(next.clone())?,
+        }
+        *cached = Some(next.clone());
+        Ok(next)
+    }
 
     /// Keys for an account that is not bound yet; generated once and kept in
     /// memory until a session is saved with them.

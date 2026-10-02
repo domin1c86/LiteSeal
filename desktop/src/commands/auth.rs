@@ -62,6 +62,11 @@ pub async fn connect_relay(
     device_id: String,
     state: &AppState,
 ) -> Result<ConnectResult, String> {
+    if super::root_messaging::admission(state)?
+        == liteseal_core::trusted_devices::activation::legacy::Admission::V3
+    {
+        return Err("原设备已启用单聊 v3，新消息后台尚未接入；原正式会话和历史已保留".into());
+    }
     super::scheduled::connect(state, server_url, user_id, token, device_id).await?;
     Ok(ConnectResult { connected: true })
 }

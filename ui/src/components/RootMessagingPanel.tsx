@@ -1,5 +1,6 @@
 import { useEffect,useRef,useState } from "react";
 import { getDesktopApi } from "../lib/desktopApi";
+import RootSessionPanel from "./RootSessionPanel";
 import type { ActivationTask,ActivationProgress,RootMessagingSnapshot } from "../../../electron/contracts";
 const stages:Record<ActivationTask["stage"],string>={prepared:"切换申请已保存",started:"正在查询原切换",proving:"正在完成原切换",conflict:"原切换发生冲突",complete:"单聊 v3 已启用",cancelled:"切换申请已取消",ineligible:"原身份资格已失效",ended:"原申请已结束"};
 const outcomes:Record<ActivationProgress["condition"],string>={complete:"原切换已确认启用，不能撤回",cancelled:"原切换已确认取消",ineligible:"原身份资格已失效",needs_password:"需完成原设备会话验证",session_required:"原设备会话不可用，请先恢复正式会话后查询原切换",retry:"连接未完成，保留原切换继续查询或重试",conflict:"原目录或旧待收队列发生冲突，请先查询原状态，不会自动重签",pending:"原切换仍待处理",ended:"原申请已结束"};
@@ -7,6 +8,7 @@ const terminal=(task:ActivationTask)=>["complete","cancelled","ineligible","ende
 export default function RootMessagingPanel({onClose}:{onClose:()=>void}){
   const [view,setView]=useState<RootMessagingSnapshot|null>(null),[confirmed,setConfirmed]=useState(false),[busy,setBusy]=useState(false),[status,setStatus]=useState(""),[error,setError]=useState("");
   const live=useRef(false),paused=useRef(false),epoch=useRef(0),operation=useRef<number|null>(null);
+  const [showSession,setShowSession]=useState(false);
   const current=(n:number)=>live.current&&!paused.current&&epoch.current===n;
   async function run(work?:()=>Promise<string|void>,replace=false){
     if(!live.current||paused.current||operation.current!==null&&!replace)return;
@@ -28,6 +30,8 @@ export default function RootMessagingPanel({onClose}:{onClose:()=>void}){
     <button disabled={busy||paused.current} onClick={()=>void run()}>刷新本机切换状态</button>
     <button disabled={busy||paused.current} onClick={()=>void run(async()=>{const result=await getDesktopApi().check_root_messaging({});return result.admission==="v3"?"已校验原设备签署的启用配置":"已查询远端状态，原任务保留";})}>查询远端启用状态</button>
     <button onClick={onClose}>收起协议切换</button>
+    <button disabled={paused.current} onClick={()=>setShowSession(true)}>恢复原设备正式会话</button>
+    {showSession&&<RootSessionPanel onClose={()=>setShowSession(false)}/>}
     {view&&<>
       <p>{view.admission==="v3"?"单聊 v3 已启用，旧单聊发送已暂停":view.admission==="switching"?"原切换待确认，新的旧单聊任务已暂停":"当前继续使用旧单聊协议"}</p>
       <p>原设备完整指纹</p><code>{view.root_fingerprint}</code>

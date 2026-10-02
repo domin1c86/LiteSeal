@@ -374,6 +374,73 @@ async fn session_check_rejects_wrong_scope_expiry_and_unknown_fields() {
         server.await.unwrap();
     }
 }
+
+#[tokio::test]
+async fn checked_session_binding_requires_both_credentials_and_exact_original_session() {
+    use liteseal_shared::device_activation::{Session, SessionInfo};
+    use sha2::{Digest, Sha256};
+    for case in 0..8 {
+        let (listener, url, state, keys) = setup().await;
+        let mode = Enable::make(&state, &uuid::Uuid::new_v4().to_string(), &keys).unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut session = Session {
+            id: uuid::Uuid::new_v4().to_string(),
+            account: state.anchor().account.clone(),
+            device: state.anchor().root.device_id.clone(),
+            authorization: state.anchor().hash().try_into().unwrap(),
+            mode: mode.digest().unwrap(),
+            access_token: "synthetic-original-access".into(),
+            refresh_token: "synthetic-original-refresh".into(),
+            expires_at: now + 30000,
+            refresh_expires_at: now + 90000,
+        };
+        let info = SessionInfo {
+            version: 1,
+            id: session.id.clone(),
+            account: session.account.clone(),
+            device: state.anchor().root.clone(),
+            authorization: session.authorization,
+            mode: session.mode,
+            expires_at: now + 60000,
+            refresh_expires_at: now + 120000,
+            refresh_hash: Sha256::digest(session.refresh_token.as_bytes()).into(),
+        };
+        let server = tokio::spawn(reply(
+            listener,
+            response(&serde_json::to_vec(&info).unwrap()),
+        ));
+        let checked = ActivationApi::new(&url)
+            .unwrap()
+            .check_session(
+                &session.access_token,
+                &state,
+                &mode,
+                &state.anchor().root,
+                &keys,
+            )
+            .await
+            .unwrap();
+        server.await.unwrap();
+        match case {
+            1 => session.access_token = "other-access".into(),
+            2 => session.refresh_token = "other-refresh".into(),
+            3 => session.id = uuid::Uuid::new_v4().to_string(),
+            4 => session.account = uuid::Uuid::new_v4().to_string(),
+            5 => session.device = uuid::Uuid::new_v4().to_string(),
+            6 => session.authorization = [0; 32],
+            7 => session.mode = [0; 32],
+            _ => {}
+        }
+        let result = checked.bind(session);
+        if case == 0 {
+            let bound = result.unwrap();
+            assert_eq!(bound.expires_at, info.expires_at);
+            assert_eq!(bound.refresh_expires_at, info.refresh_expires_at);
+        } else {
+            assert!(result.is_err());
+        }
+    }
+}
 #[tokio::test]
 async fn bootstrap_mode_needs_no_bearer_and_accepts_only_bound_root_configuration() {
     use liteseal_shared::device_activation::{ModeQuery, ModeReply};

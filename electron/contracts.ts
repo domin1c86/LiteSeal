@@ -13,6 +13,13 @@ export interface GroupPoll { id: string; creator: string; question: string; opti
 export interface GroupCollaboration { polls: GroupPoll[]; pin: string | null; pin_unavailable: boolean; pin_revision: number; pending: boolean; conflict: boolean; pending_message: string | null }
 export type CollaborationCommand = { kind: "mention"; text: string; mentions: CollaborationMember[] } | { kind: "poll"; question: string; options: string[] } | { kind: "vote"; poll: string; option: string; revision: number } | { kind: "close"; poll: string; revision: number } | { kind: "pin"; message: string | null; revision: number };
 export interface CommandMap {
+  get_root_session: { args: {}; result: RootSessionSnapshot };
+  prepare_root_session: { args: { username:string }; result: ActivationTask };
+  root_session_step: { args: { id:string; password?:string }; result: ActivationProgress };
+  inspect_root_session: { args: { id:string }; result: ActivationProgress };
+  cancel_root_session: { args: { id:string }; result: ActivationTask };
+  forget_root_session: { args: { id:string }; result: void };
+  save_root_session: { args: { id:string }; result: RootSessionSaved };
   get_root_messaging: { args: {}; result: RootMessagingSnapshot };
   check_root_messaging: { args: {}; result: RootMessagingSnapshot };
   prepare_root_messaging: { args: { confirmedFingerprint:string }; result: ActivationTask };
@@ -193,6 +200,8 @@ export interface ActivationProgress { task: ActivationTask; condition: "complete
 export interface NormalJoinProfile { id: string; origin: string; username: string; device_name: string; account: string; device: string; root_fingerprint: string; encryption_fingerprint: string; signing_fingerprint: string; revision: number; has_saved_session: boolean; access_expired: boolean; eligible: boolean }
 export interface JoinActivationSnapshot { profile_id: string; tasks: ActivationTask[]; normal: NormalJoinProfile | null }
 export interface RootMessagingSnapshot { root_fingerprint:string; admission:"legacy"|"switching"|"v3"; pending:{messages:number;uploads:number;scheduled:number;operations:number;reactions:number;receipts:number}; tasks:ActivationTask[] }
+export interface RootSessionSnapshot { root_fingerprint:string; tasks:ActivationTask[]; has_local_credentials:boolean }
+export interface RootSessionSaved { user_id:string; device_id:string; server_url:string; public_key:number[]; ed25519_pk:number[] }
 export type CommandName = keyof CommandMap;
 export interface DeviceJoinProfile { id: string; origin: string; username: string; device_name: string; local_device_id: string; encryption_fingerprint: string; signing_fingerprint: string }
 export interface DeviceJoinListing { id: string; profile: DeviceJoinProfile | null; error: string | null }
@@ -224,6 +233,7 @@ export interface GroupExtensions { attachments:{id:string;blob:string;name:strin
 export type GroupExtensionCommand={kind:"activity";title:string;start_at:number;timezone:string;location:string;description:string}|{kind:"respond";activity:string;answer:GroupAnswer;revision:number}|{kind:"close"|"cancel";activity:string;revision:number};
 export const commandNames = [
   "get_root_messaging", "check_root_messaging", "prepare_root_messaging", "root_messaging_step", "cancel_root_messaging", "forget_root_messaging",
+  "get_root_session", "prepare_root_session", "root_session_step", "inspect_root_session", "cancel_root_session", "forget_root_session", "save_root_session",
   "get_join_activation", "prepare_join_activation", "join_activation_step", "inspect_join_activation", "cancel_join_activation", "forget_join_activation", "save_join_activation", "clear_join_activation_session",
   "list_device_join_profiles", "create_device_join_profile", "get_device_join_profile", "confirm_device_join_root", "device_join_step", "cancel_device_join", "abandon_device_join", "forget_device_join_profile",
   "get_device_control", "inspect_device_request", "prepare_device_challenge", "prepare_device_grant", "prepare_device_revoke", "device_task_step", "cancel_device_task", "discard_device_task",

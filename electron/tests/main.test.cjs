@@ -115,6 +115,9 @@ for (const startupLocked of [false, true]) test(`main restricts IPC, locks and a
     assert.equal((await handlers.get(`liteseal:${name}`)(valid,{})).ok,false,name);
   }
   assert.ok(rendererEvents.some(event=>event[0]==='liteseal:device-paused'),'system lock clears joining password forms');
+  for(const name of ['get_root_session','prepare_root_session','root_session_step','inspect_root_session','cancel_root_session','forget_root_session','save_root_session']) {
+    assert.equal((await handlers.get(`liteseal:${name}`)(valid,{})).ok,false,name);
+  }
   electron.powerMonitor.emit('unlock-screen');
   await new Promise(resolve => setTimeout(resolve, 0));
   child.stdout.write(JSON.stringify({ id: heldDevice.id, result: { late: true } }) + '\n');
@@ -131,6 +134,13 @@ for (const startupLocked of [false, true]) test(`main restricts IPC, locks and a
   electron.powerMonitor.emit('unlock-screen');
   await new Promise(resolve => setTimeout(resolve, 0));
   assert.equal((await devices(valid, {})).ok, true);
+  holdDevice=true;
+  const beforeRootSave=devices(valid,{});
+  await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal((await handlers.get('liteseal:save_root_session')(valid,{id:'original-root-login'})).ok,true,'authorized root save must not reject its own result');
+  child.stdout.write(JSON.stringify({id:heldDevice.id,result:{late:true}})+'\n');
+  assert.equal((await beforeRootSave).ok,false,'root credential save invalidates previous authorization result');
+  holdDevice=false;
   intervals[0](); await new Promise(resolve => setTimeout(resolve, 0));
   assert.ok(rendererEvents.some(args => args[0] === 'liteseal:scheduled-changed' && args.length === 1));
   intervals[1](); await new Promise(resolve => setTimeout(resolve, 0));
@@ -168,6 +178,9 @@ for (const startupLocked of [false, true]) test(`main restricts IPC, locks and a
     assert.equal((await handlers.get(`liteseal:${name}`)(readerEvent, {})).ok, false, name);
   }
   assert.equal((await handlers.get('liteseal:get_backup_archive_info')(readerEvent, { id: 'archive-job' })).ok, true);
+  for(const name of ['get_root_session','prepare_root_session','root_session_step','inspect_root_session','cancel_root_session','forget_root_session','save_root_session']) {
+    assert.equal((await handlers.get(`liteseal:${name}`)(readerEvent,{})).ok,false,name);
+  }
   assert.equal((await handlers.get('liteseal:get_backup_archive_info')(readerEvent, { id: 'other-job' })).ok, false);
   const configure = handlers.get('liteseal:configure_app_lock');
   const unlock = handlers.get('liteseal:unlock_app');
