@@ -12,11 +12,17 @@ export const directMediaCommands=new Set(["select_direct_media","stage_direct_fi
 /** Main-only paths and authenticated bytes, renderer-only opaque URLs. */
 export class DirectMedia {
   private previews=new Map<string,Preview>();
+  private cleanups=new Set<Promise<void>>();
   constructor(private bridge:Pick<DesktopBridge,"call">,private host:Host){}
-  invalidate(id?:string):void{
-    for(const [token,p] of this.previews){if(id&&p.id!==id)continue;this.previews.delete(token);void fs.rm(p.directory,{recursive:true,force:true}).catch(()=>{});}
+  private cleanup(directory:string):Promise<void>{
+    const work=fs.rm(directory,{recursive:true,force:true,maxRetries:3,retryDelay:100});this.cleanups.add(work);
+    void work.finally(()=>this.cleanups.delete(work)).catch(()=>{});return work;
   }
-  async close(url:string):Promise<void>{const token=this.token(url);const p=this.previews.get(token);if(p){this.previews.delete(token);await fs.rm(p.directory,{recursive:true,force:true});}}
+  async settle():Promise<void>{await Promise.all([...this.cleanups]);}
+  invalidate(id?:string):void{
+    for(const [token,p] of this.previews){if(id&&p.id!==id)continue;this.previews.delete(token);void this.cleanup(p.directory).catch(()=>{});}
+  }
+  async close(url:string):Promise<void>{const token=this.token(url);const p=this.previews.get(token);if(p){this.previews.delete(token);await this.cleanup(p.directory);}else await this.settle();}
   private token(url:string):string{const parsed=new URL(url);if(parsed.protocol!=="liteseal-media:"||parsed.host!=="preview"||parsed.search||parsed.hash||!uuid.test(parsed.pathname.slice(1)))throw new Error("预览句柄无效");return parsed.pathname.slice(1);}
   private input(args:unknown,allowed:string[]):Record<string,unknown>{if(!args||typeof args!=="object"||Array.isArray(args)||Object.keys(args).some(k=>!allowed.includes(k)))throw new Error("媒体参数无效");return args as Record<string,unknown>;}
   private async current(epoch:number,scope:string):Promise<void>{this.host.check(epoch);const view=await this.bridge.call("get_direct_chat",{});this.host.check(epoch);if(view.notification_scope!==scope)throw new Error("媒体档案已变化");}
