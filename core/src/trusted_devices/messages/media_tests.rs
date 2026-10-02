@@ -122,6 +122,13 @@ fn staged_ciphertext_reopens_and_original_preparation_is_immutable() {
     let id = uuid::Uuid::new_v4().to_string();
     let bytes = "中文 emoji 🦭".as_bytes().repeat(90_000);
     let staged = f.stage(&id, &bytes);
+    assert_eq!(
+        f.store
+            .media_pending_plain(&id, &f.keys)
+            .unwrap()
+            .as_slice(),
+        bytes
+    );
     assert!(f.store.prepare_media(&id, 100, &f.keys).is_err());
     assert!(f.store.clear_media(&id, &f.keys).is_err());
     let cipher = f.store.media_chunk(&id, staged.revision, &f.keys).unwrap();
@@ -153,6 +160,7 @@ fn staged_ciphertext_reopens_and_original_preparation_is_immutable() {
     );
     f.upload(&id);
     let prepared = f.store.prepare_media(&id, 100, &f.keys).unwrap();
+    assert!(f.store.media_pending_plain(&id, &f.keys).is_err());
     let wire = f.store.original(&id, &f.keys).unwrap().to_wire().unwrap();
     assert_eq!(
         f.store.prepare_media(&id, 200, &f.keys).unwrap().digest,
@@ -211,6 +219,7 @@ fn cancellation_fences_late_upload_and_clear_does_not_reuse_original_id() {
     let id = uuid::Uuid::new_v4().to_string();
     let original = f.stage(&id, b"original");
     let cancelled = f.store.cancel_media(&id, &f.keys).unwrap();
+    assert!(f.store.media_pending_plain(&id, &f.keys).is_err());
     assert_eq!(cancelled.phase, Phase::Cancelled);
     assert!(f
         .store

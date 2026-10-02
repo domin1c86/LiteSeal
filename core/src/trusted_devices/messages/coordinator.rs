@@ -445,6 +445,10 @@ impl MessageCoordinator {
         let lease = self.lease(keys)?;
         self.with(&lease, |s| s.media_plain(id, keys))
     }
+    pub fn media_pending_plain(&self, id: &str, keys: &KeyPair) -> Result<Zeroizing<Vec<u8>>> {
+        let lease = self.lease(keys)?;
+        self.with(&lease, |s| s.media_pending_plain(id, keys))
+    }
     fn media_current(
         &self,
         lease: &TaskLease,

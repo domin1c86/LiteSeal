@@ -18,6 +18,8 @@ use liteseal_shared::{
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{collections::HashMap, sync::Arc, time::Duration};
+#[path = "direct_media.rs"]
+pub mod media;
 #[derive(Default)]
 pub(crate) struct Runtime {
     cache: Option<Cached>,
@@ -69,6 +71,7 @@ pub struct TextRecord {
     #[serde(flatten)]
     pub record: RecordView,
     pub text: Option<String>,
+    pub media: Option<liteseal_core::trusted_devices::messages::media::Info>,
 }
 #[derive(Serialize)]
 pub struct History {
@@ -275,7 +278,20 @@ pub fn history_peer(
             } else {
                 None
             };
-            Ok(TextRecord { record, text })
+            let media = if record.kind != Kind::Text && record.outcome == "processed" {
+                Some(
+                    ctx.actor
+                        .media_info(&record.id, &ctx.keys)
+                        .map_err(|e| e.to_string())?,
+                )
+            } else {
+                None
+            };
+            Ok(TextRecord {
+                record,
+                text,
+                media,
+            })
         })
         .collect::<Result<Vec<_>, String>>()?;
     current(state, &ctx)?;

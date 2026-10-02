@@ -225,6 +225,97 @@ async fn response(socket: &mut TcpStream, status: u16, value: &serde_json::Value
     socket.write_all(format!("HTTP/1.1 {status} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",bytes.len()).as_bytes()).await.unwrap();
     socket.write_all(&bytes).await.unwrap();
 }
+#[test]
+fn desktop_media_paths_are_scoped_authenticated_and_never_overwrite() {
+    let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
+    let p = Protection::isolated_test();
+    let a = Account::new("https://synthetic.example", &work.0.join("a"), &p);
+    let b = Account::new("https://synthetic.example", &work.0.join("b"), &p);
+    let scope = d::snapshot(&a.state).unwrap().notification_scope;
+    let mut store = messages::Store::open(
+        &a.state.db_path,
+        messages::Owner::new(
+            &a.anchor.origin,
+            &a.anchor.account,
+            &a.anchor.root.device_id,
+            &a.keys,
+        )
+        .unwrap(),
+        p.witness(&a.state.db_path).unwrap(),
+    )
+    .unwrap();
+    store.trust().pin(&b.anchor).unwrap();
+    drop(store);
+    let source = work.0.join("中文图片.png");
+    let bytes = b"\x89PNG\r\n\x1a\nsynthetic image bytes";
+    std::fs::write(&source, bytes).unwrap();
+    let id = uuid::Uuid::new_v4().to_string();
+    let request = |scope: String| d::media::StageFile {
+        scope,
+        account: b.anchor.account.clone(),
+        id: id.clone(),
+        path: source.to_string_lossy().into_owned(),
+        kind: Kind::Attachment,
+        duration_ms: None,
+    };
+    assert!(d::media::stage(&a.state, request("wrong-scope".into())).is_err());
+    let task = d::media::stage(&a.state, request(scope.clone())).unwrap();
+    assert_eq!(task.id, id);
+    assert_eq!(task.name, "中文图片.png");
+    assert!(d::media::info(&a.state, scope.clone(), id.clone()).is_err());
+    let target = work.0.join("verified.png");
+    let result = d::media::write(
+        &a.state,
+        scope.clone(),
+        id.clone(),
+        target.to_string_lossy().into_owned(),
+        true,
+    )
+    .unwrap();
+    assert_eq!(std::fs::read(&target).unwrap(), bytes);
+    assert_eq!(result.digest, hex::encode(Sha256::digest(bytes)));
+    let public = serde_json::to_string(&result).unwrap();
+    assert!(!public.contains("\"key\""));
+    assert!(!public.contains("\"path\""));
+    assert!(d::media::write(
+        &a.state,
+        scope.clone(),
+        id.clone(),
+        target.to_string_lossy().into_owned(),
+        true
+    )
+    .is_err());
+    assert_eq!(std::fs::read(&target).unwrap(), bytes);
+    d::media::cancel(&a.state, scope.clone(), id.clone()).unwrap();
+    let denied = work.0.join("denied.png");
+    assert!(d::media::write(
+        &a.state,
+        scope.clone(),
+        id.clone(),
+        denied.to_string_lossy().into_owned(),
+        true
+    )
+    .is_err());
+    assert!(!denied.exists());
+    device_control::suspend(&a.state).unwrap();
+    assert!(d::media::tasks(&a.state, scope.clone()).is_err());
+    device_control::resume(&a.state).unwrap();
+    let resumed_scope = d::snapshot(&a.state).unwrap().notification_scope;
+    d::media::clear(&a.state, resumed_scope, id).unwrap();
+    for name in [
+        "stage_direct_media",
+        "write_direct_media",
+        "get_direct_media_tasks",
+        "direct_media_step",
+    ] {
+        let args = serde_json::json!({"scope":"injected","id":"injected","token":"injected","key":vec![0u8;32]});
+        assert!(
+            serde_json::from_value::<Command>(serde_json::json!({"name":name,"args":args}))
+                .is_err()
+        );
+    }
+    assert_eq!(std::fs::read(&a.keyfile).unwrap(), a.original);
+}
 #[tokio::test]
 async fn desktop_text_original_retry_receive_ack_paging_hide_and_selected_scope() {
     let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();

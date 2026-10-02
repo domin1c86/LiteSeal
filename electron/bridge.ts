@@ -4,7 +4,7 @@ import { commandNames, type CommandName, type CommandMap } from "./contracts";
 
 const MAX_FRAME_BYTES = 16 * 1024 * 1024;
 // Lifecycle commands are private to main and deliberately absent from preload.
-const allowed = new Set<string>([...commandNames, "suspend_device_control", "resume_device_control", "process_session_refreshes", "process_direct_chat"]);
+const allowed = new Set<string>([...commandNames, "stage_direct_media", "write_direct_media", "suspend_device_control", "resume_device_control", "process_session_refreshes", "process_direct_chat"]);
 type Pending = { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout };
 
 /** Private stdio RPC. stdout contains only protocol frames; stderr is never forwarded to the renderer. */

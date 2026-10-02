@@ -424,6 +424,25 @@ impl Store {
             load(conn, &owner, id, keys).map(|j| j.view())
         })
     }
+    /// Sender-owned local audition/preview only, before a signed message task.
+    pub fn media_pending_plain(
+        &mut self,
+        id: &str,
+        keys: &KeyPair,
+    ) -> Result<Zeroizing<Vec<u8>>, String> {
+        self.owner.keys(keys)?;
+        let owner = self.owner.clone();
+        self.trust.read_checked(|conn| {
+            let job = load(conn, &owner, id, keys)?;
+            if job.download || !matches!(job.phase, Phase::Staged | Phase::Uploaded) {
+                return Err("此媒体不再是可试听的本机暂存".into());
+            }
+            job.descriptor
+                .decrypt(job.kind, &ciphertext(conn, &owner, &job)?)
+                .map(Zeroizing::new)
+                .map_err(|_| "暂存媒体认证失败".into())
+        })
+    }
     pub(super) fn media_job(&mut self, id: &str, keys: &KeyPair) -> Result<Job, String> {
         self.owner.keys(keys)?;
         let owner = self.owner.clone();

@@ -63,7 +63,7 @@ for (const startupLocked of [false, true]) test(`main restricts IPC, locks and a
     dialog: { showErrorBox(_title, error) { startupError = error; loaded(); }, async showOpenDialog() { return { canceled: false, filePaths: [avatarPath] }; } },
     nativeImage: { createFromPath() { return { isEmpty: () => false, resize() { return { toPNG: () => Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]) }; } }; } },
     ipcMain: { handle(name, handler) { handlers.set(name, handler); } },
-    protocol: { registerSchemesAsPrivileged() {}, handle(scheme, handler) { assert.equal(scheme, 'liteseal'); protocolHandler = handler; } },
+    protocol: { registerSchemesAsPrivileged() {}, handle(scheme, handler) { assert(['liteseal','liteseal-media'].includes(scheme));if(scheme==='liteseal')protocolHandler = handler; } },
     net: { async fetch() { return new Response('<html></html>', { headers: { 'content-type': 'text/html' } }); } },
     clipboard: { async read() { return [{ types: ['image/png'], async getType() { return new Blob([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])]); } }]; } },
     session: { defaultSession: { setPermissionRequestHandler(handler) { permissionRequest = handler; }, setPermissionCheckHandler(handler) { permissionCheck = handler; }, webRequest: { onHeadersReceived() {} } } },

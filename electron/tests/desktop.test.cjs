@@ -32,17 +32,20 @@ test('preload exposes exactly the typed business commands, with error propagatio
             assert.equal(args.peerId, 'bob'); assert.equal(args.path, 'C:\\test.png');
             return { ok: true, result: { id: 'staged' } };
           }
+          if(channel==='liteseal:stage_direct_file'){assert.equal(args.scope,'scope');assert.equal(args.account,'bob');assert.equal(args.path,'C:\\test.png');assert.equal(args.file,undefined);return{ok:true,result:{id:'v3-file'}};}
+          if(channel==='liteseal:stage_direct_voice'){assert.equal(args.scope,'scope');assert.equal(args.account,'bob');assert.equal(args.durationMs,1000);assert(args.bytes instanceof ArrayBuffer);assert.equal(args.blob,undefined);return{ok:true,result:{id:'v3-voice'}};}
           assert.equal(channel, 'liteseal:get_contacts'); assert.deepEqual(args, {});
           return fail ? { ok: false, error: 'test error' } : { ok: true, result: [] };
         } } };
     },
-    window:{dispatchEvent(event){events.push(event.type);}}, Event,CustomEvent:class extends Event{constructor(type,options){super(type);this.detail=options.detail;}},
+    Blob,ArrayBuffer,window:{dispatchEvent(event){events.push(event.type);}}, Event,CustomEvent:class extends Event{constructor(type,options){super(type);this.detail=options.detail;}},
   });
   assert.deepEqual(Object.keys(exposed).sort(), [...commandNames].sort());
   assert.equal(exposed.resume_device_control, undefined);
   assert.equal(exposed.suspend_device_control, undefined);
   assert.equal(exposed.process_session_refreshes, undefined);
   assert.equal(exposed.process_direct_chat, undefined);
+  assert.equal(exposed.stage_direct_media,undefined);assert.equal(exposed.write_direct_media,undefined);
   listeners.get('liteseal:device-paused')();assert.deepEqual(events,['liteseal-device-paused']);
   listeners.get('liteseal:session-refresh-changed')();assert.equal(events.at(-1),'liteseal-session-refresh-changed');
   listeners.get('liteseal:normal-profile-changed')();assert.equal(events.at(-1),'liteseal-normal-profile-changed');
@@ -52,6 +55,9 @@ test('preload exposes exactly the typed business commands, with error propagatio
   assert.deepEqual(await exposed.get_contacts({}), []);
   assert.equal((await exposed.stage_attachment_file({ peerId: 'bob', file: selectedFile })).id, 'staged');
   await assert.rejects(exposed.stage_attachment_file({ peerId: 'bob', file: {} }), /没有本机路径/);
+  assert.equal((await exposed.stage_direct_file({scope:'scope',account:'bob',file:selectedFile})).id,'v3-file');
+  await assert.rejects(exposed.stage_direct_file({scope:'scope',account:'bob',file:{}}),/没有本机路径/);
+  assert.equal((await exposed.stage_direct_voice({scope:'scope',account:'bob',blob:new Blob(['synthetic']),durationMs:1000})).id,'v3-voice');
   fail = true;
   await assert.rejects(exposed.get_contacts({}), /test error/);
 });

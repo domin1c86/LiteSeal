@@ -9,7 +9,7 @@ if (types.status !== 0) process.exit(1);
 await mkdir('target/test-results',{recursive:true});
 const directory = await mkdtemp(path.resolve('target/test-results/direct-ui-'));
 await build({ entryPoints:['ui/tests/direct-chat-harness.tsx'], bundle:true, outfile:path.join(directory,'harness.js'), platform:'browser', jsx:'automatic', define:{'process.env.NODE_ENV':'"development"'} });
-await writeFile(path.join(directory,'index.html'), `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'none'"><link rel="stylesheet" href="harness.css"></head><body><div id="root"></div><script src="harness.js"></script></body></html>`);
+await writeFile(path.join(directory,'index.html'), `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' data: blob:; connect-src 'none'"><link rel="stylesheet" href="harness.css"></head><body><div id="root"></div><script src="harness.js"></script></body></html>`);
 const env={...process.env}; delete env.ELECTRON_RUN_AS_NODE;
 const child=spawn(createRequire(import.meta.url)('electron'),[path.resolve('scripts/direct-ui-electron.cjs'),directory],{env,stdio:'ignore',windowsHide:true});
 let timedOut=false;

@@ -18,6 +18,37 @@ pub struct Request {
 pub enum Command {
     #[serde(rename = "get_direct_chat")]
     GetDirectChat {},
+    #[serde(rename = "get_direct_media_tasks")]
+    GetDirectMediaTasks { scope: String },
+    #[serde(rename = "get_direct_media_info")]
+    GetDirectMediaInfo { scope: String, id: String },
+    #[serde(rename = "stage_direct_media")]
+    StageDirectMedia {
+        scope: String,
+        account: String,
+        id: String,
+        path: String,
+        kind: liteseal_shared::direct_message::Kind,
+        #[serde(rename = "durationMs")]
+        duration_ms: Option<u32>,
+    },
+    #[serde(rename = "direct_media_step")]
+    DirectMediaStep { scope: String, id: String },
+    #[serde(rename = "prepare_direct_media")]
+    PrepareDirectMedia { scope: String, id: String },
+    #[serde(rename = "begin_direct_media_download")]
+    BeginDirectMediaDownload { scope: String, id: String },
+    #[serde(rename = "cancel_direct_media")]
+    CancelDirectMedia { scope: String, id: String },
+    #[serde(rename = "clear_direct_media")]
+    ClearDirectMedia { scope: String, id: String },
+    #[serde(rename = "write_direct_media")]
+    WriteDirectMedia {
+        scope: String,
+        id: String,
+        path: String,
+        pending: Option<bool>,
+    },
     #[serde(rename = "get_direct_history")]
     GetDirectHistory {
         account: Option<String>,
@@ -1024,6 +1055,15 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
     let management = matches!(
         &command,
         Command::GetDirectChat {}
+            | Command::GetDirectMediaTasks { .. }
+            | Command::GetDirectMediaInfo { .. }
+            | Command::StageDirectMedia { .. }
+            | Command::DirectMediaStep { .. }
+            | Command::PrepareDirectMedia { .. }
+            | Command::BeginDirectMediaDownload { .. }
+            | Command::CancelDirectMedia { .. }
+            | Command::ClearDirectMedia { .. }
+            | Command::WriteDirectMedia { .. }
             | Command::GetDirectDraft { .. }
             | Command::SaveDirectDraft { .. }
             | Command::GetDirectHistory { .. }
@@ -1163,6 +1203,57 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
     };
     let result = match command {
         Command::GetDirectChat {} => serde_json::to_value(commands::direct::snapshot(state)?),
+        Command::GetDirectMediaTasks { scope } => {
+            serde_json::to_value(commands::direct::media::tasks(state, scope)?)
+        }
+        Command::GetDirectMediaInfo { scope, id } => {
+            serde_json::to_value(commands::direct::media::info(state, scope, id)?)
+        }
+        Command::StageDirectMedia {
+            scope,
+            account,
+            id,
+            path,
+            kind,
+            duration_ms,
+        } => serde_json::to_value(commands::direct::media::stage(
+            state,
+            commands::direct::media::StageFile {
+                scope,
+                account,
+                id,
+                path,
+                kind,
+                duration_ms,
+            },
+        )?),
+        Command::DirectMediaStep { scope, id } => {
+            serde_json::to_value(commands::direct::media::step(state, scope, id).await?)
+        }
+        Command::PrepareDirectMedia { scope, id } => {
+            serde_json::to_value(commands::direct::media::prepare(state, scope, id).await?)
+        }
+        Command::BeginDirectMediaDownload { scope, id } => {
+            serde_json::to_value(commands::direct::media::begin(state, scope, id)?)
+        }
+        Command::CancelDirectMedia { scope, id } => {
+            serde_json::to_value(commands::direct::media::cancel(state, scope, id)?)
+        }
+        Command::ClearDirectMedia { scope, id } => {
+            serde_json::to_value(commands::direct::media::clear(state, scope, id)?)
+        }
+        Command::WriteDirectMedia {
+            scope,
+            id,
+            path,
+            pending,
+        } => serde_json::to_value(commands::direct::media::write(
+            state,
+            scope,
+            id,
+            path,
+            pending.unwrap_or(false),
+        )?),
         Command::GetDirectHistory { account, before } => {
             serde_json::to_value(commands::direct::history_peer(state, account, before)?)
         }

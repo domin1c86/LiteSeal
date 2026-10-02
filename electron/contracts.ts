@@ -14,6 +14,21 @@ export interface GroupCollaboration { polls: GroupPoll[]; pin: string | null; pi
 export type CollaborationCommand = { kind: "mention"; text: string; mentions: CollaborationMember[] } | { kind: "poll"; question: string; options: string[] } | { kind: "vote"; poll: string; option: string; revision: number } | { kind: "close"; poll: string; revision: number } | { kind: "pin"; message: string | null; revision: number };
 export interface CommandMap {
   get_direct_chat:{args:{};result:DirectSnapshot};
+  get_direct_media_tasks:{args:{scope:string};result:DirectMediaTask[]};
+  get_direct_media_info:{args:{scope:string;id:string};result:DirectMediaInfo};
+  select_direct_media:{args:{scope:string;account:string};result:DirectMediaTask|null};
+  stage_direct_file:{args:{scope:string;account:string;file:File};result:DirectMediaTask};
+  stage_direct_voice:{args:{scope:string;account:string;blob:Blob;durationMs:number};result:DirectMediaTask};
+  stage_direct_clipboard:{args:{scope:string;account:string};result:DirectMediaTask};
+  direct_media_step:{args:{scope:string;id:string};result:{task:DirectMediaTask;condition:DirectCondition;http_status:number|null}};
+  prepare_direct_media:{args:{scope:string;id:string};result:DirectPreparation};
+  begin_direct_media_download:{args:{scope:string;id:string};result:DirectMediaTask};
+  cancel_direct_media:{args:{scope:string;id:string};result:DirectMediaTask};
+  clear_direct_media:{args:{scope:string;id:string};result:number};
+  export_direct_media:{args:{scope:string;id:string;preview?:boolean;pending?:boolean};result:string|null};
+  close_direct_media_preview:{args:{url:string};result:void};
+  stage_direct_media:{args:{scope:string;account:string;id:string;path:string;kind:"attachment"|"voice";durationMs?:number};result:DirectMediaTask};
+  write_direct_media:{args:{scope:string;id:string;path:string;pending?:boolean};result:{info:DirectMediaInfo;digest:string}};
   get_direct_history:{args:{account?:string|null;before?:number|null};result:DirectHistory};
   mark_direct_read:{args:{account:string;throughId:string};result:void};
   set_direct_muted:{args:{account:string;revision:number;muted:boolean};result:void};
@@ -249,7 +264,10 @@ export interface GroupSnapshot { groups: GroupView[]; invitations: { id: string;
 export interface ScheduledTask { id: string; peer_id: string; due_at: number; text: string; state: string; error: string; sealed: boolean }
 export interface AttachmentTask { id: string; peer_id: string; message_id: string; name: string; size: number; mime: string; duration_ms?: number; offset: number; total: number; direction: string }
 export type RefreshTarget={kind:"root"}|{kind:"join";profileId:string};
-export type DirectCondition="prepared"|"accepted"|"cancelled"|"syncing"|"needs_trust"|"conflict"|"retry"|"session_required"|"unsupported"|"idle"|"received"|"acknowledged";
+export type DirectCondition="uploading"|"uploaded"|"downloading"|"cached"|"failed"|"unavailable"|"prepared"|"accepted"|"cancelled"|"syncing"|"needs_trust"|"conflict"|"retry"|"session_required"|"unsupported"|"idle"|"received"|"acknowledged";
+export type DirectMediaPhase="staged"|"uploaded"|"prepared"|"cancelled"|"downloading"|"cached"|"failed"|"unavailable";
+export interface DirectMediaTask{id:string;peer:string;revision:number;phase:DirectMediaPhase;kind:"attachment"|"voice";name:string;mime:string;size:number;duration_ms:number|null;uploaded:number;downloaded:number;download:boolean;total:number}
+export interface DirectMediaInfo{id:string;peer:string;kind:"attachment"|"voice";name:string;mime:string;size:number;duration_ms:number|null;cache:DirectMediaPhase|null}
 export interface DirectPeer{account:string;origin:string;root_device:string;root_fingerprint:string;encryption_fingerprint:string;signing_fingerprint:string}
 export interface DirectDraft{peer:string;revision:number;text:string;prepared:string|null}
 export interface DirectTask{id:string;revision:number;state:"prepared"|"publishing"|"conflict"|"accepted"|"cancelled";peer:string;epoch:string;digest:number[];cancel_requested:boolean}
@@ -257,7 +275,7 @@ export interface DirectProgress{task:DirectTask;condition:DirectCondition;http_s
 export interface DirectPreparation{task:DirectTask|null;condition:DirectCondition;http_status:number|null}
 export interface DirectConversation{peer:string;revision:number;muted:boolean;unread:number;latest_id:string|null;latest_cursor:number|null;has_draft:boolean}
 export interface DirectSnapshot{notification_scope:string;identity:DirectPeer;device:string;peers:DirectPeer[];conversations:DirectConversation[];tasks:DirectTask[];can_network:boolean}
-export interface DirectHistory{messages:{cursor:number;id:string;sender:string;sender_device:string;peer:string;role:string;kind:string;outcome:string;sent_at:number;accepted_at:number;text:string|null}[];next_cursor:number|null}
+export interface DirectHistory{messages:{cursor:number;id:string;sender:string;sender_device:string;peer:string;role:string;kind:string;outcome:string;sent_at:number;accepted_at:number;text:string|null;media?:DirectMediaInfo|null}[];next_cursor:number|null}
 export interface NormalProfileChoice{target:RefreshTarget;scope_fingerprint:string;origin:string;account:string;device:string;device_name:string;protocol:string;has_session:boolean;eligible:boolean;access_expired:boolean}
 export interface NormalProfileSnapshot{generation:number;explicit:boolean;selected:NormalProfileChoice|null;error:string|null;profiles:{target:RefreshTarget;profile:NormalProfileChoice|null;error:string|null}[]}
 export interface RefreshCurrent{generation:number;account:string;device:string;session:string;has_credentials:boolean;access_expired:boolean;eligible:boolean;access_expires_at:number;refresh_expires_at:number}
@@ -266,13 +284,14 @@ export interface RefreshProgress{task:RefreshTask;condition:"complete"|"cancelle
 export interface RefreshSnapshot{target:RefreshTarget;current:RefreshCurrent|null;tasks:RefreshTask[]}
 export type DesktopApi = {
   // The mapped business API never exposes private attachment descriptors.
-  [K in Exclude<CommandName, "suspend_device_control" | "resume_device_control" | "process_session_refreshes" | "process_direct_chat">]: (args: CommandMap[K]["args"]) => Promise<CommandMap[K]["result"]>;
+  [K in Exclude<CommandName, "stage_direct_media" | "write_direct_media" | "suspend_device_control" | "resume_device_control" | "process_session_refreshes" | "process_direct_chat">]: (args: CommandMap[K]["args"]) => Promise<CommandMap[K]["result"]>;
 };
 export type GroupAnswer="yes"|"no"|"maybe";
 export interface GroupActivity { id:string;creator:string;title:string;start_at:number;timezone:string;location:string;description:string;responses:Record<string,GroupAnswer>;participants:string[];departed:string[];closed:boolean;cancelled:boolean;eligible:boolean;can_manage:boolean;revision:number }
 export interface GroupExtensions { attachments:{id:string;blob:string;name:string;size:number;mime:string;duration_ms:number|null}[];activities:GroupActivity[];pending:boolean;conflict:boolean;pending_root:string|null }
 export type GroupExtensionCommand={kind:"activity";title:string;start_at:number;timezone:string;location:string;description:string}|{kind:"respond";activity:string;answer:GroupAnswer;revision:number}|{kind:"close"|"cancel";activity:string;revision:number};
 export const commandNames = [
+  "get_direct_media_tasks","get_direct_media_info","select_direct_media","stage_direct_file","stage_direct_voice","stage_direct_clipboard","direct_media_step","prepare_direct_media","begin_direct_media_download","cancel_direct_media","clear_direct_media","export_direct_media","close_direct_media_preview",
   "get_direct_draft","save_direct_draft",
   "mark_direct_read","set_direct_muted",
   "set_direct_notification_context","take_direct_notification_target",

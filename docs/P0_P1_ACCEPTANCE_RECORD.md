@@ -1,5 +1,29 @@
 # P0/P1 验收记录（待执行）
 
+## 2026-10-03 Windows v3 媒体 IPC、文件与录音组件短测
+
+基线 `e5ead4f` 加本轮工作树，全部使用合成身份、临时文件/数据库、隔离原生命名空间和 Chromium 用户目录。文件与录音数据不经 stdio，密钥不进入页面；未运行新长期，未操作真实用户资料或推送。
+
+- `target/test-results/direct-media-desktop-ipc-2026-10-03.txt`：新增真实 Rust/SQLite/隔离原生范围测试通过（2.33 秒）。错范围在读取/输出前拒绝，暂存认证写入与摘要一致，目标存在不覆盖、取消后不输出、暂停拒绝、恢复必须使用新范围、秘密/额外参数拒绝和原密钥文件不变通过。首轮夹具在恢复后沿旧范围清理失败，改为获取实际新范围；生产范围保护未放宽。
+- 主进程媒体独立 4 项 Node 用例通过：随机预览 URL 不泄露路径，Range/坏范围、临时文件篡改、隐藏/代次失效退役、既有导出目标保留、切范围不提交、录音主进程落临时文件/Rust IPC 不含字节且暂存后删除。最终 `direct-media-desktop-node-focused-2026-10-03.txt` 共 11 项媒体/preload/真实 bridge 子集通过，增加 File 路径转换、Blob ArrayBuffer 转换及私有路径命令不可访问断言。
+- `target/test-results/direct-media-desktop-ui-2026-10-03.txt` / `direct-ui-3CNyeT/result.json`：真实 Electron Chromium，1280×900 与 390×844、浅深色四组合，各 22 项通过、无 renderer 错误/横向溢出（21 秒）。新增选择/暂存/发送前预览与关闭、上传取消后迟到结果不能准备消息、历史媒体下载/预览及暂停清除、模拟麦克风拒绝/60 秒停止/目标范围/设备释放。网络和麦克风均为夹具，不是双 Windows、实际系统权限或播放验收。截图隔离到新加载页面并等待媒体任务/卡片出现后采集；已核对窄屏换行与宽屏媒体区域，不以测试后的暂停截图冒充产品布局。
+- 完整 `npm test` 为 23 项 Node/349 项普通 Rust 通过，0 失败，78 项 PostgreSQL 默认 ignored，报告 `direct-media-desktop-delivery-2026-10-03.txt`。后续只修改额外 preload/UI 测试断言及截图夹具，最新 11 项 Node 子集和四组合 UI 另复验通过。
+- `direct-media-desktop-core-2026-10-03.txt`：8 项媒体存储短测通过（2.69 秒），新增断言发送前认证读取与原字节一致，取消/准备后不能借暂存读取。格式、全 workspace/all-targets Clippy（-D warnings）、核心 FFI 编译通过，报告 `direct-media-desktop-static-2026-10-03.txt`；最终生产构建通过，release 49.18 秒，报告 `direct-media-desktop-build-2026-10-03.txt`，既有链接警告保留。
+
+主进程夹具首轮假设只注册一个协议导致启动断言失败，已允许应用与媒体两个固定协议并复跑通过；UI 夹具原 CSP 不允许模拟 data 图片，已仅在无网络测试页面允许 data/blob 并复跑。不能将这两项夹具调整称为生产安全问题修复。真实库与群回归结果另记如下。
+
+群 UI 宽窄两组通过，报告 `direct-media-desktop-groups-ui-2026-10-03.txt`，包含共享录音组件的模拟权限拒绝/无设备/60 秒、释放和群目标回归。风格回归通过、无 renderer 错误，报告 `direct-media-desktop-style-2026-10-03.txt` / `ui-style-PxBBIs`，保持原 72 张浅深色/宽窄截图范围。
+
+专用库首轮 `direct-media-desktop-postgres-first-failure-2026-10-03.json` 为 77 通过/1 失败/0 跳过。失败是既有四设备协调器用例，保留脱敏诊断定位在 `direct_message_tests.rs:107` 的正式会话 begin，不是编译/链接/权限错误；未记录原始错误值，原因不能认定。`direct-media-desktop-diagnostic-2026-10-03.json` 三次定向均通过、未复现；未修改生产挑战或权限规则。独立顺序全库复跑结果另记。
+
+第二轮 `direct-media-desktop-postgres-second-failure-2026-10-03.json` 为 76 通过/2 失败/0 跳过；四设备 begin 再失败，另一个 stale-wire/cancel 用例在加入接口期望 200、实际 429。认证按 IP 的生产窗口为 60 秒/60 次，多个独立进程使用同一回环 IP 和专用库。仅凭 429 不能追认首轮 begin 的具体原因；追加短测使用只读观察专用库该 IP 的窗口，在计数超过 35 且窗口未到期时等待到期再启动下一用例，不删除计数、不重试失败用例、不放宽生产限流，结果另记。
+
+最终 `target/test-results/direct-media-desktop-postgres-paced-2026-10-03.json` 为 **78 通过/0 失败/0 跳过**，脱敏失败诊断为空。实际三次观察计数为 36、36、38，分别等待 18、26、28 秒（合计 72 秒）；全部用例各执行一次，包含七项 v3 媒体真实库往返及原设备、会话、群和额度回归。运行脚本为 `target/test-results/run-desktop-media-paced.mjs` / `run-local-desktop-media-paced.ps1`，只读检查已由既有入口验证标记的专用库。生产权限/限流及服务端代码未更改；这一轮通过支持跨用例共享窗口干扰的判断，但不能证明两次未保存完整错误值的 begin 失败原因。
+
+`target/test-results/direct-media-desktop-group-integration-2026-10-03.txt` / `group-integration.json`：真实专用 PostgreSQL 16.14、服务端与同机三个隔离 Rust 桌面进程的 11 阶段通过，包含原群文字/协作、群附件/合成语音/活动、T22 v2 离线缓存/投票/草稿/隐藏历史；不能代替新 v3 媒体桌面双机与实际录音验收。
+
+真实麦克风/音频播放/文件对话框、通知/锁屏/休眠、磁盘满/权限拒绝/强杀后的预览临时文件清理、双 Windows 和独立审查继续待验收。预览句柄当前只保存在主进程，临时媒体正文由 main 退役/关闭清理；没有运行强杀恢复场景，不能声称该边界已验证。
+
 ## 2026-10-03 v3 下载续传、认证与只读短测
 
 基线 `eea8431` 加本轮工作树。测试跨 10-02/10-03 UTC+8 执行，保留开始时的报告文件名；所有身份、文件、目录与原生保护命名空间均为合成，数据库为已有标记专用 PostgreSQL 16.14。只短测，没有新长期、业务库/真实用户数据操作或推送。

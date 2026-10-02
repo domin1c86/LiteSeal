@@ -6,12 +6,14 @@ import { pathToFileURL } from "node:url";
 import { DesktopBridge } from "./bridge";
 import { commandNames } from "./contracts";
 import { deviceCommands, DeviceControlGate } from "./device-control";
+import {DirectMedia,directMediaCommands} from "./direct-media";
 
-protocol.registerSchemesAsPrivileged([{ scheme: "liteseal", privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
+protocol.registerSchemesAsPrivileged([{ scheme: "liteseal", privileges: { standard: true, secure: true, supportFetchAPI: true } },{scheme:"liteseal-media",privileges:{standard:true,secure:true,supportFetchAPI:true,stream:true}}]);
 const devUrl = "http://127.0.0.1:1420";
 const bridge = new DesktopBridge();
 const deviceControl = new DeviceControlGate(bridge);
-function suspendDevices() { deviceControl.suspend(); mainWindow?.webContents.send("liteseal:device-paused"); }
+let directMedia:DirectMedia|undefined;
+function suspendDevices() { directMedia?.invalidate(); deviceControl.suspend(); mainWindow?.webContents.send("liteseal:device-paused"); }
 let screenLocked = false;
 let systemSuspended = false;
 let mainWindow: BrowserWindow | undefined;
@@ -139,7 +141,16 @@ else {
     powerMonitor.on("unlock-screen", () => { screenLocked = false; if (!locked) { notifications.lock(false); if (!systemSuspended) void deviceControl.resume().catch(() => {}); } });
     powerMonitor.on("resume", () => { systemSuspended = false; if (!locked && !screenLocked) void deviceControl.resume().catch(() => {}); });
     setInterval(() => { if (powerMonitor.getSystemIdleTime() >= 300) lockApp(); }, 1000).unref();
-    const csp = `default-src 'self'; script-src 'self'${app.isPackaged ? "" : " 'unsafe-inline'"}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' data: blob:; connect-src 'self'${app.isPackaged ? "" : " ws://127.0.0.1:1420"}; object-src 'none'; base-uri 'none'; frame-src 'none'`;
+    directMedia=new DirectMedia(bridge,{
+      capture:()=>{if(locked||screenLocked||systemSuspended)throw new Error("媒体已暂停");return deviceControl.capture();},
+      check:epoch=>{if(locked||screenLocked||systemSuspended)throw new Error("媒体已暂停");deviceControl.check(epoch);},
+      temp:()=>app.getPath("temp"),
+      open:async()=>{const r=await dialog.showOpenDialog(mainWindow!,{title:"选择加密文件或图片（20 MiB）",properties:["openFile"]});return r.canceled?null:r.filePaths[0]??null;},
+      save:async name=>{const r=await dialog.showSaveDialog(mainWindow!,{title:"认证附件另存为（新文件）",defaultPath:name});return r.canceled?null:r.filePath??null;},
+      clipboard:async()=>{const items=await clipboard.read();const image=items.flatMap(item=>item.types.filter(type=>type.startsWith("image/")).map(type=>({item,type})))[0];if(!image)throw new Error("剪贴板没有图片");const blob=await image.item.getType(image.type);if(!(blob instanceof Blob)||blob.size>20*1024*1024)throw new Error("剪贴板图片过大或无效");const source=Buffer.from(await blob.arrayBuffer());if(image.type==="image/png")return source;const picture=nativeImage.createFromBuffer(source);if(picture.isEmpty())throw new Error("剪贴板图片损坏");return picture.toPNG();},
+    });
+    protocol.handle("liteseal-media",request=>directMedia!.response(request));
+    const csp = `default-src 'self'; script-src 'self'${app.isPackaged ? "" : " 'unsafe-inline'"}; style-src 'self' 'unsafe-inline'; img-src 'self' data: liteseal-media:; media-src 'self' data: blob: liteseal-media:; connect-src 'self'${app.isPackaged ? "" : " ws://127.0.0.1:1420"}; object-src 'none'; base-uri 'none'; frame-src 'none'`;
     protocol.handle("liteseal", async request => {
       const url = new URL(request.url);
       if (url.host !== "app" || request.method !== "GET") return new Response(null, { status: 403 });
@@ -194,6 +205,9 @@ else {
           if (locked) throw new Error("应用已锁定，请先验证 Windows 身份");
           const generation = lockGeneration;
           const deviceEpoch = deviceCommands.has(name) ? deviceControl.capture() : null;
+          if(directMediaCommands.has(name)){const result=await directMedia!.run(name,args);if(deviceEpoch!==null)deviceControl.check(deviceEpoch);if(locked||generation!==lockGeneration)throw new Error("媒体结果已失效");return{ok:true,result};}
+          if(["select_normal_profile","clear_normal_profile","sign_out","clear_keypair","logout_all_sessions","change_password","save_root_session"].includes(name))directMedia?.invalidate();
+          if(name==="hide_direct_message"||name==="clear_direct_media"||name==="cancel_direct_media")directMedia?.invalidate((args as {id:string}).id);
           if(name==="stage_group_recorded_audio"){
             const input=args as {groupId:string;encoded:string;durationMs:number};if(Object.keys(args).some(k=>!["groupId","encoded","durationMs"].includes(k))||typeof input.groupId!=="string"||input.groupId.length>128||typeof input.encoded!=="string"||input.encoded.length>15*1024*1024||!Number.isInteger(input.durationMs)||input.durationMs<1||input.durationMs>60000)throw new Error("群语音长度、大小或参数无效");const bytes=Buffer.from(input.encoded,"base64");if(bytes.length>11*1024*1024||!bytes.subarray(0,4).equals(Buffer.from([0x1a,0x45,0xdf,0xa3])))throw new Error("群语音格式无效");const result=await bridge.call(name,input);if(locked||generation!==lockGeneration)throw new Error("应用已锁定");return{ok:true,result};
           }

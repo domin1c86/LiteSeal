@@ -3,6 +3,8 @@ import { commandNames, type DesktopApi } from "./contracts";
 
 const api = Object.fromEntries(commandNames.map(name => [name, async (args: object) => {
   let input = args;
+  if(name==="stage_direct_file") {const {scope,account,file}=args as {scope:string;account:string;file:File};const path=webUtils.getPathForFile(file);if(!path)throw new Error("所选文件没有本机路径");input={scope,account,path};}
+  if(name==="stage_direct_voice") {const {scope,account,blob,durationMs}=args as {scope:string;account:string;blob:Blob;durationMs:number};if(!(blob instanceof Blob)||blob.size>11*1024*1024)throw new Error("录音大小无效");input={scope,account,durationMs,bytes:await blob.arrayBuffer()};}
   if(name==="stage_group_attachment_file") {const {groupId,file}=args as {groupId:string;file:File};const path=webUtils.getPathForFile(file);if(!path)throw new Error("文件没有本机路径，请选择文件或粘贴图片");input={groupId,path};}
   if (name === "stage_attachment_file") {
     const { peerId, file } = args as { peerId: string; file: File };

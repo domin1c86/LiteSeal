@@ -12,7 +12,7 @@ function encode(blob: Blob): Promise<string> {
   });
 }
 
-export function VoiceRecorder({ peerId="", target:chosen, onStaged }: { peerId?: string;target?:AttachmentTarget; onStaged: () => Promise<void> }) {
+export function VoiceRecorder({ peerId="", target:chosen, onStaged,stageClip,paused=false }: { peerId?: string;target?:AttachmentTarget; onStaged: () => Promise<void>;stageClip?:(blob:Blob,durationMs:number)=>Promise<void>;paused?:boolean }) {
   const target:AttachmentTarget=chosen??{kind:"direct",id:peerId};
   const [recording, setRecording] = useState(false);
   const [elapsed, setElapsed] = useState(0);
@@ -39,6 +39,7 @@ export function VoiceRecorder({ peerId="", target:chosen, onStaged }: { peerId?:
     document.addEventListener("visibilitychange", suspend);
     window.addEventListener("blur", suspend);
     window.addEventListener("liteseal-app-locked", locked);
+    window.addEventListener("liteseal-device-paused",locked);
     return () => {
       mounted.current = false;
       discard.current = true;
@@ -48,8 +49,10 @@ export function VoiceRecorder({ peerId="", target:chosen, onStaged }: { peerId?:
       document.removeEventListener("visibilitychange", suspend);
       window.removeEventListener("blur", suspend);
       window.removeEventListener("liteseal-app-locked", locked);
+      window.removeEventListener("liteseal-device-paused",locked);
     };
   }, []);
+  useEffect(()=>{if(paused){discard.current=true;stop();clearClip();stream.current?.getTracks().forEach(track=>track.stop());}},[paused]);
   useEffect(() => {
     if (!recording) return;
     const timer = window.setInterval(() => {
@@ -60,7 +63,7 @@ export function VoiceRecorder({ peerId="", target:chosen, onStaged }: { peerId?:
     return () => window.clearInterval(timer);
   }, [recording]);
   async function start() {
-    if (busyRef.current || recording) return;
+    if (busyRef.current || recording || paused) return;
     setError(""); clearClip(); discard.current = false;
     if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder
       || !MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) {
@@ -104,22 +107,20 @@ export function VoiceRecorder({ peerId="", target:chosen, onStaged }: { peerId?:
     } finally { busyRef.current = false; if (mounted.current) setBusy(false); }
   }
   async function stage() {
-    if (!clip || busyRef.current) return;
+    if (!clip || busyRef.current || paused) return;
     busyRef.current = true;
     setBusy(true); setError("");
     try {
-      const encoded = await encode(clip.blob);
-      if (!mounted.current) return;
-      await attachmentApi(target).voice(encoded,clip.durationMs);
+      if(stageClip){await stageClip(clip.blob,clip.durationMs);}else{const encoded=await encode(clip.blob);if(!mounted.current)return;await attachmentApi(target).voice(encoded,clip.durationMs);}
       if (mounted.current) clearClip();
       await onStaged();
     } catch (failure) { if (mounted.current) setError(String(failure)); }
     finally { busyRef.current = false; if (mounted.current) setBusy(false); }
   }
   return <div aria-label="语音消息">
-    {!recording && !clip && <button disabled={busy} onClick={() => void start()}>录制语音（最多 60 秒）</button>}
+    {!recording && !clip && <button disabled={busy||paused} onClick={() => void start()}>录制语音（最多 60 秒）</button>}
     {recording && <><span role="status">录音中 {elapsed} / 60 秒</span><button onClick={stop}>停止录音</button><button onClick={() => { discard.current = true; stop(); }}>取消录音</button></>}
-    {clip && <><audio controls src={clip.url} aria-label="发送前试听语音" /><span>{Math.ceil(clip.durationMs / 1000)} 秒</span><button disabled={busy} onClick={() => void stage()}>加入待发附件</button><button disabled={busy} onClick={clearClip}>丢弃录音</button></>}
+    {clip && <><audio controls src={clip.url} aria-label="发送前试听语音" /><span>{Math.ceil(clip.durationMs / 1000)} 秒</span><button disabled={busy||paused} onClick={() => void stage()}>加入待发附件</button><button disabled={busy} onClick={clearClip}>丢弃录音</button></>}
     {error && <p role="alert">{error}</p>}
   </div>;
 }
