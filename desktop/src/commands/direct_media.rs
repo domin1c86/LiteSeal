@@ -143,6 +143,34 @@ pub fn clear(state: &AppState, scope: String, id: String) -> Result<u64, String>
     current(state, &ctx)?;
     Ok(result)
 }
+pub fn storage(
+    state: &AppState,
+    scope: String,
+) -> Result<liteseal_core::trusted_devices::messages::media::StorageStats, String> {
+    let ctx = scoped(state, &scope)?;
+    let result = ctx
+        .actor
+        .media_storage_stats(&ctx.keys)
+        .map_err(|e| e.to_string())?;
+    current(state, &ctx)?;
+    Ok(result)
+}
+pub fn clear_cache(
+    state: &AppState,
+    scope: String,
+    account: Option<String>,
+) -> Result<liteseal_core::trusted_devices::messages::media::ClearResult, String> {
+    if let Some(account) = &account {
+        uuid(account)?;
+    }
+    let ctx = scoped(state, &scope)?;
+    let result = ctx
+        .actor
+        .clear_media_cache(account.as_deref(), &ctx.keys)
+        .map_err(|e| e.to_string())?;
+    current(state, &ctx)?;
+    Ok(result)
+}
 #[derive(Serialize)]
 pub struct Written {
     pub info: Info,

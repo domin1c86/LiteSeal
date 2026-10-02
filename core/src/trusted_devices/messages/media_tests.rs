@@ -258,6 +258,164 @@ fn cancellation_fences_late_upload_and_clear_does_not_reuse_original_id() {
     );
 }
 #[test]
+fn bulk_storage_cleanup_protects_unknown_publication_and_other_conversations() {
+    let mut f = Fixture::new();
+    let pending = uuid::Uuid::new_v4().to_string();
+    let cancelled = uuid::Uuid::new_v4().to_string();
+    f.stage(&pending, b"keep original publication");
+    f.upload(&pending);
+    f.store.prepare_media(&pending, 100, &f.keys).unwrap();
+    f.store.begin_publish(&pending, 0, &f.keys).unwrap();
+    let original = f
+        .store
+        .original(&pending, &f.keys)
+        .unwrap()
+        .to_wire()
+        .unwrap();
+    f.stage(&cancelled, b"cancelled source");
+    f.store.cancel_media(&cancelled, &f.keys).unwrap();
+    let second = DeviceState::pin(Anchor {
+        origin: f.owner.origin.clone(),
+        account: "another-peer".into(),
+        root: DeviceIdentity::from_keys(
+            "another-device".into(),
+            &crypto::generate_keypair().unwrap(),
+        ),
+    })
+    .unwrap();
+    f.store.trust().pin(second.anchor()).unwrap();
+    let other = uuid::Uuid::new_v4().to_string();
+    f.store
+        .stage_media(
+            Stage {
+                id: &other,
+                peer: &second.anchor().account,
+                name: "other.txt",
+                bytes: b"other cancelled source",
+                kind: Kind::Attachment,
+                duration_ms: None,
+            },
+            &f.keys,
+        )
+        .unwrap();
+    f.store.cancel_media(&other, &f.keys).unwrap();
+    let conn = Connection::open(&f.path).unwrap();
+    for (s, id, n) in [
+        (f.owner.scope(), "orphan", 17),
+        ("other-scope".into(), "foreign", 19),
+    ] {
+        conn.execute("INSERT INTO direct_v3_media_chunks(scope,account,id,part,ciphertext) VALUES(?1,?2,?3,0,zeroblob(?4))",params![s,f.owner.account,id,n]).unwrap();
+    }
+    let stats = f.store.media_storage_stats(&f.keys).unwrap();
+    assert_eq!(stats.shared_cache_bytes, stats.cache_bytes + 19);
+    assert_eq!(stats.orphan_bytes, 17);
+    assert_eq!(
+        stats.peers.iter().map(|p| p.protected_tasks).sum::<u64>(),
+        1
+    );
+    assert_eq!(
+        stats.peers.iter().map(|p| p.clearable_tasks).sum::<u64>(),
+        2
+    );
+    let public = serde_json::to_string(&stats).unwrap();
+    assert!(!public.contains("other.txt"));
+    assert!(!public.contains("\"key\""));
+    assert!(!public.contains(f.path.to_str().unwrap()));
+    let cleared = f
+        .store
+        .clear_media_cache(Some(&f.peer.anchor().account), &f.keys)
+        .unwrap();
+    assert_eq!(cleared.cleared_tasks, 1);
+    assert_eq!(cleared.protected_tasks, 1);
+    assert_eq!(cleared.removed_bytes, b"cancelled source".len() as u64 + 40);
+    assert_eq!(
+        f.store
+            .original(&pending, &f.keys)
+            .unwrap()
+            .to_wire()
+            .unwrap(),
+        original
+    );
+    assert!(f.store.media_task(&other, &f.keys).is_ok());
+    let all = f.store.clear_media_cache(None, &f.keys).unwrap();
+    assert_eq!(all.cleared_tasks, 1);
+    assert_eq!(all.protected_tasks, 1);
+    assert_eq!(
+        conn.query_row(
+            "SELECT length(ciphertext) FROM direct_v3_media_chunks WHERE scope='other-scope'",
+            [],
+            |r| r.get::<_, u64>(0)
+        )
+        .unwrap(),
+        19
+    );
+    let after = f.store.media_storage_stats(&f.keys).unwrap();
+    assert_eq!(after.orphan_bytes, 0);
+    assert_eq!(after.peers.len(), 1);
+    let batch = f.store.original(&pending, &f.keys).unwrap();
+    let receipt = super::super::Acceptance::from_authenticated_response(
+        &batch,
+        &pending,
+        batch.digest().unwrap(),
+        200,
+    )
+    .unwrap();
+    f.store.confirm_accepted(&receipt, &f.keys).unwrap();
+    f.store.clear_accepted_task(&pending, &f.keys).unwrap();
+    assert_eq!(
+        f.store
+            .clear_media_cache(None, &f.keys)
+            .unwrap()
+            .cleared_tasks,
+        1
+    );
+    assert_eq!(f.store.media_storage_stats(&f.keys).unwrap().cache_bytes, 0);
+    assert_eq!(f.store.history(None, 100, &f.keys).unwrap().len(), 1);
+    assert_eq!(
+        f.store
+            .clear_media_cache(None, &f.keys)
+            .unwrap()
+            .removed_bytes,
+        0
+    );
+}
+#[test]
+fn bulk_storage_rejects_wrong_keys_and_bad_metadata_before_deleting_anything() {
+    let mut f = Fixture::new();
+    let id = uuid::Uuid::new_v4().to_string();
+    f.stage(&id, b"retain on error");
+    f.store.cancel_media(&id, &f.keys).unwrap();
+    assert!(f
+        .store
+        .clear_media_cache(None, &crypto::generate_keypair().unwrap())
+        .is_err());
+    assert!(f
+        .store
+        .media_storage_stats(&crypto::generate_keypair().unwrap())
+        .is_err());
+    let before = f.store.media_storage_stats(&f.keys).unwrap().cache_bytes;
+    let another = uuid::Uuid::new_v4().to_string();
+    f.stage(&another, b"bad metadata");
+    f.store
+        .trust
+        .write_checked(|conn| {
+            conn.execute(
+                "UPDATE device_control_tasks SET body=zeroblob(length(body)) WHERE id=?1",
+                [&another],
+            )
+            .map_err(db)?;
+            Ok(())
+        })
+        .unwrap();
+    assert!(f.store.clear_media_cache(None, &f.keys).is_err());
+    assert!(f.store.media_storage_stats(&f.keys).is_err());
+    let conn = Connection::open(&f.path).unwrap();
+    assert_eq!(job_bytes_for_test(&conn, &f.owner, &id), before);
+}
+fn job_bytes_for_test(conn: &Connection, owner: &Owner, id: &str) -> u64 {
+    storage::job_bytes(conn, owner, id).unwrap()
+}
+#[test]
 fn cache_corruption_and_other_identity_cannot_advance_or_prepare() {
     let mut f = Fixture::new();
     let id = uuid::Uuid::new_v4().to_string();

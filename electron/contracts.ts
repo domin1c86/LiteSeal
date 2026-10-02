@@ -12,6 +12,11 @@ export interface CollaborationMember { user: string; device: string; joined: num
 export interface GroupPoll { id: string; creator: string; question: string; options: { id: string; text: string }[]; votes: Record<string,string>; departed: string[]; closed: boolean; eligible: boolean; revision: number }
 export interface GroupCollaboration { polls: GroupPoll[]; pin: string | null; pin_unavailable: boolean; pin_revision: number; pending: boolean; conflict: boolean; pending_message: string | null }
 export type CollaborationCommand = { kind: "mention"; text: string; mentions: CollaborationMember[] } | { kind: "poll"; question: string; options: string[] } | { kind: "vote"; poll: string; option: string; revision: number } | { kind: "close"; poll: string; revision: number } | { kind: "pin"; message: string | null; revision: number };
+export interface DirectMediaStorage {
+  cache_bytes:number;shared_cache_bytes:number;limit:number;orphan_bytes:number;
+  database_allocated:number;database_reusable:number;disk_bytes:number;
+  peers:{peer:string;bytes:number;clearable_bytes:number;protected_tasks:number;clearable_tasks:number}[];
+}
 export interface CommandMap {
   get_direct_chat:{args:{};result:DirectSnapshot};
   get_direct_media_tasks:{args:{scope:string};result:DirectMediaTask[]};
@@ -25,6 +30,8 @@ export interface CommandMap {
   begin_direct_media_download:{args:{scope:string;id:string};result:DirectMediaTask};
   cancel_direct_media:{args:{scope:string;id:string};result:DirectMediaTask};
   clear_direct_media:{args:{scope:string;id:string};result:number};
+  get_direct_media_storage:{args:{scope:string};result:DirectMediaStorage};
+  clear_direct_media_cache:{args:{scope:string;account?:string|null};result:{removed_bytes:number;cleared_tasks:number;protected_tasks:number}};
   export_direct_media:{args:{scope:string;id:string;preview?:boolean;pending?:boolean};result:string|null};
   close_direct_media_preview:{args:{url:string};result:void};
   stage_direct_media:{args:{scope:string;account:string;id:string;path:string;kind:"attachment"|"voice";durationMs?:number};result:DirectMediaTask};
@@ -291,7 +298,7 @@ export interface GroupActivity { id:string;creator:string;title:string;start_at:
 export interface GroupExtensions { attachments:{id:string;blob:string;name:string;size:number;mime:string;duration_ms:number|null}[];activities:GroupActivity[];pending:boolean;conflict:boolean;pending_root:string|null }
 export type GroupExtensionCommand={kind:"activity";title:string;start_at:number;timezone:string;location:string;description:string}|{kind:"respond";activity:string;answer:GroupAnswer;revision:number}|{kind:"close"|"cancel";activity:string;revision:number};
 export const commandNames = [
-  "get_direct_media_tasks","get_direct_media_info","select_direct_media","stage_direct_file","stage_direct_voice","stage_direct_clipboard","direct_media_step","prepare_direct_media","begin_direct_media_download","cancel_direct_media","clear_direct_media","export_direct_media","close_direct_media_preview",
+  "get_direct_media_storage","clear_direct_media_cache","get_direct_media_tasks","get_direct_media_info","select_direct_media","stage_direct_file","stage_direct_voice","stage_direct_clipboard","direct_media_step","prepare_direct_media","begin_direct_media_download","cancel_direct_media","clear_direct_media","export_direct_media","close_direct_media_preview",
   "get_direct_draft","save_direct_draft",
   "mark_direct_read","set_direct_muted",
   "set_direct_notification_context","take_direct_notification_target",

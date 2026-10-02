@@ -13,6 +13,7 @@ export function DirectMediaComposer({scope,account,online,paused,onChanged}:{sco
   async function reload(){const n=generation.current;const rows=await api.get_direct_media_tasks({scope});if(current(n))setTasks(rows.filter(t=>t.peer===account&&!t.download&&t.phase!=="cancelled"));}
   useEffect(()=>{alive.current=true;void reload().catch(e=>setError(String(e)));return()=>{alive.current=false;stopped.current=true;generation.current++;if(url.current)void api.close_direct_media_preview({url:url.current}).catch(()=>{});};},[scope,account]);
   useEffect(()=>{if(paused){generation.current++;stopped.current=true;close();setTasks([]);setBusy(false);}},[paused]);
+  useEffect(()=>{const changed=()=>{const n=generation.current;if(!paused)void reload().catch(e=>{if(current(n))setError(String(e));});};window.addEventListener("liteseal-direct-changed",changed);return()=>window.removeEventListener("liteseal-direct-changed",changed);},[scope,account,paused]);
   async function run(work:()=>Promise<unknown>){if(busy||paused)return;const n=generation.current;setBusy(true);setError("");try{await work();if(current(n)){await reload();onChanged();}}catch(e){if(current(n))setError(String(e));}finally{if(current(n))setBusy(false);}}
   async function stage(file:File){await run(()=>api.stage_direct_file({scope,account,file}));}
   async function send(task:DirectMediaTask){await run(async()=>{

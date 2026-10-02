@@ -42,6 +42,13 @@ pub enum Command {
     CancelDirectMedia { scope: String, id: String },
     #[serde(rename = "clear_direct_media")]
     ClearDirectMedia { scope: String, id: String },
+    #[serde(rename = "get_direct_media_storage")]
+    GetDirectMediaStorage { scope: String },
+    #[serde(rename = "clear_direct_media_cache")]
+    ClearDirectMediaCache {
+        scope: String,
+        account: Option<String>,
+    },
     #[serde(rename = "write_direct_media")]
     WriteDirectMedia {
         scope: String,
@@ -1063,6 +1070,8 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
             | Command::BeginDirectMediaDownload { .. }
             | Command::CancelDirectMedia { .. }
             | Command::ClearDirectMedia { .. }
+            | Command::GetDirectMediaStorage { .. }
+            | Command::ClearDirectMediaCache { .. }
             | Command::WriteDirectMedia { .. }
             | Command::GetDirectDraft { .. }
             | Command::SaveDirectDraft { .. }
@@ -1241,6 +1250,12 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
         }
         Command::ClearDirectMedia { scope, id } => {
             serde_json::to_value(commands::direct::media::clear(state, scope, id)?)
+        }
+        Command::GetDirectMediaStorage { scope } => {
+            serde_json::to_value(commands::direct::media::storage(state, scope)?)
+        }
+        Command::ClearDirectMediaCache { scope, account } => {
+            serde_json::to_value(commands::direct::media::clear_cache(state, scope, account)?)
         }
         Command::WriteDirectMedia {
             scope,

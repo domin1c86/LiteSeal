@@ -239,6 +239,13 @@ async fn persistent_core_media_upload_restart_publish_and_recipient_ack() {
             .downloaded,
         m::CHUNK as u64
     );
+    assert_eq!(
+        receiver.media_storage_stats(&b.keys).unwrap().cache_bytes,
+        m::CHUNK as u64
+    );
+    let protected = receiver.clear_media_cache(None, &b.keys).unwrap();
+    assert_eq!(protected.protected_tasks, 1);
+    assert_eq!(protected.removed_bytes, 0);
     drop(receiver);
     let receiver = MessageCoordinator::open_with_protection(
         &work.0.join("receiver.db"),
@@ -276,7 +283,15 @@ async fn persistent_core_media_upload_restart_publish_and_recipient_ack() {
         receiver.media_plain(&id, &b.keys).unwrap().as_slice(),
         bytes
     );
-    receiver.clear_media(&id, &b.keys).unwrap();
+    let before_cleanup = receiver.media_storage_stats(&b.keys).unwrap();
+    assert_eq!(before_cleanup.peers[0].clearable_tasks, 1);
+    let cleanup = receiver.clear_media_cache(Some(&a.id), &b.keys).unwrap();
+    assert_eq!(cleanup.cleared_tasks, 1);
+    assert_eq!(cleanup.removed_bytes, bytes.len() as u64 + 40);
+    assert_eq!(
+        receiver.media_storage_stats(&b.keys).unwrap().cache_bytes,
+        0
+    );
     receiver.renew_session(b.token.clone()).unwrap();
     receiver.start_media_download(&id, &b.keys).unwrap();
     let unavailable = receiver.media_step(&id, &b.keys).await.unwrap();
@@ -296,7 +311,10 @@ async fn persistent_core_media_upload_restart_publish_and_recipient_ack() {
         Condition::Accepted
     );
     assert_eq!(
-        actor.clear_media(&id, &a.keys).unwrap(),
+        actor
+            .clear_media_cache(None, &a.keys)
+            .unwrap()
+            .removed_bytes,
         bytes.len() as u64 + 40
     );
 }

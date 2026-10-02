@@ -262,6 +262,21 @@ fn desktop_media_paths_are_scoped_authenticated_and_never_overwrite() {
     let task = d::media::stage(&a.state, request(scope.clone())).unwrap();
     assert_eq!(task.id, id);
     assert_eq!(task.name, "中文图片.png");
+    assert!(d::media::storage(&a.state, "wrong-scope".into()).is_err());
+    assert!(d::media::clear_cache(&a.state, "wrong-scope".into(), None).is_err());
+    let storage = d::media::storage(&a.state, scope.clone()).unwrap();
+    assert_eq!(storage.cache_bytes, bytes.len() as u64 + 40);
+    assert!(storage.database_allocated > 0);
+    assert!(storage.disk_bytes >= std::fs::metadata(&a.state.db_path).unwrap().len());
+    assert!(storage.database_reusable <= storage.database_allocated);
+    assert_eq!(storage.peers[0].protected_tasks, 1);
+    assert_eq!(
+        d::media::clear_cache(&a.state, scope.clone(), Some(b.anchor.account.clone()))
+            .unwrap()
+            .removed_bytes,
+        0
+    );
+    assert!(d::media::clear_cache(&a.state, scope.clone(), Some("invalid".into())).is_err());
     assert!(d::media::info(&a.state, scope.clone(), id.clone()).is_err());
     let target = work.0.join("verified.png");
     let result = d::media::write(
@@ -301,11 +316,22 @@ fn desktop_media_paths_are_scoped_authenticated_and_never_overwrite() {
     assert!(d::media::tasks(&a.state, scope.clone()).is_err());
     device_control::resume(&a.state).unwrap();
     let resumed_scope = d::snapshot(&a.state).unwrap().notification_scope;
-    d::media::clear(&a.state, resumed_scope, id).unwrap();
+    assert!(d::media::clear_cache(&a.state, scope, None).is_err());
+    let cleared = d::media::clear_cache(&a.state, resumed_scope.clone(), None).unwrap();
+    assert_eq!(cleared.cleared_tasks, 1);
+    assert_eq!(cleared.removed_bytes, bytes.len() as u64 + 40);
+    assert_eq!(
+        d::media::storage(&a.state, resumed_scope)
+            .unwrap()
+            .cache_bytes,
+        0
+    );
     for name in [
         "stage_direct_media",
         "write_direct_media",
         "get_direct_media_tasks",
+        "get_direct_media_storage",
+        "clear_direct_media_cache",
         "direct_media_step",
     ] {
         let args = serde_json::json!({"scope":"injected","id":"injected","token":"injected","key":vec![0u8;32]});

@@ -1,5 +1,22 @@
 # P0/P1 验收记录（待执行）
 
+## 2026-10-03 v3 媒体存储与按会话整理短测
+
+基线 `cc79a66` 加本轮工作树；合成身份、隔离原生保护、临时 SQLite/Chromium 目录与已有标记专用 PostgreSQL，不操作真实资料、不启动新长期、不推送。服务端生产协议、迁移和 T22 v1/v2 格式不变。
+
+- `target/test-results/direct-media-storage-core-2026-10-03.txt`：16 项媒体存储短测通过（5.07 秒），新增两项批量整理场景。覆盖原未知发布批次不变、按会话不跨范围、当前范围孤立密文收集/其他身份保留、已接受发送任务整理后仍可清理、消息历史保留/重复清理、错密钥/坏元数据在删除前拒绝。扩展现有部分下载与隐藏取消用例，正在下载被保护，隐藏已取消下载可整理且历史不恢复。统计不返回名称、密钥或路径。
+- `direct-media-storage-ipc-2026-10-03.txt`：真实 Rust/SQLite/隔离原生的桌面范围用例通过（3.06 秒）。新增错范围/非法账号拒绝、待发不清理、统计真实非零数据库分配/文件占用、可复用空间不超过已分配、恢复后旧 scope 拒绝和已取消缓存批量清理断言；原密钥文件不变。最终三项磁盘观察断言在完整工程之后补充，该用例重新执行通过。
+- `direct-media-storage-ui-2026-10-03.txt` / `direct-ui-HfzQWP/result.json`：真实 Electron Chromium，1280×900/390×844 与浅深色四组合，各 24 项通过、无 renderer 错误/横向溢出（24 秒）。新增离线统计、逻辑/文件占用区分、取消确认不执行、选择会话与保护计数、暂停拒绝迟到结果。保存四张独立 storage 截图，已检查浅色窄屏和深色宽屏；小文件使用 B/KiB，避免被 MiB 舍入成零。业务 API 为夹具，不算实际系统窗口/双机验收。
+- 完整 `npm test` 为 23 项 Node/351 项普通 Rust 通过、0 失败，78 项 PostgreSQL 默认 ignored，报告 `direct-media-storage-delivery-2026-10-03.txt`；新增 PostgreSQL 整理断言另由真实库回归执行。接入初轮被 TypeScript TS2367 拒绝（替换误插入到已缩窄的通知分支），移除该插入后复验通过，未放宽权限规则。
+- 最终格式、全 workspace/all-targets Clippy（-D warnings）、核心 FFI 检查通过，报告 `direct-media-storage-static-final-2026-10-03.txt`；生产构建通过，release 49.79 秒，报告 `direct-media-storage-build-2026-10-03.txt`，既有链接警告保留。
+- 群 UI 宽窄两组通过，`direct-media-storage-group-ui-2026-10-03.txt` / `group-ui-vU0vET`；风格回归通过，72 张既有浅深色/宽窄截图范围、无 renderer 错误，`direct-media-storage-style-2026-10-03.txt` / `ui-style-O58VTd`。
+
+- `target/test-results/direct-media-storage-postgres-2026-10-03.json`：专用 PostgreSQL 16.14 全部 **78 通过/0 失败/0 跳过**，脱敏失败诊断为空。新增实际协调器往返断言覆盖一块下载的真实逻辑统计/批量保护、离线整理已认证缓存、远端过期后清理再下载 404，以及已接受发送结果整理后批量清理原缓存。沿用只读观察认证 IP 窗口，计数 36/36/38 时分别等待 18/25/27 秒到期（合计 70 秒），不删除计数或重试失败用例；运行脚本 `run-media-storage-paced.mjs` / `run-local-media-storage.ps1` 保存在测试目录。
+
+- `target/test-results/direct-media-storage-group-integration-2026-10-03.txt`：真实 PostgreSQL/服务端与同机三个隔离 Rust 桌面进程的 11 阶段全部通过，包含群文字/协作、群文件/合成语音/活动，以及 T22 v2 缓存/投票/草稿/隐藏历史；是既有功能回归，不作为新 v3 存储界面双机或系统验收。
+
+逻辑密文字节与档案数据库/WAL/SHM 文件观察值分别记录，未执行物理压缩；清理成功不保证文件立即缩小。没有新增实际磁盘满、权限拒绝、进程强杀、系统锁屏/休眠、双 Windows 或独立审查证据。传输调度、已准备对象过期恢复、原设备编辑/撤回、v3 备份与选定历史授权保持后续实施。
+
 ## 2026-10-03 Windows v3 媒体 IPC、文件与录音组件短测
 
 基线 `e5ead4f` 加本轮工作树，全部使用合成身份、临时文件/数据库、隔离原生命名空间和 Chromium 用户目录。文件与录音数据不经 stdio，密钥不进入页面；未运行新长期，未操作真实用户资料或推送。

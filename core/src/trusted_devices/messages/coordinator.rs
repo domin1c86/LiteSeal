@@ -433,6 +433,18 @@ impl MessageCoordinator {
         let lease = self.lease(keys)?;
         self.with(&lease, |s| s.clear_media(id, keys))
     }
+    pub fn media_storage_stats(&self, keys: &KeyPair) -> Result<media::StorageStats> {
+        let lease = self.lease(keys)?;
+        self.with(&lease, |s| s.media_storage_stats(keys))
+    }
+    pub fn clear_media_cache(
+        &self,
+        peer: Option<&str>,
+        keys: &KeyPair,
+    ) -> Result<media::ClearResult> {
+        let lease = self.lease(keys)?;
+        self.with(&lease, |s| s.clear_media_cache(peer, keys))
+    }
     pub fn media_info(&self, id: &str, keys: &KeyPair) -> Result<media::Info> {
         let lease = self.lease(keys)?;
         self.with(&lease, |s| s.media_info(id, keys))

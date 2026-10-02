@@ -207,6 +207,7 @@ else {
           const deviceEpoch = deviceCommands.has(name) ? deviceControl.capture() : null;
           if(directMediaCommands.has(name)){const result=await directMedia!.run(name,args);if(deviceEpoch!==null)deviceControl.check(deviceEpoch);if(locked||generation!==lockGeneration)throw new Error("媒体结果已失效");return{ok:true,result};}
           if(["select_normal_profile","clear_normal_profile","sign_out","clear_keypair","logout_all_sessions","change_password","save_root_session"].includes(name))directMedia?.invalidate();
+          if(name==="clear_direct_media_cache")directMedia?.invalidate();
           if(name==="hide_direct_message"||name==="clear_direct_media"||name==="cancel_direct_media")directMedia?.invalidate((args as {id:string}).id);
           if(name==="stage_group_recorded_audio"){
             const input=args as {groupId:string;encoded:string;durationMs:number};if(Object.keys(args).some(k=>!["groupId","encoded","durationMs"].includes(k))||typeof input.groupId!=="string"||input.groupId.length>128||typeof input.encoded!=="string"||input.encoded.length>15*1024*1024||!Number.isInteger(input.durationMs)||input.durationMs<1||input.durationMs>60000)throw new Error("群语音长度、大小或参数无效");const bytes=Buffer.from(input.encoded,"base64");if(bytes.length>11*1024*1024||!bytes.subarray(0,4).equals(Buffer.from([0x1a,0x45,0xdf,0xa3])))throw new Error("群语音格式无效");const result=await bridge.call(name,input);if(locked||generation!==lockGeneration)throw new Error("应用已锁定");return{ok:true,result};
@@ -484,6 +485,7 @@ else {
             else notifications.dismissDirect((args as {account:string}).account);
           }
           if (name === "clear_group_history") { notifications.suppressGroup((args as { groupId: string }).groupId); mainWindow?.webContents.send("liteseal:groups-changed"); }
+          if (name === "clear_direct_media_cache") mainWindow?.webContents.send("liteseal:direct-changed");
           if (name === "set_group_muted") notifications.suppressGroup((args as { groupId: string }).groupId);
           if (name === "set_conversation_muted") notifications.dismiss((args as { peerId: string }).peerId);
           if (name === "set_contact_policy") notifications.dismiss((args as { peerId: string }).peerId);

@@ -67,6 +67,9 @@ mod downloads;
 mod tests;
 pub(super) use downloads::hidden;
 pub use downloads::Info;
+#[path = "media_storage.rs"]
+mod storage;
+pub use storage::{ClearResult, PeerStorage, StorageStats};
 
 pub struct Stage<'a> {
     pub id: &'a str,
@@ -262,6 +265,35 @@ fn message_state(
         return Err(invalid());
     }
     Ok(TaskState::Accepted)
+}
+fn clearable(conn: &Connection, owner: &Owner, job: &Job, keys: &KeyPair) -> Result<bool, String> {
+    if job.phase == Phase::Prepared {
+        Ok(matches!(
+            message_state(conn, owner, &job.id, keys)?,
+            TaskState::Accepted | TaskState::Cancelled
+        ))
+    } else {
+        Ok(matches!(
+            job.phase,
+            Phase::Cancelled | Phase::Cached | Phase::Failed | Phase::Unavailable
+        ))
+    }
+}
+fn clear_job(conn: &Connection, owner: &Owner, id: &str, keys: &KeyPair) -> Result<u64, String> {
+    let bytes = storage::job_bytes(conn, owner, id)?;
+    let plain = Zeroizing::new(
+        serde_json::to_vec(&("LiteSeal/direct-media-cleared/v1", owner.scope(), id))
+            .map_err(|_| invalid())?,
+    );
+    let body =
+        crypto::encrypt(&plain, &keys.public_key, &keys.secret_key).map_err(|_| invalid())?;
+    conn.execute("UPDATE device_control_tasks SET kind='direct_v3_media_done',revision=revision+1,body=?3 WHERE scope=?1 AND id=?2",params![scope(owner),id,body]).map_err(db)?;
+    conn.execute(
+        "DELETE FROM direct_v3_media_chunks WHERE scope=?1 AND id=?2",
+        params![owner.scope(), id],
+    )
+    .map_err(db)?;
+    Ok(bytes)
 }
 pub(super) fn prepared(
     conn: &Connection,
@@ -598,16 +630,11 @@ impl Store {
             let done:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM device_control_tasks WHERE scope=?1 AND id=?2 AND kind='direct_v3_media_done')",params![scope(&owner),id],|r|r.get(0)).map_err(db)?;
             if done{return Ok(0);}
             let job=load(conn,&owner,id,keys)?;
-            let terminal=if job.phase==Phase::Prepared {matches!(message_state(conn,&owner,id,keys)?,TaskState::Accepted|TaskState::Cancelled)} else {matches!(job.phase,Phase::Cancelled|Phase::Cached|Phase::Failed|Phase::Unavailable)};
+            let terminal=clearable(conn,&owner,&job,keys)?;
             if !terminal{return Err("原媒体待发任务不能清理".into());}
-            let bytes:u64=conn.query_row("SELECT COALESCE(SUM(length(ciphertext)),0) FROM direct_v3_media_chunks WHERE scope=?1 AND id=?2",params![owner.scope(),id],|r|r.get(0)).map_err(db)?;
-            let plain=Zeroizing::new(serde_json::to_vec(&("LiteSeal/direct-media-cleared/v1",owner.scope(),id)).map_err(|_|invalid())?);
-            let body=crypto::encrypt(&plain,&keys.public_key,&keys.secret_key).map_err(|_|invalid())?;
-            conn.execute("UPDATE device_control_tasks SET kind='direct_v3_media_done',revision=revision+1,body=?3 WHERE scope=?1 AND id=?2",params![scope(&owner),id,body]).map_err(db)?;
             // Deletion is disposable: interrupted recovery may leave an orphan,
             // but it cannot resurrect a cancelled send or expose plaintext.
-            conn.execute("DELETE FROM direct_v3_media_chunks WHERE scope=?1 AND id=?2",params![owner.scope(),id]).map_err(db)?;
-            Ok(bytes)
+            clear_job(conn,&owner,id,keys)
         })
     }
 }

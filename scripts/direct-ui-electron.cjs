@@ -13,5 +13,8 @@ for(const theme of ['dark','light'])for(const [size,width,height]of [['wide',128
   await window.webContents.executeJavaScript('document.querySelector(\'[aria-label="v3 加密媒体发送"]\').scrollIntoView({block:"start"})');
   await new Promise(r=>setTimeout(r,100));
   await fs.writeFile(path.join(directory,name+'-media.png'),(await window.webContents.capturePage()).toPNG());
+  await window.webContents.executeJavaScript('window.showDirectStorage()');
+  if(await window.webContents.executeJavaScript('document.documentElement.scrollWidth>innerWidth'))throw new Error('storage horizontal overflow');
+  await fs.writeFile(path.join(directory,name+'-storage.png'),(await window.webContents.capturePage()).toPNG());
 }
 if(report.errors.length)throw new Error('renderer errors');report.status='passed';}).catch(e=>report.errors.push(String(e))).finally(async()=>{report.actual_seconds=Math.round((Date.now()-began)/1000);await fs.writeFile(path.join(directory,'result.json'),JSON.stringify(report,null,2));window?.destroy();app.exit(report.status==='passed'?0:1);});

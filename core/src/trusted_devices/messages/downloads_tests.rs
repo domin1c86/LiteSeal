@@ -74,6 +74,17 @@ fn partial_download_reopens_and_full_authentication_precedes_every_read() {
         .unwrap();
     assert_eq!(first.downloaded, CHUNK as u64);
     assert_eq!(first.uploaded, 0);
+    assert_eq!(
+        f.store
+            .clear_media_cache(None, &f.keys)
+            .unwrap()
+            .protected_tasks,
+        1
+    );
+    assert_eq!(
+        f.store.media_storage_stats(&f.keys).unwrap().cache_bytes,
+        CHUNK as u64
+    );
     assert!(f.store.media_plain(&id, &f.keys).is_err());
     f.store = Store::open(
         &f.path,
@@ -131,7 +142,17 @@ fn hidden_or_cancelled_download_rejects_late_data_without_restoring_history() {
             f.store.media_job(&id, &f.keys).unwrap().phase,
             Phase::Cancelled
         );
-        f.store.clear_media(&id, &f.keys).unwrap();
+        assert_eq!(
+            f.store.media_storage_stats(&f.keys).unwrap().peers[0].clearable_tasks,
+            1
+        );
+        assert_eq!(
+            f.store
+                .clear_media_cache(None, &f.keys)
+                .unwrap()
+                .cleared_tasks,
+            1
+        );
         if hidden {
             assert!(f.store.history(None, 100, &f.keys).unwrap().is_empty());
         } else {
