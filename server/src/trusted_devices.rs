@@ -168,7 +168,7 @@ async fn lock(tx: &mut Tx<'_>, user: &str) -> Result<(), Failure> {
         .ok_or_else(unauthorized)?;
     Ok(())
 }
-async fn directory(
+pub(crate) async fn directory(
     tx: &mut Tx<'_>,
     user: &str,
     expected_origin: &str,
@@ -826,6 +826,21 @@ async fn submit(
                 let (mut status, _) = read_join(&mut tx, &request).await?;
                 status.phase = JoinPhase::Revoked;
                 save_join(&mut tx, &status, true).await?;
+                crate::direct_messages::revoke_target(&mut tx, &user, device_id).await?;
+                // An explicitly activated projection must lose every legacy
+                // and v3 session as well; control-plane-only grants have no row.
+                sqlx::query("UPDATE devices SET revoked=true WHERE id=$1 AND user_id=$2")
+                    .bind(device_id)
+                    .bind(&user)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(unavailable)?;
+                sqlx::query("UPDATE sessions SET revoked=true WHERE device_id=$1 AND user_id=$2")
+                    .bind(device_id)
+                    .bind(&user)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(unavailable)?;
             }
         }
         sqlx::query("INSERT INTO device_authorization_events(user_id,revision,event_id,payload,digest) VALUES($1,$2,$3,$4,$5)")

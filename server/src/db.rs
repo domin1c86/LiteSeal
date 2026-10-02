@@ -77,6 +77,7 @@ fn migrations() -> &'static [(i64, &'static str)] {
         (14, crate::groups::ATTACHMENT_MIGRATION),
         (15, crate::trusted_devices::MIGRATION),
         (16, crate::trusted_devices::CANCEL_MIGRATION),
+        (17, crate::direct_messages::MIGRATION),
     ]
 }
 
@@ -446,8 +447,8 @@ impl Db {
             return Ok(StoreOfflineOutcome::Conflict);
         }
         let usage = sqlx::query(
-            "SELECT COUNT(*) AS message_count,
-                    COALESCE(SUM(octet_length(ciphertext) + octet_length(signature)), 0) AS byte_count
+            "SELECT COUNT(*)+(SELECT COUNT(*) FROM direct_v3_deliveries WHERE device=$1 AND state='stored') AS message_count,
+                    COALESCE(SUM(octet_length(ciphertext) + octet_length(signature)), 0)+(SELECT COALESCE(SUM(b.wire_size),0)::BIGINT FROM direct_v3_deliveries d JOIN direct_v3_batches b ON b.id=d.batch WHERE d.device=$1 AND d.state='stored') AS byte_count
              FROM offline_messages
              WHERE recipient_device_id = $1 AND acked = false",
         )

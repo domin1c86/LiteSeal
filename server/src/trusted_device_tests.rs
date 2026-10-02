@@ -1,4 +1,6 @@
 //! Synthetic accounts only; the dedicated marker is checked by the validation runner.
+#[path = "direct_message_tests.rs"]
+mod direct_message_tests;
 use super::*;
 use axum::http::StatusCode;
 use liteseal_shared::{crypto, trusted_device::*};

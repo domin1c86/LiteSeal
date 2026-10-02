@@ -3,6 +3,7 @@ mod auth;
 mod config;
 mod contact_policy;
 mod db;
+mod direct_messages;
 #[cfg(test)]
 mod group_tests;
 mod groups;
@@ -85,6 +86,7 @@ fn build_router(state: AppState, allowed_origin: HeaderValue) -> Router {
     Router::new()
         .merge(groups::router())
         .merge(trusted_devices::router())
+        .merge(direct_messages::router())
         .route("/reactions", get(reactions::list).post(reactions::submit))
         .route(
             "/read-receipts",

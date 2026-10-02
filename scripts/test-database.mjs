@@ -29,7 +29,7 @@ export function preflight(env = process.env, run = execute) {
     return { ok: true, ...info, binary };
   } catch { return { ok: false, reason: 'invalid database probe result' }; }
 }
-export function runSuite(env = process.env, run = execute) {
+export function runSuite(env = process.env, run = execute, testPrefix = '') {
   const report = { at: new Date().toISOString(), status: 'not_executed', passed: 0, failed: 0, skipped: 0, tests: [] };
   const commit = run('git', ['rev-parse', 'HEAD'], env);
   report.commit = /^[a-f0-9]{40}$/.test(commit.output.trim()) ? commit.output.trim() : 'unknown';
@@ -39,7 +39,7 @@ export function runSuite(env = process.env, run = execute) {
   const base = ['test', '--locked', '-p', 'liteseal-server', '--bin', 'liteseal-server'];
   const listed = run('cargo', [...base, '--', '--ignored', '--list'], env);
   if (listed.code) return { ...report, status: 'failed', reason: 'test discovery failed' };
-  const names = [...listed.output.matchAll(/^([a-zA-Z0-9_:]+): test\r?$/gm)].map(match => match[1]);
+  const names = [...listed.output.matchAll(/^([a-zA-Z0-9_:]+): test\r?$/gm)].map(match => match[1]).filter(name => name.startsWith(testPrefix));
   if (!names.length) return { ...report, status: 'failed', reason: 'no ignored tests discovered' };
   // Exact cases are separate processes and sequential. Raw failures are never persisted.
   for (const name of names) {
