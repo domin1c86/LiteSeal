@@ -258,6 +258,105 @@ fn cancellation_fences_late_upload_and_clear_does_not_reuse_original_id() {
     );
 }
 #[test]
+fn persistent_transfer_intent_pause_and_revision_preserve_original_cache() {
+    let mut f = Fixture::new();
+    let id = uuid::Uuid::new_v4().to_string();
+    let staged = f.stage(&id, b"persistent pause");
+    assert!(!staged.requested && !staged.paused);
+    let requested = f
+        .store
+        .set_media_transfer(&id, staged.revision, false, &f.keys)
+        .unwrap();
+    assert!(requested.requested);
+    let cipher = f
+        .store
+        .media_chunk(&id, requested.revision, &f.keys)
+        .unwrap();
+    let paused = f
+        .store
+        .set_media_transfer(&id, requested.revision, true, &f.keys)
+        .unwrap();
+    assert!(paused.paused && paused.requested);
+    assert!(f
+        .store
+        .set_media_transfer(&id, requested.revision, false, &f.keys)
+        .is_err());
+    assert!(f
+        .store
+        .media_uploaded(&id, requested.revision, &f.keys)
+        .is_err());
+    assert!(f
+        .store
+        .media_uploaded(&id, paused.revision, &f.keys)
+        .is_err());
+    f.store = Store::open(
+        &f.path,
+        f.owner.clone(),
+        Witness::new(&f.path, f.native.clone()),
+    )
+    .unwrap();
+    let saved = f.store.media_task(&id, &f.keys).unwrap();
+    assert!(saved.paused && saved.requested);
+    assert_eq!(saved.uploaded, 0);
+    let resumed = f
+        .store
+        .set_media_transfer(&id, saved.revision, false, &f.keys)
+        .unwrap();
+    assert_eq!(
+        f.store.media_chunk(&id, resumed.revision, &f.keys).unwrap(),
+        cipher
+    );
+    assert_eq!(
+        f.store
+            .clear_media_cache(None, &f.keys)
+            .unwrap()
+            .protected_tasks,
+        1
+    );
+    f.store.cancel_media(&id, &f.keys).unwrap();
+    assert_eq!(
+        f.store
+            .clear_media_cache(None, &f.keys)
+            .unwrap()
+            .cleared_tasks,
+        1
+    );
+}
+#[test]
+fn prepared_pause_retains_batch_and_cancel_still_uses_original_fence() {
+    let mut f = Fixture::new();
+    let id = uuid::Uuid::new_v4().to_string();
+    f.stage(&id, b"prepared pause");
+    f.upload(&id);
+    let task = f.store.prepare_media(&id, 100, &f.keys).unwrap();
+    let task = f.store.begin_publish(&id, task.revision, &f.keys).unwrap();
+    let wire = f.store.original(&id, &f.keys).unwrap().to_wire().unwrap();
+    let view = f.store.media_task(&id, &f.keys).unwrap();
+    let paused = f
+        .store
+        .set_media_transfer(&id, view.revision, true, &f.keys)
+        .unwrap();
+    assert!(paused.paused);
+    assert!(f
+        .store
+        .media_restore_start(&id, paused.revision, &f.keys)
+        .is_err());
+    assert_eq!(
+        f.store.task_view(&id, &f.keys).unwrap().revision,
+        task.revision
+    );
+    assert_eq!(
+        f.store.original(&id, &f.keys).unwrap().to_wire().unwrap(),
+        wire
+    );
+    f.store.cancel_media(&id, &f.keys).unwrap();
+    assert!(f.store.task_view(&id, &f.keys).unwrap().cancel_requested);
+    assert_eq!(
+        f.store.original(&id, &f.keys).unwrap().to_wire().unwrap(),
+        wire
+    );
+}
+#[test]
 fn prepared_reupload_reopens_with_exact_ciphertext_batch_and_binding() {
     let mut f = Fixture::new();
     let id = uuid::Uuid::new_v4().to_string();

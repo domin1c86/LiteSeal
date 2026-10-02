@@ -119,6 +119,49 @@ fn partial_download_reopens_and_full_authentication_precedes_every_read() {
     );
 }
 #[test]
+fn download_pause_reopens_and_rejects_old_and_paused_revision_data() {
+    let mut f = Fixture::new();
+    let plain = b"paused original download".repeat(60_000);
+    let (id, cipher) = receive(&mut f, &plain);
+    let start = f.store.start_media_download(&id, &f.keys).unwrap();
+    let first = f
+        .store
+        .downloaded_chunk(&id, start.revision, &cipher[..CHUNK], &f.keys)
+        .unwrap();
+    let paused = f
+        .store
+        .set_media_transfer(&id, first.revision, true, &f.keys)
+        .unwrap();
+    assert!(f
+        .store
+        .downloaded_chunk(&id, first.revision, &cipher[CHUNK..], &f.keys)
+        .is_err());
+    assert!(f
+        .store
+        .downloaded_chunk(&id, paused.revision, &cipher[CHUNK..], &f.keys)
+        .is_err());
+    assert!(f.store.media_plain(&id, &f.keys).is_err());
+    f.store = Store::open(
+        &f.path,
+        f.owner.clone(),
+        Witness::new(&f.path, f.native.clone()),
+    )
+    .unwrap();
+    let old = f.store.start_media_download(&id, &f.keys).unwrap();
+    assert!(old.paused);
+    assert_eq!(old.downloaded, CHUNK as u64);
+    let resumed = f
+        .store
+        .set_media_transfer(&id, old.revision, false, &f.keys)
+        .unwrap();
+    let done = f
+        .store
+        .downloaded_chunk(&id, resumed.revision, &cipher[CHUNK..], &f.keys)
+        .unwrap();
+    assert_eq!(done.phase, Phase::Cached);
+    assert_eq!(f.store.media_plain(&id, &f.keys).unwrap().as_slice(), plain);
+}
+#[test]
 fn hidden_or_cancelled_download_rejects_late_data_without_restoring_history() {
     for hidden in [false, true] {
         let mut f = Fixture::new();

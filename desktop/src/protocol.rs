@@ -20,6 +20,13 @@ pub enum Command {
     GetDirectChat {},
     #[serde(rename = "get_direct_media_tasks")]
     GetDirectMediaTasks { scope: String },
+    #[serde(rename = "set_direct_media_transfer")]
+    SetDirectMediaTransfer {
+        scope: String,
+        id: String,
+        revision: u64,
+        paused: bool,
+    },
     #[serde(rename = "get_direct_media_info")]
     GetDirectMediaInfo { scope: String, id: String },
     #[serde(rename = "stage_direct_media")]
@@ -105,6 +112,8 @@ pub enum Command {
     HideDirectMessage { id: String },
     #[serde(rename = "process_direct_chat")]
     ProcessDirectChat {},
+    #[serde(rename = "process_direct_media")]
+    ProcessDirectMedia {},
     #[serde(rename = "get_normal_profile")]
     GetNormalProfile {},
     #[serde(rename = "select_normal_profile")]
@@ -1063,6 +1072,7 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
         &command,
         Command::GetDirectChat {}
             | Command::GetDirectMediaTasks { .. }
+            | Command::SetDirectMediaTransfer { .. }
             | Command::GetDirectMediaInfo { .. }
             | Command::StageDirectMedia { .. }
             | Command::DirectMediaStep { .. }
@@ -1086,6 +1096,7 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
             | Command::ForgetDirectTask { .. }
             | Command::HideDirectMessage { .. }
             | Command::ProcessDirectChat {}
+            | Command::ProcessDirectMedia {}
             | Command::UnlockApp { .. }
             | Command::SuspendScheduledMessages {}
             | Command::GetNormalProfile {}
@@ -1215,6 +1226,14 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
         Command::GetDirectMediaTasks { scope } => {
             serde_json::to_value(commands::direct::media::tasks(state, scope)?)
         }
+        Command::SetDirectMediaTransfer {
+            scope,
+            id,
+            revision,
+            paused,
+        } => serde_json::to_value(commands::direct::media::transfer(
+            state, scope, id, revision, paused,
+        )?),
         Command::GetDirectMediaInfo { scope, id } => {
             serde_json::to_value(commands::direct::media::info(state, scope, id)?)
         }
@@ -1321,6 +1340,9 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
         }
         Command::ProcessDirectChat {} => {
             serde_json::to_value(commands::direct::process(state).await?)
+        }
+        Command::ProcessDirectMedia {} => {
+            serde_json::to_value(commands::direct::process_media(state).await?)
         }
         Command::GetNormalProfile {} => {
             serde_json::to_value(commands::normal_profile::snapshot(state)?)

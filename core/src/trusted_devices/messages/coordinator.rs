@@ -22,9 +22,13 @@ use std::{
     sync::{Mutex, RwLock},
 };
 use zeroize::Zeroizing;
+#[path = "schedule.rs"]
+mod schedule;
+pub use schedule::Drive;
 #[derive(Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Condition {
+    Paused,
     Downloading,
     Cached,
     Failed,
@@ -110,6 +114,7 @@ pub struct MessageCoordinator {
     gate: TaskGate,
     network: tokio::sync::Mutex<()>,
     media_network: tokio::sync::Mutex<()>,
+    schedule: Mutex<schedule::State>,
     session: RwLock<Zeroizing<String>>,
     // Keep isolated native targets until after all task handles close.
     _protection: Protection,
@@ -142,6 +147,7 @@ impl MessageCoordinator {
             gate: TaskGate::new().map_err(local)?,
             network: tokio::sync::Mutex::new(()),
             media_network: tokio::sync::Mutex::new(()),
+            schedule: Mutex::new(schedule::State::default()),
             session: RwLock::new(Zeroizing::new(String::new())),
             _protection: protection,
         })
@@ -425,6 +431,16 @@ impl MessageCoordinator {
         let lease = self.lease(keys)?;
         self.with(&lease, |s| s.media_tasks(keys))
     }
+    pub fn set_media_transfer(
+        &self,
+        id: &str,
+        revision: u64,
+        paused: bool,
+        keys: &KeyPair,
+    ) -> Result<media::View> {
+        let lease = self.lease(keys)?;
+        self.with(&lease, |s| s.set_media_transfer(id, revision, paused, keys))
+    }
     pub fn cancel_media(&self, id: &str, keys: &KeyPair) -> Result<media::View> {
         let lease = self.lease(keys)?;
         self.with(&lease, |s| s.cancel_media(id, keys))
@@ -482,6 +498,19 @@ impl MessageCoordinator {
         self.with(&lease, |s| s.media_task(id, keys))?;
         let job = self.with(&lease, |s| s.media_job(id, keys))?;
         let original = job.view();
+        if job.paused
+            && (job.phase != media::Phase::Prepared
+                || !matches!(
+                    self.with(&lease, |s| s.media_state(id, keys))?,
+                    TaskState::Accepted | TaskState::Cancelled | TaskState::Conflict
+                ))
+        {
+            return Ok(MediaProgress {
+                task: original,
+                condition: Condition::Paused,
+                http_status: None,
+            });
+        }
         if job.phase == media::Phase::Downloading {
             let job = self.with(&lease, |s| s.download_job(id, keys))?;
             let token = self.token(&lease)?;
@@ -637,6 +666,13 @@ impl MessageCoordinator {
         let lease = self.lease(keys)?;
         let _network = self.network.lock().await;
         let job = self.with(&lease, |s| s.media_job(id, keys))?;
+        if job.paused && job.phase != media::Phase::Prepared {
+            return Ok(Preparation {
+                task: None,
+                condition: Condition::Paused,
+                http_status: None,
+            });
+        }
         if job.phase == media::Phase::Prepared {
             let task = self.with(&lease, |s| s.task_view(id, keys))?;
             return Ok(Preparation {
@@ -766,6 +802,13 @@ impl MessageCoordinator {
     ) -> Result<Progress> {
         let _media = self.media_network.lock().await;
         let job = self.current(lease, task, keys, |s| s.media_job(&task.id, keys))?;
+        if job.paused {
+            return Ok(Progress {
+                task: self.with(lease, |s| s.task_view(&task.id, keys))?,
+                condition: Condition::Paused,
+                http_status: None,
+            });
+        }
         let Some(part) = job.reupload else {
             return self.failed(lease, task, keys, None);
         };
@@ -859,6 +902,16 @@ impl MessageCoordinator {
             return self.failed(&lease, &task, keys, Some(401));
         }
         if task.state == TaskState::Prepared {
+            if task.kind != Kind::Text
+                && !task.cancel_requested
+                && self.with(&lease, |s| s.media_job(id, keys))?.paused
+            {
+                return Ok(Progress {
+                    task,
+                    condition: Condition::Paused,
+                    http_status: None,
+                });
+            }
             task = self.current(&lease, &task, keys, |s| {
                 s.begin_publish(id, task.revision, keys)
             })?;
@@ -871,6 +924,16 @@ impl MessageCoordinator {
         };
         if let Some(progress) = self.apply(&lease, &task, &batch, result, keys)? {
             return Ok(progress);
+        }
+        if task.kind != Kind::Text
+            && !task.cancel_requested
+            && self.with(&lease, |s| s.media_job(id, keys))?.paused
+        {
+            return Ok(Progress {
+                task,
+                condition: Condition::Paused,
+                http_status: None,
+            });
         }
         if !task.cancel_requested {
             for account in [&self.owner.account, &batch.header.peer] {
@@ -897,6 +960,13 @@ impl MessageCoordinator {
         self.current(&lease, &task, keys, |_| Ok(()))?;
         if !task.cancel_requested && batch.header.kind != Kind::Text {
             let job = self.current(&lease, &task, keys, |s| s.media_job(id, keys))?;
+            if job.paused {
+                return Ok(Progress {
+                    task,
+                    condition: Condition::Paused,
+                    http_status: None,
+                });
+            }
             if job.reupload.is_some() {
                 drop(network);
                 return self.restore_media(&lease, &task, keys).await;

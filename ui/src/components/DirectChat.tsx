@@ -5,7 +5,7 @@ import {useDirectDraft} from "../hooks/useDirectDraft";
 import {DirectMediaComposer,DirectMediaCard} from "./DirectMedia";
 import {DirectStorage} from "./DirectStorage";
 import type {DirectSnapshot,DirectPeer,DirectHistory,DirectCondition,DirectProgress} from "../../../electron/contracts";
-const conditions:Record<DirectCondition,string>={uploading:"正在上传原媒体分块",uploaded:"原媒体上传已完成",downloading:"正在下载原媒体分块",cached:"附件已完整认证",failed:"附件认证失败，原消息保留",unavailable:"原附件远端不可用",prepared:"原发送编号已保存",accepted:"服务端已接受原消息",cancelled:"原任务已确认取消",syncing:"正在校验授权目录，请继续原任务",needs_trust:"请先核对对方账号与原设备根指纹",conflict:"原目录或任务冲突，请查询原结果，不会重签",retry:"原结果尚未确认，请继续原编号",session_required:"正式会话需要恢复或续期，原任务保留",unsupported:"此协议或消息类型尚不支持，原数据保留",idle:"暂时没有新消息",received:"新消息已认证并保存",acknowledged:"已确认本机保存结果"};
+const conditions:Record<DirectCondition,string>={paused:"原媒体传输已暂停",uploading:"正在上传原媒体分块",uploaded:"原媒体上传已完成",downloading:"正在下载原媒体分块",cached:"附件已完整认证",failed:"附件认证失败，原消息保留",unavailable:"原附件远端不可用",prepared:"原发送编号已保存",accepted:"服务端已接受原消息",cancelled:"原任务已确认取消",syncing:"正在校验授权目录，请继续原任务",needs_trust:"请先核对对方账号与原设备根指纹",conflict:"原目录或任务冲突，请查询原结果，不会重签",retry:"原结果尚未确认，请继续原编号",session_required:"正式会话需要恢复或续期，原任务保留",unsupported:"此协议或消息类型尚不支持，原数据保留",idle:"暂时没有新消息",received:"新消息已认证并保存",acknowledged:"已确认本机保存结果"};
 export default function DirectChat({onFlushReady,obscured=false}:{onFlushReady?:(flush:()=>Promise<void>)=>void;obscured?:boolean}){
   const [view,setView]=useState<DirectSnapshot|null>(null),[messages,setMessages]=useState<DirectHistory["messages"]>([]),[cursor,setCursor]=useState<number|null>(null);
   const [account,setAccount]=useState(""),[candidate,setCandidate]=useState<DirectPeer|null>(null),[fingerprint,setFingerprint]=useState(""),[peer,setPeer]=useState("");
@@ -25,7 +25,7 @@ export default function DirectChat({onFlushReady,obscured=false}:{onFlushReady?:
   }
   useEffect(()=>{live.current=true;paused.current=false;epoch.current++;operation.current=null;void run();
     const stop=()=>{paused.current=true;epoch.current++;operation.current=null;pendingRefresh.current=false;selectedPeer.current="";setView(null);setMessages([]);setCandidate(null);setFingerprint("");draft.pause();setAccount("");setPeer("");setStatus("");setError("聊天已暂停，请解锁后重新打开原档案");setBusy(false);};
-    const changed=()=>{void run();};const progress=(event:Event)=>{const result=(event as CustomEvent<{task:DirectProgress|null;poll:{condition:DirectCondition}|null}>).detail;if(!paused.current){const condition=result?.poll?.condition??result?.task?.condition;if(condition)setStatus(conditions[condition]);}};
+    const changed=()=>{void run();};const progress=(event:Event)=>{const result=(event as CustomEvent<{task:DirectProgress|null;poll:{condition:DirectCondition}|null;media?:{condition:DirectCondition}|null;errors?:string[]}>).detail;if(!paused.current){const condition=result?.media?.condition??result?.poll?.condition??result?.task?.condition;if(condition)setStatus(conditions[condition]);if(result?.errors?.length)setError(result.errors.join("；"));}};
     window.addEventListener("liteseal-device-paused",stop);window.addEventListener("liteseal-app-locked",stop);window.addEventListener("liteseal-direct-changed",changed);window.addEventListener("liteseal-direct-status",progress);
     return()=>{live.current=false;epoch.current++;window.removeEventListener("liteseal-device-paused",stop);window.removeEventListener("liteseal-app-locked",stop);window.removeEventListener("liteseal-direct-changed",changed);window.removeEventListener("liteseal-direct-status",progress);};
   },[]);

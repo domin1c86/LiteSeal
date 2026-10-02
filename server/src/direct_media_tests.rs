@@ -504,6 +504,163 @@ async fn core_http_client_upload_publish_four_device_download_and_expiry() {
 }
 #[tokio::test]
 #[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn explicit_transfer_scheduler_pause_restart_upload_publish_and_download() {
+    use liteseal_core::{
+        backup::WorkDirectory,
+        trusted_devices::{
+            messages::{
+                coordinator::{Condition, MessageCoordinator},
+                media::Stage,
+                Owner,
+            },
+            tasks::anchor_fingerprint,
+            witness::platform::Protection,
+        },
+    };
+    let f = Fixture::start(true).await;
+    let a = f.account().await;
+    let b = f.account().await;
+    accepted(&f, &a, &b).await;
+    let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
+    let protection = Protection::isolated_test();
+    let source_path = work.0.join("source.db");
+    let receiver_path = work.0.join("receiver.db");
+    let open = |account: &Account, path: &std::path::Path| {
+        let actor = MessageCoordinator::open_with_protection(
+            path,
+            Owner::new(&f.url, &account.id, &account.device, &account.keys).unwrap(),
+            &account.keys,
+            protection.clone(),
+        )
+        .unwrap();
+        for state in [directory(&f, &a), directory(&f, &b)] {
+            actor
+                .confirm_root(
+                    state.anchor(),
+                    &anchor_fingerprint(state.anchor()),
+                    &account.keys,
+                )
+                .unwrap();
+        }
+        actor.renew_session(account.token.clone()).unwrap();
+        actor
+    };
+    let mut source = open(&a, &source_path);
+    let id = uuid::Uuid::new_v4().to_string();
+    let bytes = b"scheduler original cipher".repeat(55_000);
+    let staged = source
+        .stage_media(
+            Stage {
+                id: &id,
+                peer: &b.id,
+                name: "调度原文件.txt",
+                bytes: &bytes,
+                kind: Kind::Attachment,
+                duration_ms: None,
+            },
+            &a.keys,
+        )
+        .unwrap();
+    let idle = source.drive(true, &a.keys).await.unwrap();
+    assert!(idle.task.is_none() && idle.media.is_none());
+    let objects: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM direct_v3_media_objects WHERE id=$1")
+            .bind(&id)
+            .fetch_one(f.db.pool())
+            .await
+            .unwrap();
+    assert_eq!(objects, 0);
+    source
+        .set_media_transfer(&id, staged.revision, false, &a.keys)
+        .unwrap();
+    assert_eq!(
+        source
+            .drive(true, &a.keys)
+            .await
+            .unwrap()
+            .media
+            .unwrap()
+            .condition,
+        Condition::Uploading
+    );
+    let one = source.media_tasks(&a.keys).unwrap().pop().unwrap();
+    source
+        .set_media_transfer(&id, one.revision, true, &a.keys)
+        .unwrap();
+    drop(source);
+    source = open(&a, &source_path);
+    let saved = source.media_tasks(&a.keys).unwrap().pop().unwrap();
+    assert!(saved.paused && saved.requested);
+    assert_eq!(saved.uploaded, m::CHUNK as u64);
+    assert!(source.drive(true, &a.keys).await.unwrap().media.is_none());
+    source
+        .set_media_transfer(&id, saved.revision, false, &a.keys)
+        .unwrap();
+    for _ in 0..8 {
+        if !source.history(None, 100, &a.keys).unwrap().is_empty() {
+            break;
+        }
+        source.drive(true, &a.keys).await.unwrap();
+    }
+    assert_eq!(source.history(None, 100, &a.keys).unwrap()[0].id, id);
+    for _ in 0..2 {
+        let idle = source.drive(true, &a.keys).await.unwrap();
+        assert!(idle.task.is_none() && idle.media.is_none());
+    }
+    let batches: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM direct_v3_batches WHERE id=$1")
+        .bind(&id)
+        .fetch_one(f.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(batches, 1);
+    let mut receiver = open(&b, &receiver_path);
+    assert_eq!(
+        receiver.poll(&b.keys).await.unwrap().condition,
+        Condition::Received
+    );
+    receiver.poll(&b.keys).await.unwrap();
+    receiver.start_media_download(&id, &b.keys).unwrap();
+    assert_eq!(
+        receiver
+            .drive(true, &b.keys)
+            .await
+            .unwrap()
+            .media
+            .unwrap()
+            .condition,
+        Condition::Downloading
+    );
+    let one = receiver.media_tasks(&b.keys).unwrap().pop().unwrap();
+    receiver
+        .set_media_transfer(&id, one.revision, true, &b.keys)
+        .unwrap();
+    drop(receiver);
+    receiver = open(&b, &receiver_path);
+    let saved = receiver.media_tasks(&b.keys).unwrap().pop().unwrap();
+    assert!(saved.paused);
+    assert_eq!(saved.downloaded, m::CHUNK as u64);
+    assert!(receiver.drive(true, &b.keys).await.unwrap().media.is_none());
+    assert!(receiver.media_plain(&id, &b.keys).is_err());
+    receiver
+        .set_media_transfer(&id, saved.revision, false, &b.keys)
+        .unwrap();
+    assert_eq!(
+        receiver
+            .drive(true, &b.keys)
+            .await
+            .unwrap()
+            .media
+            .unwrap()
+            .condition,
+        Condition::Cached
+    );
+    assert_eq!(
+        receiver.media_plain(&id, &b.keys).unwrap().as_slice(),
+        bytes
+    );
+}
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
 async fn expired_prepared_directory_change_keeps_original_batch_until_explicit_cancel() {
     use liteseal_core::{
         backup::WorkDirectory,

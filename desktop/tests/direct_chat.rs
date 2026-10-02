@@ -262,6 +262,21 @@ fn desktop_media_paths_are_scoped_authenticated_and_never_overwrite() {
     let task = d::media::stage(&a.state, request(scope.clone())).unwrap();
     assert_eq!(task.id, id);
     assert_eq!(task.name, "中文图片.png");
+    assert!(d::media::transfer(
+        &a.state,
+        "wrong-scope".into(),
+        id.clone(),
+        task.revision,
+        true
+    )
+    .is_err());
+    let paused =
+        d::media::transfer(&a.state, scope.clone(), id.clone(), task.revision, true).unwrap();
+    assert!(paused.paused);
+    assert!(d::media::transfer(&a.state, scope.clone(), id.clone(), task.revision, false).is_err());
+    let resumed =
+        d::media::transfer(&a.state, scope.clone(), id.clone(), paused.revision, false).unwrap();
+    assert!(resumed.requested && !resumed.paused);
     assert!(d::media::storage(&a.state, "wrong-scope".into()).is_err());
     assert!(d::media::clear_cache(&a.state, "wrong-scope".into(), None).is_err());
     let storage = d::media::storage(&a.state, scope.clone()).unwrap();
@@ -330,6 +345,7 @@ fn desktop_media_paths_are_scoped_authenticated_and_never_overwrite() {
         "stage_direct_media",
         "write_direct_media",
         "get_direct_media_tasks",
+        "set_direct_media_transfer",
         "get_direct_media_storage",
         "clear_direct_media_cache",
         "direct_media_step",

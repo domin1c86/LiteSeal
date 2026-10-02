@@ -183,6 +183,8 @@ impl Store {
                 next: 0,
                 download: true,
                 reupload: None,
+                paused: false,
+                requested: true,
             })
         })?;
         if job.phase != Phase::Downloading || !job.hashes.is_empty() {
@@ -249,7 +251,7 @@ impl Store {
         let owner = self.owner.clone();
         self.trust.read_checked(|conn| {
             let job = load(conn, &owner, id, keys)?;
-            if !job.download || job.phase != Phase::Downloading {
+            if !job.download || job.phase != Phase::Downloading || job.paused {
                 return Err(invalid());
             }
             admitted(conn, &owner, &job, keys)?;

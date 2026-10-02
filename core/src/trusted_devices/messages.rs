@@ -178,6 +178,7 @@ impl TaskState {
 }
 #[derive(Debug, Serialize)]
 pub struct TaskView {
+    pub kind: Kind,
     pub id: String,
     pub revision: u64,
     pub state: TaskState,
@@ -571,7 +572,7 @@ impl Store {
             conn.execute("INSERT INTO direct_v3_tasks(scope,id,revision,state,peer,epoch,wire,local) VALUES(?1,?2,0,'prepared',?3,?4,?5,?6)",params![scope,request.id,request.peer,epoch,wire,local]).map_err(|_|conflict())?;
             if let Some(expected)=draft_revision{drafts::put(conn,&owner,request.peer,expected,"",Some(request.id.into()),keys)?;}
             if let Some(expected)=media_revision{media::prepared(conn,&owner,expected,&batch,keys)?;}
-            Ok(TaskView{id:request.id.into(),revision:0,state:TaskState::Prepared,peer:request.peer.into(),epoch,digest:batch.digest().map_err(|_|invalid())?,cancel_requested:false})
+            Ok(TaskView{kind:request.kind,id:request.id.into(),revision:0,state:TaskState::Prepared,peer:request.peer.into(),epoch,digest:batch.digest().map_err(|_|invalid())?,cancel_requested:false})
         })
     }
     pub fn original(&mut self, id: &str, keys: &KeyPair) -> Result<Batch, String> {
@@ -1141,6 +1142,7 @@ fn outcome(text: &str) -> Result<AckOutcome, String> {
 }
 fn view(row: &Task, batch: &Batch) -> Result<TaskView, String> {
     Ok(TaskView {
+        kind: batch.header.kind,
         id: row.id.clone(),
         revision: row.revision,
         state: row.state,

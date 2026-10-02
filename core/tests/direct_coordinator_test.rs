@@ -385,6 +385,90 @@ async fn unpublished_cancel_is_local_idempotent_and_never_queries_or_publishes()
     );
 }
 #[tokio::test]
+async fn pause_fences_restore_reply_and_scheduler_waits_for_explicit_resume() {
+    use liteseal_core::trusted_devices::messages::media::Stage;
+    use liteseal_shared::direct_message::Kind;
+    let f = Fixture::new_mode(true).await;
+    let id = uuid::Uuid::new_v4().to_string();
+    f.actor
+        .stage_media(
+            Stage {
+                id: &id,
+                peer: &f.peer,
+                name: "暂停恢复.txt",
+                bytes: b"pause exact original",
+                kind: Kind::Attachment,
+                duration_ms: None,
+            },
+            &f.keys,
+        )
+        .unwrap();
+    assert!(f.actor.drive(true, &f.keys).await.unwrap().media.is_none());
+    f.actor.media_step(&id, &f.keys).await.unwrap();
+    let prepared = f
+        .actor
+        .prepare_media(&id, &f.keys)
+        .await
+        .unwrap()
+        .task
+        .unwrap();
+    f.actor.step(&id, &f.keys).await.unwrap();
+    let actor = f.actor.clone();
+    let keys = f.keys.clone();
+    let original = id.clone();
+    let pending = tokio::spawn(async move { actor.step(&original, &keys).await });
+    tokio::time::timeout(std::time::Duration::from_secs(3), f.seen.notified())
+        .await
+        .unwrap();
+    let before = f.actor.media_tasks(&f.keys).unwrap().pop().unwrap();
+    f.actor
+        .set_media_transfer(&id, before.revision, true, &f.keys)
+        .unwrap();
+    f.release.notify_one();
+    assert!(pending.await.unwrap().is_err());
+    let paused = f.actor.media_tasks(&f.keys).unwrap().pop().unwrap();
+    assert!(paused.paused);
+    assert_eq!(paused.uploaded, 0);
+    assert!(f.actor.drive(true, &f.keys).await.unwrap().task.is_none());
+    assert_eq!(
+        f.actor.step(&id, &f.keys).await.unwrap().condition,
+        Condition::Paused
+    );
+    f.actor
+        .set_media_transfer(&id, paused.revision, false, &f.keys)
+        .unwrap();
+    assert_eq!(
+        f.actor
+            .drive(true, &f.keys)
+            .await
+            .unwrap()
+            .task
+            .unwrap()
+            .condition,
+        Condition::Uploading
+    );
+    assert_eq!(
+        f.actor
+            .prepare_media(&id, &f.keys)
+            .await
+            .unwrap()
+            .task
+            .unwrap()
+            .digest,
+        prepared.digest
+    );
+    assert_eq!(
+        f.actor
+            .drive(true, &f.keys)
+            .await
+            .unwrap()
+            .task
+            .unwrap()
+            .condition,
+        Condition::Accepted
+    );
+}
+#[tokio::test]
 async fn prepared_restore_releases_text_lock_and_fences_late_cancel_rotation_and_lock() {
     use liteseal_core::trusted_devices::messages::media::Stage;
     use liteseal_shared::direct_message::Kind;

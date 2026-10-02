@@ -4,8 +4,8 @@ use crate::AppState;
 use liteseal_core::trusted_devices::{
     api::DeviceControlApi,
     messages::{
-        coordinator::{Condition, MessageCoordinator, Poll, Preparation, Progress},
-        Owner, RecordView, TaskState, TaskView,
+        coordinator::{Condition, MediaProgress, MessageCoordinator, Poll, Preparation, Progress},
+        Owner, RecordView, TaskView,
     },
     profiles::active,
     tasks::anchor_fingerprint,
@@ -80,6 +80,8 @@ pub struct History {
 }
 #[derive(Serialize, Default)]
 pub struct Report {
+    pub media: Option<MediaProgress>,
+    pub errors: Vec<String>,
     pub changed: bool,
     pub task: Option<Progress>,
     pub poll: Option<Poll>,
@@ -462,33 +464,22 @@ pub async fn process(state: &AppState) -> Result<Report, String> {
     if ctx.selected.identity.token.is_empty() {
         return Ok(Report::default());
     }
-    let tasks = ctx.actor.tasks(&ctx.keys).map_err(|e| e.to_string())?;
-    let pending = tasks
-        .iter()
-        .find(|t| {
-            t.cancel_requested && !matches!(t.state, TaskState::Cancelled | TaskState::Accepted)
-        })
-        .or_else(|| {
-            tasks
-                .iter()
-                .find(|t| matches!(t.state, TaskState::Prepared | TaskState::Publishing))
-        });
     let work = async {
-        let task = if let Some(task) = pending {
-            Some(ctx.actor.step(&task.id, &ctx.keys).await?)
-        } else {
-            None
-        };
         let poll = ctx.actor.poll(&ctx.keys).await?;
-        let changed = task.as_ref().is_some_and(|t| {
-            matches!(
-                t.condition,
-                Condition::Accepted | Condition::Cancelled | Condition::Uploading
-            )
-        }) || poll.received > 0;
-        Ok(Report {
+        let (drive, errors) = match ctx.actor.drive(false, &ctx.keys).await {
+            Ok(drive) => (drive, vec![]),
+            Err(error) => (Default::default(), vec![error.to_string()]),
+        };
+        let changed = drive
+            .task
+            .as_ref()
+            .is_some_and(|t| matches!(t.condition, Condition::Accepted | Condition::Cancelled))
+            || poll.received > 0;
+        Ok::<_, liteseal_core::trusted_devices::messages::coordinator::CoordinatorError>(Report {
             changed,
-            task,
+            task: drive.task,
+            media: None,
+            errors,
             poll: Some(poll),
             notification_scope: Some(ctx.key.clone()),
             notifications: ctx.actor.claim_notifications(&ctx.keys)?,
@@ -497,4 +488,30 @@ pub async fn process(state: &AppState) -> Result<Report, String> {
     let result = bounded(work).await?;
     current(state, &ctx)?;
     Ok(result)
+}
+
+pub async fn process_media(state: &AppState) -> Result<Report, String> {
+    let Some(selected) = normal::capture(state)? else {
+        return Ok(Report::default());
+    };
+    if selected.protocol != "v3" || selected.identity.token.is_empty() {
+        return Ok(Report::default());
+    }
+    let ctx = context(state)?;
+    let result = bounded(ctx.actor.drive(true, &ctx.keys)).await;
+    current(state, &ctx)?;
+    match result {
+        Ok(drive) => Ok(Report {
+            changed: drive.task.is_some() || drive.media.is_some(),
+            task: drive.task,
+            media: drive.media,
+            notification_scope: Some(ctx.key),
+            ..Default::default()
+        }),
+        Err(error) => Ok(Report {
+            errors: vec![error],
+            notification_scope: Some(ctx.key),
+            ..Default::default()
+        }),
+    }
 }

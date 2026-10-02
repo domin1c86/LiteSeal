@@ -26,6 +26,22 @@ pub fn tasks(state: &AppState, scope: String) -> Result<Vec<View>, String> {
     current(state, &ctx)?;
     Ok(result)
 }
+pub fn transfer(
+    state: &AppState,
+    scope: String,
+    id: String,
+    revision: u64,
+    paused: bool,
+) -> Result<View, String> {
+    uuid(&id)?;
+    let ctx = scoped(state, &scope)?;
+    let result = ctx
+        .actor
+        .set_media_transfer(&id, revision, paused, &ctx.keys)
+        .map_err(|e| e.to_string())?;
+    current(state, &ctx)?;
+    Ok(result)
+}
 pub fn info(state: &AppState, scope: String, id: String) -> Result<Info, String> {
     uuid(&id)?;
     let ctx = scoped(state, &scope)?;

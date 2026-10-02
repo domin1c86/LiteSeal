@@ -1,5 +1,24 @@
 # P0/P1 验收记录（待执行）
 
+## 2026-10-03 持久暂停与传输调度短测
+
+基线 `bd87429` 加本轮工作树，过程中先独立提交清理竞争修复 `ef6f681`。全部采用合成身份、临时 SQLite/文件/Chromium 目录与隔离原生保护，真实库只用已有标记专用 PostgreSQL；不操作真实资料、不启动新长期、不推送。
+
+- `target/test-results/direct-media-schedule-core-2026-10-03.txt`：23 项媒体存储短测通过（7.55 秒），新增暂存默认无发送意图、明确启动、暂停/重开保持、旧修订和暂停修订拒绝块推进、原缓存字节不变、下载暂停拒绝部分明文和明确恢复、未知发布暂停不改变批次及取消意图通过。完整工程还执行两项调度单元测试，使用模拟 Instant 验证轮转、失败退避、取消修订解除退避、两个队列独立与 60 秒上限；没有用真实等待 60 秒或长期负载替代。
+- `direct-media-schedule-http-2026-10-03.txt`：7 项协调器短测通过（7.16 秒）。新增暂停期间的已准备恢复响应丢失、迟到回复不推进、调度跳过暂停任务、明确恢复沿原摘要完成；既有取消/会话轮换/锁定隔离同时通过。HTTP 是本机夹具，未声称真实系统锁屏或外部网络故障通过。
+- `direct-media-schedule-ipc-2026-10-03.txt`：真实 Rust/SQLite/隔离原生范围用例通过（3.54 秒），新增错 scope、旧修订拒绝、暂停/明确恢复及发送意图断言；秘密/额外参数仍拒绝，原密钥文件不变。
+- `direct-media-schedule-node-2026-10-03.txt`：9 项 main/preload/真实 bridge 子集通过，验证两个后台定时器各自防重入、媒体等待时文字定时器仍可启动、系统暂停后两条迟到事件均不送达、后台接口不暴露给页面。最终完整 Node 再执行通过；该范围是主进程夹具，不是系统睡眠/锁屏实测。
+- `direct-media-schedule-ui-2026-10-03.txt` / `direct-ui-7D59dJ/result.json`：真实 Chromium 浅深色、1280×900/390×844 四组合各 26 项通过，无 renderer 错误/横向溢出（27 秒）。新增暂停期间迟到上传不能准备消息、重挂载保持暂停、明确恢复同一编号；原恢复、下载/预览、录音模拟、离线存储与历史回归同时执行。业务、麦克风和网络为夹具。
+- 首轮工程因已有预览退役与父目录删除竞争返回 EPERM，原报告保留并先独立修复，见本记录下方。次轮新增夹具错误地在尚未发布时断言远端取消意图，`direct-media-schedule-delivery-fixture-failure-2026-10-03.txt` 保留；改为先开始发布，再验证暂停时未知结果的取消栅栏，生产取消规则未放宽。
+- 最终完整 `npm test` 为 **24 项 Node/362 项普通 Rust 通过，0 失败**，80 项 PostgreSQL 默认 ignored；报告 `direct-media-schedule-delivery-final-2026-10-03.txt`。格式、全 workspace/all-targets Clippy（-D warnings）、核心 FFI 检查通过，`direct-media-schedule-static-2026-10-03.txt`。生产构建通过，release 49.57 秒，`direct-media-schedule-build-2026-10-03.txt`；既有链接警告保留。
+- 群 UI 宽窄两组通过，`direct-media-schedule-group-ui-2026-10-03.txt` / `group-ui-JamAoy`；风格回归 72 张既有截图范围、无 renderer 错误，`direct-media-schedule-style-2026-10-03.txt` / `ui-style-sPbIKh`。
+
+- `target/test-results/direct-media-schedule-postgres-2026-10-03.json`：专用 PostgreSQL 16.14 全部 **80 通过/0 失败/0 跳过**，脱敏失败诊断为空。新增实际协调器调度场景覆盖暂存无远端对象、明确启动逐块上传、暂停一块后重开仍停止、恢复自动准备/发布且原编号只产生一个批次，以及接收方部分下载暂停重开/明确恢复和完整认证字节一致。运行脚本 `run-media-schedule-paced.mjs` / `run-local-media-schedule.ps1` 保存在测试目录；只读观察认证 IP 窗口，计数 36/36/38 时分别等待 18/26/27 秒自然到期（合计 71 秒），不删除计数、不重试失败用例。
+
+- `target/test-results/direct-media-schedule-group-integration-2026-10-03.txt`：真实专用 PostgreSQL/服务端/同机三个隔离 Rust 桌面进程的 11 阶段通过，包含旧文字/群协作、群附件/合成语音/活动及 T22 v2 缓存/投票/草稿/隐藏历史；该结果是既有功能回归，不替代真实双 Windows 或新 v3 界面端到端验收。
+
+暂停保留已在途请求的原结果，不能把暂停视为撤销已接受消息；文字收件/ACK 与媒体推进分离，媒体进度不增加消息/未读。运行时退避与轮转不作为持久安全证据，重启依赖认证意图/暂停和原任务进度。预览强杀回收、实际磁盘满/权限拒绝/系统生命周期、双 Windows、独立审查和长期验收继续待执行。
+
 ## 2026-10-03 预览目录清理竞争修复
 
 传输调度工作树的完整工程首轮在已有 Node 预览用例失败：失效句柄异步删除子目录，夹具同时删除父目录，Windows 返回 EPERM。原报告保留为 `target/test-results/direct-media-schedule-delivery-first-failure-2026-10-03.txt`，该轮尚未进入 Rust 测试，不能计为工程通过。

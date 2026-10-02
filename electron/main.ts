@@ -128,6 +128,17 @@ else {
         if(report.changed)mainWindow?.webContents.send("liteseal:direct-changed");
       }).catch(()=>{}).finally(()=>{directBusy=false;});
     },2000).unref();
+    let directMediaBusy=false;
+    setInterval(()=>{
+      if(directMediaBusy||locked||screenLocked||systemSuspended||quitting||exitRequested)return;
+      let epoch:number;try{epoch=deviceControl.capture();}catch{return;}
+      const generation=lockGeneration;directMediaBusy=true;
+      void bridge.call("process_direct_media",{}).then(report=>{
+        deviceControl.check(epoch);if(generation!==lockGeneration)return;
+        mainWindow?.webContents.send("liteseal:direct-status",report);
+        if(report.changed)mainWindow?.webContents.send("liteseal:direct-changed");
+      }).catch(()=>{}).finally(()=>{directMediaBusy=false;});
+    },2000).unref();
     try {
       const configuration = JSON.parse(await fs.readFile(path.join(app.getPath("userData"), "app-lock.json"), "utf8"));
       if (typeof configuration.enabled !== "boolean") throw new Error("应用锁配置损坏");
@@ -486,6 +497,7 @@ else {
           }
           if (name === "clear_group_history") { notifications.suppressGroup((args as { groupId: string }).groupId); mainWindow?.webContents.send("liteseal:groups-changed"); }
           if (name === "clear_direct_media_cache") mainWindow?.webContents.send("liteseal:direct-changed");
+          if (name === "set_direct_media_transfer") mainWindow?.webContents.send("liteseal:direct-changed");
           if (name === "set_group_muted") notifications.suppressGroup((args as { groupId: string }).groupId);
           if (name === "set_conversation_muted") notifications.dismiss((args as { peerId: string }).peerId);
           if (name === "set_contact_policy") notifications.dismiss((args as { peerId: string }).peerId);

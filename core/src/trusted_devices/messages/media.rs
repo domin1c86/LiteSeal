@@ -14,6 +14,9 @@ use zeroize::Zeroizing;
 const KIND: &str = "direct_v3_media";
 const MAX_JOB: usize = 16 * 1024;
 const LIMIT: i64 = 256 * 1024 * 1024;
+fn is_false(value: &bool) -> bool {
+    !value
+}
 pub(super) const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS direct_v3_media_chunks(
  scope TEXT NOT NULL,account TEXT NOT NULL,id TEXT NOT NULL,part INTEGER NOT NULL CHECK(part BETWEEN 0 AND 20),
  ciphertext BLOB NOT NULL CHECK(length(ciphertext) BETWEEN 1 AND 1048576),PRIMARY KEY(scope,id,part));";
@@ -95,6 +98,8 @@ pub struct View {
     pub download: bool,
     pub total: u64,
     pub restoring: bool,
+    pub paused: bool,
+    pub requested: bool,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -114,6 +119,10 @@ pub(super) struct Job {
     pub download: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reupload: Option<usize>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub paused: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub requested: bool,
 }
 impl Job {
     pub fn view(&self) -> View {
@@ -141,6 +150,8 @@ impl Job {
             download: self.download,
             total: self.descriptor.size + 40,
             restoring: self.reupload.is_some(),
+            paused: self.paused,
+            requested: self.requested,
         }
     }
 }
@@ -275,6 +286,9 @@ fn message_state(
     Ok(TaskState::Accepted)
 }
 fn restorable(conn: &Connection, owner: &Owner, job: &Job, keys: &KeyPair) -> Result<(), String> {
+    if job.paused {
+        return Err("原媒体传输已暂停".into());
+    }
     let row = task(conn, &owner.scope(), &job.id)?.ok_or_else(invalid)?;
     let (row, batch, _) = checked_task(conn, owner, row, keys)?;
     let sender = current(conn, &owner.origin, &owner.account)?;
@@ -299,6 +313,7 @@ fn public_view(
         match message_state(conn, owner, &job.id, keys)? {
             TaskState::Accepted => {
                 view.restoring = false;
+                view.paused = false;
                 view.uploaded = view.total;
             }
             TaskState::Cancelled | TaskState::Conflict => view.restoring = false,
@@ -356,6 +371,49 @@ pub(super) fn prepared(
     save(conn, owner, &mut job, revision, keys)
 }
 impl Store {
+    pub fn set_media_transfer(
+        &mut self,
+        id: &str,
+        revision: u64,
+        paused: bool,
+        keys: &KeyPair,
+    ) -> Result<View, String> {
+        self.owner.keys(keys)?;
+        let owner = self.owner.clone();
+        self.trust.write_checked(|conn| {
+            let mut job = load(conn, &owner, id, keys)?;
+            let hidden: bool = conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM direct_v3_hidden WHERE scope=?1 AND id=?2)",
+                    params![owner.scope(), id],
+                    |r| r.get(0),
+                )
+                .map_err(db)?;
+            if job.revision != revision || hidden {
+                return Err("原媒体任务已变化，请刷新后操作".into());
+            }
+            if !matches!(
+                job.phase,
+                Phase::Staged | Phase::Uploaded | Phase::Prepared | Phase::Downloading
+            ) {
+                return Err("原媒体任务已结束".into());
+            }
+            if job.phase == Phase::Prepared
+                && matches!(
+                    message_state(conn, &owner, id, keys)?,
+                    TaskState::Accepted | TaskState::Cancelled | TaskState::Conflict
+                )
+            {
+                return Err("原媒体发布已结束，请查询原结果".into());
+            }
+            job.paused = paused;
+            if !paused {
+                job.requested = true;
+            }
+            save(conn, &owner, &mut job, revision, keys)?;
+            public_view(conn, &owner, &job, keys)
+        })
+    }
     pub fn stage_media(&mut self, request: Stage<'_>, keys: &KeyPair) -> Result<View, String> {
         self.owner.keys(keys)?;
         let owner = self.owner.clone();
@@ -437,6 +495,8 @@ impl Store {
             next: 0,
             download: false,
             reupload: None,
+            paused: false,
+            requested: false,
         };
         // The complete ciphertext commit comes first. If the following covered
         // write is interrupted, its recovered descriptor still has every chunk.
@@ -539,7 +599,7 @@ impl Store {
         let owner = self.owner.clone();
         self.trust.read_checked(|conn| {
             let job = load(conn, &owner, id, keys)?;
-            if job.revision != revision || job.phase != Phase::Staged {
+            if job.revision != revision || job.phase != Phase::Staged || job.paused {
                 return Err(invalid());
             }
             chunk(conn, &owner, &job, job.next)
@@ -555,7 +615,7 @@ impl Store {
         let owner = self.owner.clone();
         self.trust.write_checked(|conn| {
             let mut job = load(conn, &owner, id, keys)?;
-            if job.revision != revision || job.phase != Phase::Staged {
+            if job.revision != revision || job.phase != Phase::Staged || job.paused {
                 return Err(invalid());
             }
             chunk(conn, &owner, &job, job.next)?;
@@ -660,6 +720,9 @@ impl Store {
         let job = self.media_job(id, keys)?;
         if job.phase == Phase::Prepared {
             return self.task_view(id, keys);
+        }
+        if job.paused {
+            return Err("原媒体传输已暂停，请明确恢复原任务".into());
         }
         if job.phase != Phase::Uploaded {
             return Err("请先完成原媒体任务上传".into());
