@@ -626,6 +626,214 @@ async fn password_and_directory_change_close_unaccepted_originals_without_resign
         assert_eq!(count, 1);
     }
 }
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn joined_windows_profile_uses_server_device_and_dpapi_session_without_replacing_original_identity(
+) {
+    use liteseal_core::trusted_devices::{
+        coordinator::DeviceCoordinator,
+        profiles::{active, JoinProfileStore},
+        tasks::{anchor_fingerprint, TaskOwner, TaskPhase},
+    };
+    let f = Fixture::start(true).await;
+    let root = f.account().await;
+    let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
+    let profile_root = work.0.join("joining");
+    let protection = Protection::isolated_test();
+    let profiles = JoinProfileStore::with_protection(profile_root.clone(), protection.clone());
+    let profile = profiles
+        .create(&f.url, &root.username, "normal joined Windows")
+        .unwrap();
+    let id = profile.view().id;
+    let keys = profile.keys().unwrap();
+    let path = profiles.database(&id).unwrap();
+    let original = std::fs::read(profile_root.join(&id).join("identity.bin")).unwrap();
+    let joining = DeviceCoordinator::open_protected(
+        &path,
+        profile.owner().unwrap(),
+        &keys,
+        protection.witness(&path).unwrap(),
+    )
+    .unwrap();
+    joining
+        .step(profile.task_id(), Some(&root.password), &keys)
+        .await
+        .unwrap();
+    let anchor = Anchor {
+        origin: f.url.clone(),
+        account: root.id.clone(),
+        root: DeviceIdentity::from_keys(root.device.clone(), &root.keys),
+    };
+    joining
+        .confirm_root(profile.task_id(), &anchor_fingerprint(&anchor), &keys)
+        .unwrap();
+    joining.step(profile.task_id(), None, &keys).await.unwrap();
+    let authority_path = work.0.join("authority.db");
+    drop(DeviceTrustStore::open(&authority_path).unwrap());
+    let authority = DeviceCoordinator::open_protected(
+        &authority_path,
+        TaskOwner::for_root(&anchor, &root.keys).unwrap(),
+        &root.keys,
+        protection.witness(&authority_path).unwrap(),
+    )
+    .unwrap();
+    authority.renew_session(root.token.clone()).unwrap();
+    let inspect = authority
+        .inspect_join(profile.task_id(), &root.keys)
+        .await
+        .unwrap();
+    let challenge = authority
+        .prepare_challenge(profile.task_id(), &inspect.combined_fingerprint, &root.keys)
+        .await
+        .unwrap()
+        .unwrap();
+    authority
+        .step(&challenge.id, None, &root.keys)
+        .await
+        .unwrap();
+    joining.step(profile.task_id(), None, &keys).await.unwrap();
+    let inspect = authority
+        .inspect_join(profile.task_id(), &root.keys)
+        .await
+        .unwrap();
+    let grant = authority
+        .prepare_grant(profile.task_id(), &inspect.combined_fingerprint, &root.keys)
+        .await
+        .unwrap()
+        .unwrap();
+    authority.step(&grant.id, None, &root.keys).await.unwrap();
+    assert_eq!(
+        joining
+            .step(profile.task_id(), None, &keys)
+            .await
+            .unwrap()
+            .task
+            .phase,
+        TaskPhase::Complete
+    );
+    let mode = enable_mode(&f, &root).await;
+    let store =
+        active::Store::open_with_protection(profile_root.clone(), &id, protection.clone()).unwrap();
+    let actor = ActivationCoordinator::open_with_protection(
+        &path,
+        store.job_owner().unwrap(),
+        &keys,
+        protection.clone(),
+    )
+    .unwrap();
+    let task = actor.prepare_login(&root.username, mode, &keys).unwrap();
+    assert_eq!(
+        actor
+            .step(&task.id, Some(&root.password), &keys)
+            .await
+            .unwrap()
+            .condition,
+        ActivationCondition::Complete
+    );
+    let session = actor.session(&task.id, &keys).unwrap();
+    assert_ne!(session.device, profile.view().local_device_id);
+    let account =
+        active::Coordinator::open_with_protection(profile_root.clone(), &id, protection.clone())
+            .unwrap();
+    let view = account.activate(&task.id).await.unwrap();
+    assert_eq!(view.account, root.id);
+    assert_eq!(view.device, session.device);
+    assert!(view.has_saved_session);
+    let public = serde_json::to_string(&view).unwrap();
+    assert!(
+        !public.contains(&session.access_token)
+            && !public.contains(&session.refresh_token)
+            && !public.contains("secret_key")
+    );
+    let identity = account.checked_identity().await.unwrap();
+    assert_eq!(identity.user_id, root.id);
+    assert_eq!(identity.device_id, session.device);
+    assert_eq!(identity.public_key, keys.public_key);
+    assert_eq!(identity.secret_key, keys.secret_key);
+    assert_eq!(
+        std::fs::read(profile_root.join(&id).join("identity.bin")).unwrap(),
+        original
+    );
+    assert!(profiles.remove(&id).is_err());
+    drop(account);
+    drop(store);
+    let account =
+        active::Coordinator::open_with_protection(profile_root.clone(), &id, protection.clone())
+            .unwrap();
+    assert!(account.checked_identity().await.is_ok());
+    let saved = std::fs::read(&path).unwrap();
+    assert!(!saved
+        .windows(session.access_token.len())
+        .any(|p| p == session.access_token.as_bytes()));
+    account.clear_session().unwrap();
+    assert!(!account.view().unwrap().unwrap().has_saved_session);
+    assert!(account.checked_identity().await.is_err());
+    let mut store = active::Store::open_with_protection(profile_root, &id, protection).unwrap();
+    let history_identity = store.load().unwrap().unwrap().identity();
+    assert_eq!(history_identity.user_id, root.id);
+    assert!(history_identity.token.is_empty());
+    assert_eq!(history_identity.secret_key, keys.secret_key);
+}
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn v3_session_metadata_is_current_device_scoped_and_rejects_beta_or_consumed_tokens() {
+    use liteseal_shared::device_activation::SessionInfo;
+    let f = Fixture::start(true).await;
+    let root = f.account().await;
+    let (join, _) = authorized(&f, &root).await;
+    let session = super::direct_message_tests::verified_activation(
+        &f,
+        &root,
+        &join.status.ticket.device.device_id,
+        &join.keys,
+    )
+    .await;
+    let response = f
+        .client
+        .get(format!("{}/auth/v3/session/{}", f.url, session.device))
+        .bearer_auth(&session.access_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let info: SessionInfo = response.json().await.unwrap();
+    assert_eq!(info.id, session.id);
+    assert_eq!(info.account, root.id);
+    assert_eq!(info.device.encryption_key, join.keys.public_key);
+    assert_eq!(
+        f.client
+            .get(format!("{}/auth/v3/session/{}", f.url, root.device))
+            .bearer_auth(&session.access_token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        f.client
+            .get(format!("{}/auth/v3/session/{}", f.url, root.device))
+            .bearer_auth(&root.token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UPGRADE_REQUIRED
+    );
+    f.db.revoke_session(&auth::service::hash_token(&session.access_token))
+        .await
+        .unwrap();
+    assert_eq!(
+        f.client
+            .get(format!("{}/auth/v3/session/{}", f.url, session.device))
+            .bearer_auth(&session.access_token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+}
 async fn state(f: &Fixture, root: &Account) -> DeviceState {
     let page = f
         .manifest(root, &root.id, 0, 100)

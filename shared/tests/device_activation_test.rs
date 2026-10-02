@@ -57,6 +57,46 @@ impl Fixture {
     }
 }
 #[test]
+fn session_metadata_requires_live_original_device_authority_and_bounded_expiry() {
+    let f = Fixture::new();
+    let device = f.joined.secondary().unwrap().clone();
+    let directory = liteseal_shared::direct_message::Directory::from_state(&f.joined);
+    let info = SessionInfo {
+        version: 1,
+        id: REQUEST.into(),
+        account: ACCOUNT.into(),
+        device: device.clone(),
+        authorization: directory
+            .members
+            .iter()
+            .find(|m| m.device == device)
+            .unwrap()
+            .authorization_hash,
+        mode: f.mode.digest().unwrap(),
+        expires_at: 3000,
+        refresh_expires_at: 4000,
+        refresh_hash: [1; 32],
+    };
+    info.verify(&f.joined, &f.mode, &device, 2000).unwrap();
+    assert!(info.verify(&f.initial, &f.mode, &device, 2000).is_err());
+    assert!(info.verify(&f.joined, &f.mode, &device, 3000).is_err());
+    for case in 0..9 {
+        let mut wrong = info.clone();
+        match case {
+            0 => wrong.version = 2,
+            1 => wrong.id = "not-a-session".into(),
+            2 => wrong.account = ROOT.into(),
+            3 => wrong.device = f.joined.anchor().root.clone(),
+            4 => wrong.authorization[0] ^= 1,
+            5 => wrong.mode[0] ^= 1,
+            6 => wrong.refresh_expires_at = wrong.expires_at,
+            7 => wrong.refresh_hash = [0; 32],
+            _ => wrong.refresh_expires_at = 8_640_000_000_000_001,
+        }
+        assert!(wrong.verify(&f.joined, &f.mode, &device, 2000).is_err());
+    }
+}
+#[test]
 fn original_signature_enables_exact_directory_and_secondary_cannot_enable() {
     let f = Fixture::new();
     f.mode.verify_current(&f.joined).unwrap();

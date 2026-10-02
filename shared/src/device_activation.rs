@@ -742,6 +742,50 @@ impl Drop for Session {
         }
     }
 }
+/// Public metadata only; tokens remain in the Rust transport and DPAPI store.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SessionInfo {
+    pub version: u8,
+    pub id: String,
+    pub account: String,
+    pub device: DeviceIdentity,
+    pub authorization: [u8; 32],
+    pub mode: [u8; 32],
+    pub expires_at: i64,
+    pub refresh_expires_at: i64,
+    pub refresh_hash: [u8; 32],
+}
+impl SessionInfo {
+    pub fn verify(
+        &self,
+        state: &DeviceState,
+        mode: &Enable,
+        device: &DeviceIdentity,
+        at: i64,
+    ) -> Result<()> {
+        mode.verify_root(state.anchor())?;
+        let member = Directory::from_state(state)
+            .members
+            .into_iter()
+            .find(|m| &m.device == device)
+            .ok_or_else(bad)?;
+        if self.version != 1
+            || !id(&self.id)
+            || self.account != state.anchor().account
+            || self.device != *device
+            || self.authorization != member.authorization_hash
+            || self.mode != mode.digest()?
+            || self.expires_at <= at
+            || self.refresh_expires_at <= self.expires_at
+            || self.refresh_expires_at > 8_640_000_000_000_000
+            || self.refresh_hash == [0; 32]
+        {
+            return Err(bad());
+        }
+        Ok(())
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Envelope {

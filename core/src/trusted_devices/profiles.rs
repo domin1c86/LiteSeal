@@ -13,6 +13,7 @@ use std::{
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 const MAX_PROFILES: usize = 8;
+pub mod active;
 const MAX_KEYFILE: u64 = 32768;
 #[derive(Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 #[serde(deny_unknown_fields)]
@@ -346,6 +347,7 @@ impl JoinProfileStore {
     /// Call only after all tasks are safely closed and their SQLite handles dropped.
     pub fn remove(&self, id: &str) -> Result<(), String> {
         let directory = self.directory(id)?;
+        active::refuse_removal(&directory.join("tasks.db"))?;
         let names = [
             "identity.bin",
             "tasks.db",

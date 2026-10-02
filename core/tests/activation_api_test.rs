@@ -326,3 +326,51 @@ async fn unknown_inspection_requires_the_original_request_digest() {
         server.await.unwrap();
     }
 }
+#[tokio::test]
+async fn session_check_rejects_wrong_scope_expiry_and_unknown_fields() {
+    use liteseal_shared::device_activation::SessionInfo;
+    for case in 0..6 {
+        let (listener, url, state, keys) = setup().await;
+        let mode = Enable::make(&state, &uuid::Uuid::new_v4().to_string(), &keys).unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        let info = SessionInfo {
+            version: 1,
+            id: uuid::Uuid::new_v4().to_string(),
+            account: state.anchor().account.clone(),
+            device: state.anchor().root.clone(),
+            authorization: state.anchor().hash().try_into().unwrap(),
+            mode: mode.digest().unwrap(),
+            expires_at: now + 60000,
+            refresh_expires_at: now + 120000,
+            refresh_hash: [1; 32],
+        };
+        let mut body = serde_json::to_value(info).unwrap();
+        match case {
+            1 => body["device"]["device_id"] = serde_json::json!(uuid::Uuid::new_v4().to_string()),
+            2 => body["authorization"][0] = serde_json::json!(256),
+            3 => body["expires_at"] = serde_json::json!(now - 1),
+            4 => body["mode"] = serde_json::json!(vec![0; 32]),
+            5 => body["unknown"] = serde_json::json!(true),
+            _ => {}
+        }
+        let server = tokio::spawn(reply(
+            listener,
+            response(&serde_json::to_vec(&body).unwrap()),
+        ));
+        assert_eq!(
+            ActivationApi::new(&url)
+                .unwrap()
+                .check_session(
+                    "synthetic-token",
+                    &state,
+                    &mode,
+                    &state.anchor().root,
+                    &keys
+                )
+                .await
+                .is_ok(),
+            case == 0
+        );
+        server.await.unwrap();
+    }
+}

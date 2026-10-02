@@ -1,5 +1,6 @@
 //! Typed activation transport. Private request/proof/session values stay in
 //! Rust; shell-facing activation jobs must retain originals before calling it.
+use liteseal_shared::{device_activation::SessionInfo, trusted_device::DeviceIdentity};
 use liteseal_shared::{
     device_activation::{
         self as a, ActivationCancel, ActivationCancelResult, Challenge, Enable, EnableCancel,
@@ -14,6 +15,10 @@ pub mod jobs;
 pub struct Inspected {
     pub(super) request: Inspection,
     pub(super) result: InspectionResult,
+}
+pub struct CheckedSession {
+    pub(crate) info: SessionInfo,
+    pub(crate) token_hash: [u8; 32],
 }
 #[derive(Debug)]
 pub struct ActivationError {
@@ -419,5 +424,40 @@ impl ActivationApi {
             .await?;
         envelope.open(challenge, keys).map_err(|_| invalid())?;
         Ok(envelope)
+    }
+    pub async fn check_session(
+        &self,
+        token: &str,
+        state: &DeviceState,
+        mode: &Enable,
+        device: &DeviceIdentity,
+        keys: &liteseal_shared::crypto::KeyPair,
+    ) -> Result<CheckedSession, ActivationError> {
+        self.root(state.anchor())?;
+        mode.verify_root(state.anchor()).map_err(|_| invalid())?;
+        if device.encryption_key != keys.public_key || device.signing_key != keys.ed25519_pk {
+            return Err(invalid());
+        }
+        liteseal_shared::backup_crypto::validate_identity(
+            &keys.public_key,
+            &keys.secret_key,
+            &keys.ed25519_pk,
+            &keys.ed25519_sk,
+        )
+        .map_err(|_| invalid())?;
+        let info: SessionInfo = self
+            .send(self.request(
+                Method::GET,
+                &format!("/auth/v3/session/{}", device.device_id),
+                Some(token),
+            )?)
+            .await?;
+        info.verify(state, mode, device, chrono::Utc::now().timestamp_millis())
+            .map_err(|_| invalid())?;
+        use sha2::{Digest, Sha256};
+        Ok(CheckedSession {
+            info,
+            token_hash: Sha256::digest(token.as_bytes()).into(),
+        })
     }
 }

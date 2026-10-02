@@ -10,6 +10,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use liteseal_shared::device_activation::SessionInfo;
 use liteseal_shared::{
     device_activation::{
         self as a, ActivationCancel, ActivationCancelResult, Challenge, ClosedReason, Closure,
@@ -126,6 +127,7 @@ pub fn router() -> Router<AppState> {
         .route("/auth/v3/begin", post(begin))
         .route("/auth/v3/cancel", post(cancel_activation))
         .route("/auth/v3/inspect", post(inspect))
+        .route("/auth/v3/session/:device", get(session_info))
         .route("/auth/v3/:id", get(challenge))
         .route("/auth/v3/:id/proof", post(prove))
         .layer(DefaultBodyLimit::max(a::MAX_WIRE))
@@ -789,6 +791,59 @@ async fn challenge(
     }
     tx.commit().await.map_err(storage)?;
     Ok(Json(challenge))
+}
+async fn session_info(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(device): Path<String>,
+) -> Result<Json<SessionInfo>, Failure> {
+    let realm = origin(&state)?;
+    uuid(&device)?;
+    let hash = service::hash_token(bearer(&headers)?);
+    let user = state
+        .db
+        .validate_access_token(&hash, &device)
+        .await
+        .map_err(storage)?
+        .ok_or_else(unauthorized)?;
+    let mut tx = state.db.pool().begin().await.map_err(storage)?;
+    trusted_devices::lock(&mut tx, &user).await?;
+    let row = sqlx::query("SELECT s.id,s.v3_authority,s.refresh_token_hash,(EXTRACT(EPOCH FROM s.expires_at)*1000)::BIGINT AS expires,(EXTRACT(EPOCH FROM s.refresh_expires_at)*1000)::BIGINT AS refresh,d.public_key,d.ed25519_pk FROM sessions s JOIN devices d ON d.id=s.device_id WHERE s.access_token_hash=$1 AND s.user_id=$2 AND s.device_id=$3 AND d.user_id=s.user_id AND s.revoked=false AND s.expires_at>now() AND d.revoked=false")
+        .bind(hash).bind(&user).bind(&device).fetch_optional(&mut *tx).await.map_err(storage)?.ok_or_else(unauthorized)?;
+    let authority: Vec<u8> = row.get::<Option<Vec<u8>>, _>("v3_authority").ok_or((
+        StatusCode::UPGRADE_REQUIRED,
+        "此会话尚未通过双密钥激活".into(),
+    ))?;
+    let authority: [u8; 32] = authority.try_into().map_err(|_| denied())?;
+    let (directory, mode) = live(&mut tx, &user, &device, authority, realm).await?;
+    let member = Directory::from_state(&directory)
+        .members
+        .into_iter()
+        .find(|m| m.device.device_id == device && m.authorization_hash == authority)
+        .ok_or_else(denied)?;
+    if member.device.encryption_key.as_slice() != row.get::<Vec<u8>, _>("public_key")
+        || member.device.signing_key.as_slice() != row.get::<Vec<u8>, _>("ed25519_pk")
+    {
+        return Err(denied());
+    }
+    let info = SessionInfo {
+        version: 1,
+        id: row.get("id"),
+        account: user,
+        device: member.device,
+        authorization: authority,
+        mode: mode.digest().map_err(|_| denied())?,
+        expires_at: row.get("expires"),
+        refresh_expires_at: row.get("refresh"),
+        refresh_hash: hex::decode(row.get::<String, _>("refresh_token_hash"))
+            .map_err(|_| denied())?
+            .try_into()
+            .map_err(|_| denied())?,
+    };
+    info.verify(&directory, &mode, &info.device, now())
+        .map_err(|_| denied())?;
+    tx.commit().await.map_err(storage)?;
+    Ok(Json(info))
 }
 async fn prove(
     State(state): State<AppState>,
