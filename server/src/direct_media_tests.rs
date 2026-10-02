@@ -5,6 +5,147 @@ use liteseal_shared::direct_media::{self as m, Descriptor, Submission};
 
 #[tokio::test]
 #[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn persistent_core_media_upload_restart_publish_and_recipient_ack() {
+    use liteseal_core::{
+        backup::WorkDirectory,
+        trusted_devices::{
+            messages::{
+                coordinator::{Condition, MessageCoordinator},
+                media::{Phase, Stage},
+                Owner,
+            },
+            tasks::anchor_fingerprint,
+            witness::platform::Protection,
+        },
+    };
+    let f = Fixture::start(true).await;
+    let a = f.account().await;
+    let b = f.account().await;
+    let (_, sender) = grant(&f, &a, &directory(&f, &a)).await;
+    let (_, peer) = grant(&f, &b, &directory(&f, &b)).await;
+    accepted(&f, &a, &b).await;
+    let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
+    let protection = Protection::isolated_test();
+    let source_path = work.0.join("source.db");
+    let owner = Owner::new(&f.url, &a.id, &a.device, &a.keys).unwrap();
+    let actor = MessageCoordinator::open_with_protection(
+        &source_path,
+        owner.clone(),
+        &a.keys,
+        protection.clone(),
+    )
+    .unwrap();
+    for anchor in [sender.anchor(), peer.anchor()] {
+        actor
+            .confirm_root(anchor, &anchor_fingerprint(anchor), &a.keys)
+            .unwrap();
+    }
+    actor.renew_session(a.token.clone()).unwrap();
+    let id = uuid::Uuid::new_v4().to_string();
+    let bytes = "原媒体重启 中文 🦭".as_bytes().repeat(70_000);
+    actor
+        .stage_media(
+            Stage {
+                id: &id,
+                peer: &b.id,
+                name: "中文文件.txt",
+                bytes: &bytes,
+                kind: Kind::Attachment,
+                duration_ms: None,
+            },
+            &a.keys,
+        )
+        .unwrap();
+    assert!(actor.prepare_media(&id, &a.keys).await.is_err());
+    assert_eq!(
+        actor.media_step(&id, &a.keys).await.unwrap().task.uploaded,
+        m::CHUNK as u64
+    );
+    drop(actor);
+    let actor =
+        MessageCoordinator::open_with_protection(&source_path, owner, &a.keys, protection.clone())
+            .unwrap();
+    actor.renew_session(a.token.clone()).unwrap();
+    assert_eq!(
+        actor.media_tasks(&a.keys).unwrap()[0].uploaded,
+        m::CHUNK as u64
+    );
+    while actor.media_tasks(&a.keys).unwrap()[0].phase == Phase::Staged {
+        actor.media_step(&id, &a.keys).await.unwrap();
+    }
+    let prepared = actor
+        .prepare_media(&id, &a.keys)
+        .await
+        .unwrap()
+        .task
+        .unwrap();
+    assert_eq!(prepared.id, id);
+    assert_eq!(
+        actor
+            .prepare_media(&id, &a.keys)
+            .await
+            .unwrap()
+            .task
+            .unwrap()
+            .digest,
+        prepared.digest
+    );
+    assert_eq!(
+        actor.step(&id, &a.keys).await.unwrap().condition,
+        Condition::Accepted
+    );
+    assert_eq!(
+        actor.step(&id, &a.keys).await.unwrap().condition,
+        Condition::Accepted
+    );
+    let receiver = MessageCoordinator::open_with_protection(
+        &work.0.join("receiver.db"),
+        Owner::new(&f.url, &b.id, &b.device, &b.keys).unwrap(),
+        &b.keys,
+        protection.clone(),
+    )
+    .unwrap();
+    for anchor in [sender.anchor(), peer.anchor()] {
+        receiver
+            .confirm_root(anchor, &anchor_fingerprint(anchor), &b.keys)
+            .unwrap();
+    }
+    receiver.renew_session(b.token.clone()).unwrap();
+    // Directory pages are independently verified before an original audience is
+    // admitted. A bounded extra poll can finish a page before receiving.
+    for _ in 0..4 {
+        receiver.poll(&b.keys).await.unwrap();
+        if !receiver.history(None, 100, &b.keys).unwrap().is_empty() {
+            break;
+        }
+    }
+    assert_eq!(receiver.history(None, 100, &b.keys).unwrap()[0].id, id);
+    receiver.poll(&b.keys).await.unwrap();
+    assert!(DirectApi::new(&f.url)
+        .unwrap()
+        .pending(&b.token, &b.id, &b.device, 1)
+        .await
+        .unwrap()
+        .is_empty());
+    let page = pending(&f, &b.token, &peer.secondary().unwrap().device_id, 1).await;
+    assert_eq!(page.status(), StatusCode::UNAUTHORIZED);
+    receiver.hide(&id, &b.keys).unwrap();
+    assert!(receiver.history(None, 100, &b.keys).unwrap().is_empty());
+    actor.renew_session(String::new()).unwrap();
+    assert_eq!(actor.history(None, 100, &a.keys).unwrap()[0].id, id);
+    actor.clear_accepted(&id, &a.keys).unwrap();
+    assert_eq!(
+        actor.media_step(&id, &a.keys).await.unwrap().condition,
+        Condition::Accepted
+    );
+    assert_eq!(
+        actor.clear_media(&id, &a.keys).unwrap(),
+        bytes.len() as u64 + 40
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
 async fn core_http_client_upload_publish_four_device_download_and_expiry() {
     let f = Fixture::start(true).await;
     let a = f.account().await;

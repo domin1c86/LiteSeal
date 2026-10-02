@@ -1,8 +1,8 @@
 //! Bounded orchestration over immutable encrypted v3 tasks. Sync/native locks
 //! never cross await. Late results require both the current lease and revision.
 use super::{
-    api::{ApiError, AuthenticatedResult, DirectApi},
-    Acceptance, Owner, Prepare, RecordView, Store, TaskState, TaskView,
+    api::{ApiError, AuthenticatedResult, DirectApi, MediaObject},
+    media, Acceptance, Owner, Prepare, RecordView, Store, TaskState, TaskView,
 };
 use crate::trusted_devices::{
     api::DeviceControlApi,
@@ -25,6 +25,8 @@ use zeroize::Zeroizing;
 #[derive(Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Condition {
+    Uploading,
+    Uploaded,
     Prepared,
     Accepted,
     Cancelled,
@@ -47,6 +49,12 @@ pub struct Progress {
 #[derive(Debug, Serialize)]
 pub struct Preparation {
     pub task: Option<TaskView>,
+    pub condition: Condition,
+    pub http_status: Option<u16>,
+}
+#[derive(Debug, Serialize)]
+pub struct MediaProgress {
+    pub task: media::View,
     pub condition: Condition,
     pub http_status: Option<u16>,
 }
@@ -97,6 +105,7 @@ pub struct MessageCoordinator {
     store: Mutex<Store>,
     gate: TaskGate,
     network: tokio::sync::Mutex<()>,
+    media_network: tokio::sync::Mutex<()>,
     session: RwLock<Zeroizing<String>>,
     // Keep isolated native targets until after all task handles close.
     _protection: Protection,
@@ -128,6 +137,7 @@ impl MessageCoordinator {
             store: Mutex::new(store),
             gate: TaskGate::new().map_err(local)?,
             network: tokio::sync::Mutex::new(()),
+            media_network: tokio::sync::Mutex::new(()),
             session: RwLock::new(Zeroizing::new(String::new())),
             _protection: protection,
         })
@@ -403,6 +413,193 @@ impl MessageCoordinator {
             http_status: None,
         })
     }
+    pub fn stage_media(&self, request: media::Stage<'_>, keys: &KeyPair) -> Result<media::View> {
+        let lease = self.lease(keys)?;
+        self.with(&lease, |s| s.stage_media(request, keys))
+    }
+    pub fn media_tasks(&self, keys: &KeyPair) -> Result<Vec<media::View>> {
+        let lease = self.lease(keys)?;
+        self.with(&lease, |s| s.media_tasks(keys))
+    }
+    pub fn cancel_media(&self, id: &str, keys: &KeyPair) -> Result<media::View> {
+        let lease = self.lease(keys)?;
+        self.with(&lease, |s| s.cancel_media(id, keys))
+    }
+    pub fn clear_media(&self, id: &str, keys: &KeyPair) -> Result<u64> {
+        let lease = self.lease(keys)?;
+        self.with(&lease, |s| s.clear_media(id, keys))
+    }
+    fn media_current(
+        &self,
+        lease: &TaskLease,
+        original: &media::View,
+        keys: &KeyPair,
+    ) -> Result<media::View> {
+        self.with(lease, |s| {
+            let current = s.media_task(&original.id, keys)?;
+            if current.revision != original.revision {
+                return Err("媒体原任务已变化，拒绝迟到结果".into());
+            }
+            Ok(current)
+        })
+    }
+    /// One immutable ciphertext chunk per call, without the text/poll lock.
+    pub async fn media_step(&self, id: &str, keys: &KeyPair) -> Result<MediaProgress> {
+        let lease = self.lease(keys)?;
+        let _network = self.media_network.lock().await;
+        let job = self.with(&lease, |s| s.media_job(id, keys))?;
+        let original = job.view();
+        if job.phase != media::Phase::Staged {
+            let condition = match job.phase {
+                media::Phase::Cancelled => Condition::Cancelled,
+                media::Phase::Uploaded => Condition::Uploaded,
+                media::Phase::Prepared => match self.with(&lease, |s| s.media_state(id, keys))? {
+                    TaskState::Accepted => Condition::Accepted,
+                    TaskState::Cancelled => Condition::Cancelled,
+                    TaskState::Conflict => Condition::Conflict,
+                    _ => Condition::Prepared,
+                },
+                media::Phase::Staged => unreachable!(),
+            };
+            return Ok(MediaProgress {
+                condition,
+                task: original,
+                http_status: None,
+            });
+        }
+        let token = self.token(&lease)?;
+        if token.is_empty() {
+            return Ok(MediaProgress {
+                task: original,
+                condition: Condition::SessionRequired,
+                http_status: None,
+            });
+        }
+        let reference = job
+            .descriptor
+            .reference()
+            .map_err(|_| local("media".into()))?;
+        let object = MediaObject {
+            device: &self.owner.device.device_id,
+            id,
+            reference: &reference,
+        };
+        if job.next == 0 {
+            let result = self
+                .api
+                .create_media(&token, object.device, id, &job.peer, &reference)
+                .await;
+            self.media_current(&lease, &original, keys)?;
+            if let Err(error) = result {
+                return Ok(MediaProgress {
+                    task: original,
+                    condition: condition(error.status),
+                    http_status: error.status,
+                });
+            }
+        }
+        let bytes = self.with(&lease, |s| s.media_chunk(id, original.revision, keys))?;
+        let token = self.token(&lease)?;
+        let result = self
+            .api
+            .upload_media_chunk(&token, &object, job.next as i32, bytes)
+            .await;
+        self.media_current(&lease, &original, keys)?;
+        match result {
+            Err(error) => {
+                let task = if error.status == Some(404) {
+                    self.with(&lease, |s| {
+                        s.media_reset_upload(id, original.revision, keys)
+                    })?
+                } else {
+                    original
+                };
+                Ok(MediaProgress {
+                    task,
+                    condition: condition(error.status),
+                    http_status: error.status,
+                })
+            }
+            Ok(()) => {
+                let task = self.with(&lease, |s| s.media_uploaded(id, original.revision, keys))?;
+                Ok(MediaProgress {
+                    condition: if task.phase == media::Phase::Uploaded {
+                        Condition::Uploaded
+                    } else {
+                        Condition::Uploading
+                    },
+                    task,
+                    http_status: None,
+                })
+            }
+        }
+    }
+    /// Choose the exact current audience only after every upload was confirmed.
+    /// An existing prepared batch is returned unchanged, even after a conflict.
+    pub async fn prepare_media(&self, id: &str, keys: &KeyPair) -> Result<Preparation> {
+        let lease = self.lease(keys)?;
+        let _network = self.network.lock().await;
+        let job = self.with(&lease, |s| s.media_job(id, keys))?;
+        if job.phase == media::Phase::Prepared {
+            let task = self.with(&lease, |s| s.task_view(id, keys))?;
+            return Ok(Preparation {
+                condition: match task.state {
+                    TaskState::Accepted => Condition::Accepted,
+                    TaskState::Cancelled => Condition::Cancelled,
+                    TaskState::Conflict => Condition::Conflict,
+                    _ => Condition::Prepared,
+                },
+                task: Some(task),
+                http_status: None,
+            });
+        }
+        if job.phase != media::Phase::Uploaded {
+            return Err(local("upload incomplete".into()));
+        }
+        if self.token(&lease)?.is_empty() {
+            return Ok(Preparation {
+                task: None,
+                condition: Condition::SessionRequired,
+                http_status: None,
+            });
+        }
+        for account in [&self.owner.account, &job.peer] {
+            if !self.pinned(&lease, account, keys)? {
+                return Ok(Preparation {
+                    task: None,
+                    condition: Condition::NeedsTrust,
+                    http_status: None,
+                });
+            }
+            let result = self.sync(&lease, None, account, keys).await;
+            self.media_current(&lease, &job.view(), keys)?;
+            match result {
+                Ok(true) => {}
+                Ok(false) => {
+                    return Ok(Preparation {
+                        task: None,
+                        condition: Condition::Syncing,
+                        http_status: None,
+                    })
+                }
+                Err(error) => {
+                    return Ok(Preparation {
+                        task: None,
+                        condition: condition(error.http_status),
+                        http_status: error.http_status,
+                    })
+                }
+            }
+        }
+        let task = self.with(&lease, |s| {
+            s.prepare_media(id, chrono::Utc::now().timestamp_millis(), keys)
+        })?;
+        Ok(Preparation {
+            task: Some(task),
+            condition: Condition::Prepared,
+            http_status: None,
+        })
+    }
     fn failed(
         &self,
         lease: &TaskLease,
@@ -536,6 +733,9 @@ impl MessageCoordinator {
         let token = self.token(&lease)?;
         let result = if task.cancel_requested {
             self.api.cancel(&token, &batch).await
+        } else if batch.header.kind != Kind::Text {
+            let submission = self.current(&lease, &task, keys, |s| s.media_submission(id, keys))?;
+            self.api.publish_media(&token, &submission).await
         } else {
             self.api.publish(&token, &batch).await
         };
@@ -635,9 +835,6 @@ impl MessageCoordinator {
                 http_status: None,
             });
         };
-        if item.batch.header.kind != Kind::Text {
-            return self.poll_result(&lease, Condition::Unsupported, acknowledged, None);
-        }
         for account in [&item.batch.header.sender, &item.batch.header.peer] {
             if !self.pinned(&lease, account, keys)? {
                 return self.poll_result(&lease, Condition::NeedsTrust, acknowledged, None);

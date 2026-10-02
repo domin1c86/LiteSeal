@@ -1,5 +1,20 @@
 # P0/P1 验收记录（待执行）
 
+## 2026-10-02 v3 媒体持久任务与收件落库短测
+
+基线 `85671b9` 加本轮工作树；全部使用合成账号、文件、原生保护命名空间、临时 SQLite 和标记专用 PostgreSQL。没有新长期测试、推送或真实用户数据操作。
+
+- `target/test-results/direct-media-tasks-store-2026-10-02.txt`：最终 8 项持久化/认证短测全部通过（2.49 秒）。包含中文/emoji 超过一个分块的暂存与重开、同编号拒绝换内容、已准备批次确定性重绑定、SQLite 不含明文名称/文件密钥、取消与迟到进度拒绝、未知发布不能清理、编号清理标记、损坏块/错身份拒绝、隐藏后重放不恢复、非法描述持久拒绝 ACK 且后续消息可继续、原生提交故障及前一 SQLite 快照恢复后原任务/密文一致、旧群/v3 共享 256 MiB 边界、仅有暂存任务时旧备份拒绝。恶意缓存触发器不能删除已覆盖的原任务。
+- `target/test-results/direct-media-tasks-coordinator-2026-10-02.txt`：5 项协调器测试通过，新增一项覆盖三个媒体等待场景：取消、换会话及锁定/解锁拒绝迟到上传回复；原进度不推进，允许继续时使用同一任务，准备/发布与历史按原编号保存。HTTP 夹具只注入网络等待，不能替代真实系统锁屏。
+- `target/test-results/direct-media-tasks-postgres-2026-10-02.json`：最终 6 项媒体真实库测试通过。新增共享协调器在实际 PostgreSQL/HTTP 上传一块后关闭重开，继续上传、原编号准备/发布、重复查询接受结果、收件验证并持久 ACK，ACK 后待收为空；隐藏后历史不可见，退出会话后源历史仍可读，清理返回逻辑字节数。此前五项原授权/下载/过期/共享配额测试同批通过。
+- `target/test-results/direct-media-tasks-delivery-2026-10-02.txt`：完整 `npm test` 为 19 项 Node/341 项普通 Rust 通过，0 失败；77 项 PostgreSQL 默认 ignored，另按真实库报告计。最终格式、全 workspace/all-targets Clippy（-D warnings）和核心 FFI 编译通过，报告 `direct-media-tasks-static-2026-10-02.txt`。最终生产构建通过，release 52.57 秒，报告 `direct-media-tasks-build-2026-10-02.txt`；既有链接警告保留。
+- 完整真实库首轮为 75 通过/2 失败/0 跳过，报告 `direct-media-tasks-postgres-first-failure-2026-10-02.json` 保留。两个既有服务器用例为 `directory_conflict_revoke_rejoin_and_old_result_do_not_reencrypt`、`disabled_missing_session_and_join_credential_never_activate_chat`；定向均通过、未复现，见 `direct-media-tasks-diagnostic-2026-10-02.json`。首轮没有保存原始错误，因此不能认定已定位环境原因或修复回归。生产权限/服务器逻辑未为此更改，独立顺序全库复跑结果另追加。
+- 最终顺序全库复跑 `direct-media-tasks-postgres-all-2026-10-02.json` 为 **77 通过/0 失败/0 跳过**，包含最终缓存结构加固后的全部六项媒体场景；新旧设备控制/正式会话、目录冲突、原结果、独立 ACK、群附件/活动和并发额度全部实际执行。最终通过不抹去首轮波动，原因仍未确定。
+- `target/test-results/direct-media-tasks-group-integration-2026-10-02.txt`：真实 PostgreSQL/服务端/同机三个隔离 Rust 桌面进程的 11 阶段通过，覆盖旧文字/群协作、文件/合成语音/活动及 T22 v2 离线缓存/投票/草稿/隐藏。未改界面，未把这一轮当成原生系统或双 Windows 通过。
+- 收尾检查补齐“已接受发送任务被整理后仍可清理媒体缓存”：通过保留的认证历史判断接受状态，既不重建发送任务，也不清除未知发布。最后这一局部调整在上述完整工程/77 项全库/群回归之后进行；最终 8 项存储、5 项协调器（3.05 秒）、6 项真实媒体库专项和格式/Clippy/FFI/生产构建重新验证通过，相关报告已更新。完整回归的执行顺序和首轮失败均保留，不将旧报告误记成最后调整之后重新全跑。
+
+这一批未交付按需下载/播放/导出、桌面文件/录音 IPC、存储界面或 v3 新备份；传输字节不经页面或 stdio。真实磁盘满/进程强杀、麦克风、系统锁屏/休眠、双 Windows 和独立审查没有新增证据。缓存清理记录逻辑密文字节，SQLite 实际占用由既有 DB/WAL 统计另查，不把删除缓存声称为立即释放同量磁盘。
+
 ## 2026-10-02 共享媒体 HTTP 客户端短测与真实库联调
 
 基线 `7041957` 加本轮工作树；全部账号、文件、目录与密钥均为合成测试数据。Docker 中仅使用已有标记专用 PostgreSQL 16.14，不读取或修改业务库，凭据仅在子进程环境，不保存到源码或报告。

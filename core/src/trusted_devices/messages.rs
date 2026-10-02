@@ -16,6 +16,7 @@ pub mod api;
 pub mod conversations;
 pub mod coordinator;
 pub mod drafts;
+pub mod media;
 mod ordering;
 const MAX_LOCAL: usize = 73768;
 const MAX_TASKS: usize = 128;
@@ -32,6 +33,9 @@ pub(crate) fn require_backup_support(
         .map_err(|_| invalid())?;
     let scope = Owner::new(&origin, &identity.user_id, &identity.device_id, &keys)?.scope();
     let task_table:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='device_control_tasks')",[],|r|r.get(0)).map_err(db)?;
+    if task_table && conn.query_row("SELECT EXISTS(SELECT 1 FROM device_control_tasks WHERE scope=?1 AND kind='direct_v3_media')", [format!("media:{scope}")], |r|r.get::<_,bool>(0)).map_err(db)? {
+        return Err("当前身份含单聊 v3 媒体任务或缓存，本版备份尚不支持；未生成会遗漏媒体的备份".into());
+    }
     if task_table && conn.query_row("SELECT EXISTS(SELECT 1 FROM device_control_tasks WHERE scope=?1 AND kind='direct_v3_conversation')", [format!("conversation:{scope}")], |r| r.get::<_,bool>(0)).map_err(db)? {
         return Err("当前身份含单聊 v3 会话设置，本版备份尚不支持；未生成会遗漏设置的备份".into());
     }
@@ -461,6 +465,12 @@ impl Store {
         let mut trust = DeviceTrustStore::open(path)?;
         trust.protect(witness)?;
         trust.enable_direct_messages()?;
+        // Ciphertext cache is disposable and authenticated by covered job rows;
+        // it is deliberately outside the bounded native write-ahead journal.
+        trust.read_checked(|conn| {
+            conn.execute_batch(media::SCHEMA).map_err(db)?;
+            media::validate_cache(conn)
+        })?;
         trust.write_checked(|conn| ordering::initialize(conn, &owner.scope()))?;
         Ok(Self { trust, owner })
     }
@@ -507,6 +517,15 @@ impl Store {
         draft_revision: Option<u64>,
         keys: &KeyPair,
     ) -> Result<TaskView, String> {
+        self.prepare_internal(request, draft_revision, None, keys)
+    }
+    fn prepare_internal(
+        &mut self,
+        request: Prepare<'_>,
+        draft_revision: Option<u64>,
+        media_revision: Option<u64>,
+        keys: &KeyPair,
+    ) -> Result<TaskView, String> {
         self.owner.keys(keys)?;
         if uuid::Uuid::parse_str(request.id)
             .ok()
@@ -517,6 +536,9 @@ impl Store {
         let owner = self.owner.clone();
         let scope = owner.scope();
         self.trust.write_checked(|conn| {
+            if request.kind != Kind::Text && media_revision.is_none() {
+                return Err("媒体须先完成原任务上传再准备".into());
+            }
             if let Some(expected)=draft_revision {
                 if request.kind!=Kind::Text{return Err(invalid());}
                 let draft=drafts::load(conn,&owner,request.peer,keys)?;
@@ -548,6 +570,7 @@ impl Store {
             let local=seal(&owner,&batch,"authored","processed",request.body,keys)?;let wire=batch.to_wire().map_err(|_|invalid())?;let epoch=hex::encode(epoch);
             conn.execute("INSERT INTO direct_v3_tasks(scope,id,revision,state,peer,epoch,wire,local) VALUES(?1,?2,0,'prepared',?3,?4,?5,?6)",params![scope,request.id,request.peer,epoch,wire,local]).map_err(|_|conflict())?;
             if let Some(expected)=draft_revision{drafts::put(conn,&owner,request.peer,expected,"",Some(request.id.into()),keys)?;}
+            if let Some(expected)=media_revision{media::prepared(conn,&owner,expected,&batch,keys)?;}
             Ok(TaskView{id:request.id.into(),revision:0,state:TaskState::Prepared,peer:request.peer.into(),epoch,digest:batch.digest().map_err(|_|invalid())?,cancel_requested:false})
         })
     }
@@ -913,7 +936,20 @@ impl Store {
                 keys,
             );
             let (body, result) = match opened {
-                Ok(body) => (Zeroizing::new(body), AckOutcome::Processed),
+                Ok(body) => {
+                    let body = Zeroizing::new(body);
+                    if batch.header.kind != Kind::Text
+                        && liteseal_shared::direct_media::Descriptor::from_body(
+                            &batch.header,
+                            &body,
+                        )
+                        .is_err()
+                    {
+                        (Zeroizing::new(vec![]), AckOutcome::Rejected)
+                    } else {
+                        (body, AckOutcome::Processed)
+                    }
+                }
                 Err(d::DirectError::Proof) => (Zeroizing::new(vec![]), AckOutcome::Rejected),
                 Err(_) => return Err(invalid()),
             };

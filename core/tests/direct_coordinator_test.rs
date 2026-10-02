@@ -143,8 +143,23 @@ impl Fixture {
                         Outcome::Unknown { id, digest }
                     };
                     serde_json::to_vec(&outcome).unwrap()
+                } else if path == "/direct/v3/media/objects" {
+                    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                    serde_json::to_vec(value.get("id").unwrap()).unwrap()
+                } else if path.starts_with("/direct/v3/media/objects/") {
+                    if first.swap(false, Ordering::SeqCst) {
+                        seen_.notify_one();
+                        release_.notified().await;
+                    }
+                    vec![]
                 } else {
-                    let batch = Batch::from_wire(&body).unwrap();
+                    let batch = if path == "/direct/v3/media/batches" {
+                        liteseal_shared::direct_media::Submission::from_wire(&body)
+                            .unwrap()
+                            .batch
+                    } else {
+                        Batch::from_wire(&body).unwrap()
+                    };
                     let outcome = if path == "/direct/v3/cancel" {
                         Outcome::Cancelled {
                             id: batch.header.id.clone(),
@@ -162,7 +177,12 @@ impl Fixture {
                     };
                     serde_json::to_vec(&outcome).unwrap()
                 };
-                let header=format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n",response.len());
+                let status = if path.starts_with("/direct/v3/media/objects/") {
+                    "204 No Content"
+                } else {
+                    "200 OK"
+                };
+                let header=format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n",response.len());
                 socket.write_all(header.as_bytes()).await.unwrap();
                 socket.write_all(&response).await.unwrap();
             }
@@ -245,6 +265,83 @@ async fn session_renewal_invalidates_old_results_and_keeps_original_task() {
 #[tokio::test]
 async fn lock_then_unlock_never_revives_an_old_network_lease() {
     late_result(2).await;
+}
+#[tokio::test]
+async fn media_cancel_rotation_and_lock_reject_late_chunk_and_retry_original_task() {
+    use liteseal_core::trusted_devices::messages::media::{Phase, Stage};
+    use liteseal_shared::direct_message::Kind;
+    for mode in 0..3 {
+        let f = Fixture::new().await;
+        let id = uuid::Uuid::new_v4().to_string();
+        f.actor
+            .stage_media(
+                Stage {
+                    id: &id,
+                    peer: &f.peer,
+                    name: "隔离文件.txt",
+                    bytes: "中文 emoji 🦭".as_bytes(),
+                    kind: Kind::Attachment,
+                    duration_ms: None,
+                },
+                &f.keys,
+            )
+            .unwrap();
+        let actor = f.actor.clone();
+        let keys = f.keys.clone();
+        let original = id.clone();
+        let job = tokio::spawn(async move { actor.media_step(&original, &keys).await });
+        tokio::time::timeout(std::time::Duration::from_secs(3), f.seen.notified())
+            .await
+            .unwrap();
+        match mode {
+            0 => {
+                f.actor.cancel_media(&id, &f.keys).unwrap();
+            }
+            1 => f.actor.renew_session("synthetic-new".into()).unwrap(),
+            _ => {
+                f.actor.invalidate().unwrap();
+                assert!(f.actor.media_tasks(&f.keys).is_err());
+                f.actor.resume().unwrap();
+                f.actor.renew_session("synthetic-unlocked".into()).unwrap();
+            }
+        }
+        f.release.notify_one();
+        assert!(job.await.unwrap().is_err());
+        let saved = f.actor.media_tasks(&f.keys).unwrap().pop().unwrap();
+        assert_eq!(saved.uploaded, 0);
+        if mode == 0 {
+            assert_eq!(saved.phase, Phase::Cancelled);
+            assert_eq!(
+                f.actor.media_step(&id, &f.keys).await.unwrap().condition,
+                Condition::Cancelled
+            );
+            assert!(f.actor.prepare_media(&id, &f.keys).await.is_err());
+            f.actor.clear_media(&id, &f.keys).unwrap();
+        } else {
+            assert_eq!(
+                f.actor.media_step(&id, &f.keys).await.unwrap().task.phase,
+                Phase::Uploaded
+            );
+            let prepared = f
+                .actor
+                .prepare_media(&id, &f.keys)
+                .await
+                .unwrap()
+                .task
+                .unwrap();
+            assert_eq!(prepared.id, id);
+            assert_eq!(
+                f.actor.step(&id, &f.keys).await.unwrap().condition,
+                Condition::Accepted
+            );
+            assert_eq!(
+                f.actor.history(None, 100, &f.keys).unwrap()[0].kind,
+                Kind::Attachment
+            );
+            assert!(f.actor.text(&id, &f.keys).is_err());
+            assert!(f.actor.clear_media(&id, &f.keys).unwrap() > 0);
+        }
+    }
 }
 #[tokio::test]
 async fn unpublished_cancel_is_local_idempotent_and_never_queries_or_publishes() {
