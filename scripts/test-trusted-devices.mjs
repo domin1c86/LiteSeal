@@ -45,6 +45,7 @@ try {
     ['liteseal-shared','device_activation_test','original enable signature, dual-key possession and encrypted stage-bound sessions'],
     ['liteseal-core','activation_api_test','typed activation transport, no redirected credentials and response/root limits'],
     ['liteseal-core','activation_jobs_test','original activation requests/proofs, native protected restart and stale result isolation'],
+    ['liteseal-core','legacy_mode_test','atomic old-protocol backlog gate, scoped enable admission and immutable protected configuration'],
     ['liteseal-core','active_profiles_test','authorized joining identity remains immutable and normal-session cleanup is isolated'],
     ['liteseal-core','direct_api_test','bounded and origin-bound v3 HTTP responses, redirects and malformed pages'],
     ['liteseal-core','direct_coordinator_test','message cancellation revision, lock/unlock and token rotation reject late responses'],

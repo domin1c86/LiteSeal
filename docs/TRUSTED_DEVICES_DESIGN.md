@@ -1,5 +1,15 @@
 # T23 两台 Windows 可信设备：设计与授权基础
 
+## 2026-10-02 原设备的旧任务事务检查与配置事实
+
+新增共享 `activation/legacy.rs`，提供三种准入状态和六类当前身份待处理数量。`prepare_enable_checked` 在既有 witness 的同一 SQLite 写事务中，先拒绝已准备/已启用，再检查旧发送、上传、定时任务、操作、回应和回执，最后保存原启用事件。检查失败不生成或清除任务；基础协议 SDK 的未检查入口继续保留，桌面必须选用受检查入口并接共享发送门禁。
+
+待收旧 ACK 的服务端门槛保持，不能据本机数量断言远端已清空。上传按账号保守计数，定时只排除已提交，消息只排除实际终态 delivered/received；隐藏不取消待处理。回应/回执按账号和设备计量，设备字段缺失或非法类型仍阻止，损坏 JSON 拒绝。其他身份不使用其密文/任务进行切换。
+
+已启用事实使用独立范围的 `root_direct_mode` 终态行，版本/范围/修订和原启用签名以自设备密钥加密并受原生高水位保护。`remember_enabled` 只接受 SDK `VerifiedMode`，其来源不可 JSON 构造；核对原查询的原点/账号/根设备/阶段和已验证历史目录点。记录同一事件幂等，拒绝替换，不能通过本机签署但未发表的普通 `Enable` 参数冒充远端已启用；不签发会话或改变私钥。
+
+新库只读查询不初始化保护记录；若 SQLite T23 表、原生记录或恢复日志任一存在，准入前都验证完整受保护状态。只删除 SQLite 表不能恢复旧协议；系统高水位同时丢失/回退仍属既有外部平台边界。5 项原生隔离/合成 HTTP 短测通过，见[验收记录](P0_P1_ACCEPTANCE_RECORD.md)。此核心读取尚未贯穿桌面发送入口，产品并发门禁和原设备任务界面仍待接。
+
 ## 2026-10-02 加入端正式激活的桌面任务管理
 
 新增 `commands/device_activation.rs`，以原加入档案编号、不可变公开身份/原授权范围固定协调器。正常档案核心必须证明原加入已授权或曾授权；页面不能提供根、mode、密钥、会话凭据或路径。独立运行时缓存原任务及正常档案协调器，所有 IPC 结果只含公开任务状态、终态事实和正常档案元数据。命令为 `get_join_activation`、`prepare_join_activation`、`join_activation_step`、`inspect_join_activation`、`cancel_join_activation`、`forget_join_activation`、`save_join_activation`、`clear_join_activation_session`。

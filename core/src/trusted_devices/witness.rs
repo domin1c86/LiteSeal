@@ -444,6 +444,17 @@ impl Witness {
     pub fn journal_path(&self) -> &Path {
         &self.journal
     }
+    /// Read-only presence check. A missing SQLite schema must not hide an
+    /// existing native head or an unfinished recovery journal.
+    pub fn has_record(&self) -> Result<bool, String> {
+        let mut slot = self.store.lock()?;
+        let journal = match fs::symlink_metadata(&self.journal) {
+            Ok(_) => true,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+            Err(_) => return Err(storage()),
+        };
+        Ok(slot.read()?.is_some() || journal)
+    }
     fn save_journal(&self, journal: &Journal) -> Result<[u8; 32], String> {
         if self.journal.exists() {
             plain_file(&self.journal)?;

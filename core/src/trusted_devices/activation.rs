@@ -14,6 +14,7 @@ use liteseal_shared::{
 use reqwest::{Method, RequestBuilder};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 pub mod jobs;
+pub mod legacy;
 /// Bound HTTP result, not a signed server statement or local commit receipt.
 pub struct Inspected {
     pub(super) request: Inspection,
@@ -22,6 +23,12 @@ pub struct Inspected {
 pub struct CheckedSession {
     pub(crate) info: SessionInfo,
     pub(crate) token_hash: [u8; 32],
+}
+/// Origin-bound configuration observation. It cannot be supplied as a page
+/// field or constructed by deserializing a signed-but-unpublished Enable.
+pub struct VerifiedMode {
+    pub(super) query: ModeQuery,
+    pub(super) event: Option<Enable>,
 }
 #[derive(Debug)]
 pub struct ActivationError {
@@ -158,6 +165,14 @@ impl ActivationApi {
         device: &str,
         keys: &liteseal_shared::crypto::KeyPair,
     ) -> Result<Option<Enable>, ActivationError> {
+        Ok(self.observe_mode(state, device, keys).await?.event)
+    }
+    pub async fn observe_mode(
+        &self,
+        state: &DeviceState,
+        device: &str,
+        keys: &liteseal_shared::crypto::KeyPair,
+    ) -> Result<VerifiedMode, ActivationError> {
         self.root(state.anchor())?;
         let query = ModeQuery::make(
             state,
@@ -173,7 +188,10 @@ impl ActivationApi {
         reply
             .verify(&query, state.anchor())
             .map_err(|_| invalid())?;
-        Ok(reply.event)
+        Ok(VerifiedMode {
+            query,
+            event: reply.event,
+        })
     }
     pub async fn enable(
         &self,

@@ -441,6 +441,35 @@ fn kind_name(kind: Kind) -> &'static str {
         Kind::Login => "activation_login",
     }
 }
+pub(super) fn legacy_blocked(
+    conn: &Connection,
+    anchor: &Anchor,
+    keys: &KeyPair,
+) -> Result<bool, String> {
+    // Route by the public identity first, so unrelated old test/account IDs do
+    // not need to satisfy the newer activation UUID rules when no task exists.
+    let owner = Owner {
+        anchor: anchor.clone(),
+        device: anchor.root.clone(),
+    };
+    let mut statement = conn
+        .prepare("SELECT id FROM device_control_tasks WHERE scope=?1 ORDER BY id LIMIT 129")
+        .map_err(db)?;
+    let ids = statement
+        .query_map([owner.scope(Kind::Enable)], |r| r.get::<_, String>(0))
+        .map_err(db)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(db)?;
+    if ids.len() > 128 {
+        return Err(bad());
+    }
+    for id in ids {
+        if get(conn, &owner, &id, keys)?.stage != Stage::Cancelled {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
 fn put(
     conn: &Connection,
     task: Stored,
@@ -545,6 +574,14 @@ impl Store {
         self.trust.at_checkpoint(&self.owner.anchor, &base)
     }
     pub fn prepare_enable(&mut self, keys: &KeyPair) -> Result<Task, String> {
+        self.prepare_enable_inner(keys, false)
+    }
+    /// Desktop cutover: legacy backlog and the original enable task commit in
+    /// one protected SQLite transaction. A failed check creates no new task.
+    pub fn prepare_enable_checked(&mut self, keys: &KeyPair) -> Result<Task, String> {
+        self.prepare_enable_inner(keys, true)
+    }
+    fn prepare_enable_inner(&mut self, keys: &KeyPair, checked: bool) -> Result<Task, String> {
         let state = self.state(keys)?;
         if self.owner.device != self.owner.anchor.root {
             return Err(bad());
@@ -562,8 +599,25 @@ impl Store {
             cancel_requested: false,
             data: Data::Enable { cancel: None },
         };
-        self.trust
-            .write_checked(|conn| put(conn, task, keys, None).map(|stored| Task { stored }))
+        self.trust.write_checked(|conn| {
+            if checked
+                && super::legacy::admission_in(conn, &self.owner.anchor, keys)?
+                    != super::legacy::Admission::Legacy
+            {
+                return Err("原切换已准备或启用，请查询原任务；不会重建启用事件".into());
+            }
+            if checked
+                && !super::legacy::pending(
+                    conn,
+                    &self.owner.anchor.account,
+                    &self.owner.device.device_id,
+                )?
+                .empty()
+            {
+                return Err("本机旧单聊、附件或操作仍待处理；已保留原任务，不能切换".into());
+            }
+            put(conn, task, keys, None).map(|stored| Task { stored })
+        })
     }
     pub fn prepare_login(
         &mut self,
@@ -999,6 +1053,10 @@ impl Coordinator {
     pub fn prepare_enable(&self, keys: &KeyPair) -> Result<View, String> {
         let lease = self.gate.lease()?;
         self.with(&lease, |s| s.prepare_enable(keys).map(|t| t.view()))
+    }
+    pub fn prepare_enable_checked(&self, keys: &KeyPair) -> Result<View, String> {
+        let lease = self.gate.lease()?;
+        self.with(&lease, |s| s.prepare_enable_checked(keys).map(|t| t.view()))
     }
     pub fn prepare_login(
         &self,
