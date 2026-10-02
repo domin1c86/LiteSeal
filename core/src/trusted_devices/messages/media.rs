@@ -54,11 +54,19 @@ pub enum Phase {
     Uploaded,
     Prepared,
     Cancelled,
+    Downloading,
+    Cached,
+    Failed,
+    Unavailable,
 }
 
+#[path = "downloads.rs"]
+mod downloads;
 #[cfg(test)]
 #[path = "media_tests.rs"]
 mod tests;
+pub(super) use downloads::hidden;
+pub use downloads::Info;
 
 pub struct Stage<'a> {
     pub id: &'a str,
@@ -80,6 +88,8 @@ pub struct View {
     pub size: u64,
     pub duration_ms: Option<u32>,
     pub uploaded: u64,
+    pub downloaded: u64,
+    pub download: bool,
     pub total: u64,
 }
 #[derive(Serialize, Deserialize)]
@@ -96,6 +106,8 @@ pub(super) struct Job {
     pub descriptor: Descriptor,
     hashes: Vec<[u8; 32]>,
     pub next: usize,
+    #[serde(default)]
+    pub download: bool,
 }
 impl Job {
     pub fn view(&self) -> View {
@@ -109,7 +121,17 @@ impl Job {
             mime: self.descriptor.mime.clone(),
             size: self.descriptor.size,
             duration_ms: self.descriptor.duration_ms,
-            uploaded: (self.next as u64 * CHUNK as u64).min(self.descriptor.size + 40),
+            uploaded: if self.download {
+                0
+            } else {
+                (self.next as u64 * CHUNK as u64).min(self.descriptor.size + 40)
+            },
+            downloaded: if self.download {
+                (self.next as u64 * CHUNK as u64).min(self.descriptor.size + 40)
+            } else {
+                0
+            },
+            download: self.download,
             total: self.descriptor.size + 40,
         }
     }
@@ -150,10 +172,18 @@ pub(super) fn load(
         || job.descriptor.id != id
         || job.revision != revision
         || job.revision == 0
-        || job.hashes.len() != parts
+        || job.hashes.len() != if job.download { job.next } else { parts }
         || job.next > parts
-        || matches!(job.phase, Phase::Uploaded | Phase::Prepared) && job.next != parts
+        || matches!(job.phase, Phase::Uploaded | Phase::Prepared | Phase::Cached)
+            && job.next != parts
         || job.phase == Phase::Staged && job.next == parts
+        || job.phase == Phase::Downloading && job.next == parts
+        || job.download && matches!(job.phase, Phase::Staged | Phase::Uploaded | Phase::Prepared)
+        || !job.download
+            && matches!(
+                job.phase,
+                Phase::Downloading | Phase::Cached | Phase::Failed | Phase::Unavailable
+            )
     {
         return Err(invalid());
     }
@@ -182,7 +212,7 @@ fn save(
     let changed = if expected == 0 {
         conn.execute("INSERT INTO device_control_tasks(scope,id,revision,kind,terminal,body) VALUES(?1,?2,?3,?4,1,?5)",params![scope(owner),job.id,job.revision,KIND,body]).map_err(db)?
     } else {
-        conn.execute("UPDATE device_control_tasks SET revision=?3,body=?4 WHERE scope=?1 AND id=?2 AND revision=?5 AND kind=?6",params![scope(owner),job.id,job.revision,body,expected,KIND]).map_err(db)?
+        conn.execute("UPDATE device_control_tasks SET revision=?3,body=?4,kind=?6 WHERE scope=?1 AND id=?2 AND revision=?5 AND kind IN ('direct_v3_media','direct_v3_media_done')",params![scope(owner),job.id,job.revision,body,expected,KIND]).map_err(db)?
     };
     if changed != 1 {
         return Err("原媒体任务已变化，拒绝迟到结果".into());
@@ -270,6 +300,19 @@ impl Store {
                 .map_err(db)?
             {
                 let job = load(conn, &owner, request.id, keys)?;
+                if job.download {
+                    return Err("下载记录不能作为新的暂存发送任务".into());
+                }
+                let hidden: bool = conn
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM direct_v3_hidden WHERE scope=?1 AND id=?2)",
+                        params![owner.scope(), request.id],
+                        |r| r.get(0),
+                    )
+                    .map_err(db)?;
+                if hidden {
+                    return Err("原媒体消息已在本机隐藏".into());
+                }
                 if job.phase == Phase::Cancelled
                     || job.peer != request.peer
                     || job.kind != request.kind
@@ -319,6 +362,7 @@ impl Store {
                 .map(|c| Sha256::digest(c).into())
                 .collect(),
             next: 0,
+            download: false,
         };
         // The complete ciphertext commit comes first. If the following covered
         // write is interrupted, its recovered descriptor still has every chunk.
@@ -364,7 +408,21 @@ impl Store {
         })
     }
     pub fn media_task(&mut self, id: &str, keys: &KeyPair) -> Result<View, String> {
-        self.media_job(id, keys).map(|j| j.view())
+        self.owner.keys(keys)?;
+        let owner = self.owner.clone();
+        self.trust.read_checked(|conn| {
+            let hidden: bool = conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM direct_v3_hidden WHERE scope=?1 AND id=?2)",
+                    params![owner.scope(), id],
+                    |r| r.get(0),
+                )
+                .map_err(db)?;
+            if hidden {
+                return Err("原媒体消息已在本机隐藏".into());
+            }
+            load(conn, &owner, id, keys).map(|j| j.view())
+        })
     }
     pub(super) fn media_job(&mut self, id: &str, keys: &KeyPair) -> Result<Job, String> {
         self.owner.keys(keys)?;
@@ -487,6 +545,9 @@ impl Store {
     }
     pub fn cancel_media(&mut self, id: &str, keys: &KeyPair) -> Result<View, String> {
         let job = self.media_job(id, keys)?;
+        if job.phase == Phase::Cached {
+            return Ok(job.view());
+        }
         if job.phase == Phase::Prepared {
             if self.media_state(id, keys)? == TaskState::Accepted {
                 return Ok(job.view());
@@ -518,7 +579,7 @@ impl Store {
             let done:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM device_control_tasks WHERE scope=?1 AND id=?2 AND kind='direct_v3_media_done')",params![scope(&owner),id],|r|r.get(0)).map_err(db)?;
             if done{return Ok(0);}
             let job=load(conn,&owner,id,keys)?;
-            let terminal=if job.phase==Phase::Prepared {matches!(message_state(conn,&owner,id,keys)?,TaskState::Accepted|TaskState::Cancelled)} else {job.phase==Phase::Cancelled};
+            let terminal=if job.phase==Phase::Prepared {matches!(message_state(conn,&owner,id,keys)?,TaskState::Accepted|TaskState::Cancelled)} else {matches!(job.phase,Phase::Cancelled|Phase::Cached|Phase::Failed|Phase::Unavailable)};
             if !terminal{return Err("原媒体待发任务不能清理".into());}
             let bytes:u64=conn.query_row("SELECT COALESCE(SUM(length(ciphertext)),0) FROM direct_v3_media_chunks WHERE scope=?1 AND id=?2",params![owner.scope(),id],|r|r.get(0)).map_err(db)?;
             let plain=Zeroizing::new(serde_json::to_vec(&("LiteSeal/direct-media-cleared/v1",owner.scope(),id)).map_err(|_|invalid())?);

@@ -1052,10 +1052,12 @@ impl Store {
     pub fn hide(&mut self, id: &str, keys: &KeyPair) -> Result<(), String> {
         self.owner.keys(keys)?;
         let scope = self.owner.scope();
+        let owner = self.owner.clone();
         self.trust.write_checked(|conn| {
             if record(conn, &scope, id)?.is_none() {
                 return Err(invalid());
             }
+            media::hidden(conn, &owner, id, keys)?;
             conn.execute(
                 "INSERT OR IGNORE INTO direct_v3_hidden(scope,id) VALUES(?1,?2)",
                 params![scope, id],

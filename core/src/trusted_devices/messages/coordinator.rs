@@ -25,6 +25,10 @@ use zeroize::Zeroizing;
 #[derive(Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Condition {
+    Downloading,
+    Cached,
+    Failed,
+    Unavailable,
     Uploading,
     Uploaded,
     Prepared,
@@ -429,6 +433,18 @@ impl MessageCoordinator {
         let lease = self.lease(keys)?;
         self.with(&lease, |s| s.clear_media(id, keys))
     }
+    pub fn media_info(&self, id: &str, keys: &KeyPair) -> Result<media::Info> {
+        let lease = self.lease(keys)?;
+        self.with(&lease, |s| s.media_info(id, keys))
+    }
+    pub fn start_media_download(&self, id: &str, keys: &KeyPair) -> Result<media::View> {
+        let lease = self.lease(keys)?;
+        self.with(&lease, |s| s.start_media_download(id, keys))
+    }
+    pub fn media_plain(&self, id: &str, keys: &KeyPair) -> Result<Zeroizing<Vec<u8>>> {
+        let lease = self.lease(keys)?;
+        self.with(&lease, |s| s.media_plain(id, keys))
+    }
     fn media_current(
         &self,
         lease: &TaskLease,
@@ -447,8 +463,69 @@ impl MessageCoordinator {
     pub async fn media_step(&self, id: &str, keys: &KeyPair) -> Result<MediaProgress> {
         let lease = self.lease(keys)?;
         let _network = self.media_network.lock().await;
+        self.with(&lease, |s| s.media_task(id, keys))?;
         let job = self.with(&lease, |s| s.media_job(id, keys))?;
         let original = job.view();
+        if job.phase == media::Phase::Downloading {
+            let job = self.with(&lease, |s| s.download_job(id, keys))?;
+            let token = self.token(&lease)?;
+            if token.is_empty() {
+                return Ok(MediaProgress {
+                    task: original,
+                    condition: Condition::SessionRequired,
+                    http_status: None,
+                });
+            }
+            let reference = job
+                .descriptor
+                .reference()
+                .map_err(|_| local("media".into()))?;
+            let object = MediaObject {
+                device: &self.owner.device.device_id,
+                id,
+                reference: &reference,
+            };
+            let result = self
+                .api
+                .download_media_chunk(&token, &object, job.next as i32)
+                .await;
+            self.media_current(&lease, &original, keys)?;
+            let progress = match result {
+                Ok(bytes) => {
+                    let task = self.with(&lease, |s| {
+                        s.downloaded_chunk(id, original.revision, &bytes, keys)
+                    })?;
+                    MediaProgress {
+                        condition: match task.phase {
+                            media::Phase::Cached => Condition::Cached,
+                            media::Phase::Failed => Condition::Failed,
+                            _ => Condition::Downloading,
+                        },
+                        task,
+                        http_status: None,
+                    }
+                }
+                Err(error) => {
+                    let task = if matches!(error.status, Some(403 | 404)) {
+                        self.with(&lease, |s| {
+                            s.download_unavailable(id, original.revision, keys)
+                        })?
+                    } else {
+                        original
+                    };
+                    MediaProgress {
+                        condition: if task.phase == media::Phase::Unavailable {
+                            Condition::Unavailable
+                        } else {
+                            condition(error.status)
+                        },
+                        task,
+                        http_status: error.status,
+                    }
+                }
+            };
+            return Ok(progress);
+        }
         if job.phase != media::Phase::Staged {
             let condition = match job.phase {
                 media::Phase::Cancelled => Condition::Cancelled,
@@ -460,6 +537,10 @@ impl MessageCoordinator {
                     _ => Condition::Prepared,
                 },
                 media::Phase::Staged => unreachable!(),
+                media::Phase::Downloading => unreachable!(),
+                media::Phase::Cached => Condition::Cached,
+                media::Phase::Failed => Condition::Failed,
+                media::Phase::Unavailable => Condition::Unavailable,
             };
             return Ok(MediaProgress {
                 condition,

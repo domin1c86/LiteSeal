@@ -13,7 +13,7 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
 };
 #[derive(Default)]
-struct Memory(Mutex<(Option<Vec<u8>>, usize, Option<usize>)>);
+pub(super) struct Memory(pub(super) Mutex<(Option<Vec<u8>>, usize, Option<usize>)>);
 struct Slot<'a>(MutexGuard<'a, (Option<Vec<u8>>, usize, Option<usize>)>);
 impl SecureCell for Slot<'_> {
     fn read(&mut self) -> Result<Option<Vec<u8>>, String> {
@@ -37,18 +37,18 @@ impl SecureStore for Memory {
         Ok(Box::new(Slot(self.0.lock().unwrap())))
     }
 }
-struct Fixture {
-    path: PathBuf,
-    owner: Owner,
-    keys: KeyPair,
-    peer: DeviceState,
-    peer_keys: KeyPair,
-    native: Arc<Memory>,
-    store: Store,
-    _work: WorkDirectory,
+pub(super) struct Fixture {
+    pub(super) path: PathBuf,
+    pub(super) owner: Owner,
+    pub(super) keys: KeyPair,
+    pub(super) peer: DeviceState,
+    pub(super) peer_keys: KeyPair,
+    pub(super) native: Arc<Memory>,
+    pub(super) store: Store,
+    pub(super) _work: WorkDirectory,
 }
 impl Fixture {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
         let path = work.0.join("media.db");
         let keys = crypto::generate_keypair().unwrap();

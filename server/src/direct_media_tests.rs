@@ -5,6 +5,106 @@ use liteseal_shared::direct_media::{self as m, Descriptor, Submission};
 
 #[tokio::test]
 #[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn core_voice_download_preserves_declared_duration_and_authenticated_bytes() {
+    use liteseal_core::{
+        backup::WorkDirectory,
+        trusted_devices::{
+            messages::{
+                coordinator::{Condition, MessageCoordinator},
+                media::Stage,
+                Owner,
+            },
+            tasks::anchor_fingerprint,
+            witness::platform::Protection,
+        },
+    };
+    let f = Fixture::start(true).await;
+    let a = f.account().await;
+    let b = f.account().await;
+    accepted(&f, &a, &b).await;
+    let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
+    let p = Protection::isolated_test();
+    let source = MessageCoordinator::open_with_protection(
+        &work.0.join("voice-source.db"),
+        Owner::new(&f.url, &a.id, &a.device, &a.keys).unwrap(),
+        &a.keys,
+        p.clone(),
+    )
+    .unwrap();
+    let target = MessageCoordinator::open_with_protection(
+        &work.0.join("voice-target.db"),
+        Owner::new(&f.url, &b.id, &b.device, &b.keys).unwrap(),
+        &b.keys,
+        p.clone(),
+    )
+    .unwrap();
+    for anchor in [directory(&f, &a).anchor(), directory(&f, &b).anchor()] {
+        source
+            .confirm_root(anchor, &anchor_fingerprint(anchor), &a.keys)
+            .unwrap();
+        target
+            .confirm_root(anchor, &anchor_fingerprint(anchor), &b.keys)
+            .unwrap();
+    }
+    source.renew_session(a.token.clone()).unwrap();
+    target.renew_session(b.token.clone()).unwrap();
+    // A short format fixture, not a codec or real recording-duration claim.
+    let bytes = b"\x1a\x45\xdf\xa3webm---A_OPUS---OpusHead";
+    let id = uuid::Uuid::new_v4().to_string();
+    assert!(source
+        .stage_media(
+            Stage {
+                id: &id,
+                peer: &b.id,
+                name: "voice.webm",
+                bytes,
+                kind: Kind::Voice,
+                duration_ms: Some(60_001)
+            },
+            &a.keys
+        )
+        .is_err());
+    source
+        .stage_media(
+            Stage {
+                id: &id,
+                peer: &b.id,
+                name: "voice.webm",
+                bytes,
+                kind: Kind::Voice,
+                duration_ms: Some(60_000),
+            },
+            &a.keys,
+        )
+        .unwrap();
+    assert_eq!(
+        source.media_step(&id, &a.keys).await.unwrap().condition,
+        Condition::Uploaded
+    );
+    source.prepare_media(&id, &a.keys).await.unwrap();
+    assert_eq!(
+        source.step(&id, &a.keys).await.unwrap().condition,
+        Condition::Accepted
+    );
+    assert_eq!(
+        target.poll(&b.keys).await.unwrap().condition,
+        Condition::Received
+    );
+    let info = target.media_info(&id, &b.keys).unwrap();
+    assert_eq!(info.kind, Kind::Voice);
+    assert_eq!(info.duration_ms, Some(60_000));
+    assert_eq!(info.mime, "audio/webm");
+    target.start_media_download(&id, &b.keys).unwrap();
+    assert_eq!(
+        target.media_step(&id, &b.keys).await.unwrap().condition,
+        Condition::Cached
+    );
+    target.renew_session(String::new()).unwrap();
+    assert_eq!(target.media_plain(&id, &b.keys).unwrap().as_slice(), bytes);
+}
+
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
 async fn persistent_core_media_upload_restart_publish_and_recipient_ack() {
     use liteseal_core::{
         backup::WorkDirectory,
@@ -127,12 +227,69 @@ async fn persistent_core_media_upload_restart_publish_and_recipient_ack() {
         .await
         .unwrap()
         .is_empty());
+    let download = receiver.start_media_download(&id, &b.keys).unwrap();
+    assert_eq!(download.phase, Phase::Downloading);
+    assert!(receiver.media_plain(&id, &b.keys).is_err());
+    assert_eq!(
+        receiver
+            .media_step(&id, &b.keys)
+            .await
+            .unwrap()
+            .task
+            .downloaded,
+        m::CHUNK as u64
+    );
+    drop(receiver);
+    let receiver = MessageCoordinator::open_with_protection(
+        &work.0.join("receiver.db"),
+        Owner::new(&f.url, &b.id, &b.device, &b.keys).unwrap(),
+        &b.keys,
+        protection.clone(),
+    )
+    .unwrap();
+    receiver.renew_session(b.token.clone()).unwrap();
+    assert_eq!(
+        receiver.media_tasks(&b.keys).unwrap()[0].downloaded,
+        m::CHUNK as u64
+    );
+    while receiver.media_tasks(&b.keys).unwrap()[0].phase == Phase::Downloading {
+        receiver.media_step(&id, &b.keys).await.unwrap();
+    }
+    assert_eq!(
+        receiver.media_plain(&id, &b.keys).unwrap().as_slice(),
+        bytes
+    );
+    receiver.renew_session(String::new()).unwrap();
+    assert_eq!(
+        receiver.media_plain(&id, &b.keys).unwrap().as_slice(),
+        bytes
+    );
+    // Expiry removes remote access without deleting the authenticated local copy.
+    sqlx::query(
+        "UPDATE direct_v3_media_objects SET expires_at=now()-interval '1 second' WHERE id=$1",
+    )
+    .bind(&id)
+    .execute(f.db.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        receiver.media_plain(&id, &b.keys).unwrap().as_slice(),
+        bytes
+    );
+    receiver.clear_media(&id, &b.keys).unwrap();
+    receiver.renew_session(b.token.clone()).unwrap();
+    receiver.start_media_download(&id, &b.keys).unwrap();
+    let unavailable = receiver.media_step(&id, &b.keys).await.unwrap();
+    assert_eq!(unavailable.condition, Condition::Unavailable);
+    assert_eq!(unavailable.http_status, Some(404));
+    assert!(receiver.media_plain(&id, &b.keys).is_err());
     let page = pending(&f, &b.token, &peer.secondary().unwrap().device_id, 1).await;
     assert_eq!(page.status(), StatusCode::UNAUTHORIZED);
     receiver.hide(&id, &b.keys).unwrap();
     assert!(receiver.history(None, 100, &b.keys).unwrap().is_empty());
     actor.renew_session(String::new()).unwrap();
     assert_eq!(actor.history(None, 100, &a.keys).unwrap()[0].id, id);
+    assert_eq!(actor.media_plain(&id, &a.keys).unwrap().as_slice(), bytes);
     actor.clear_accepted(&id, &a.keys).unwrap();
     assert_eq!(
         actor.media_step(&id, &a.keys).await.unwrap().condition,
