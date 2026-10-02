@@ -1,0 +1,32 @@
+import { StrictMode } from "react";
+import { root } from "./device-harness-root";
+import SessionRefreshPanel from "../src/components/SessionRefreshPanel";
+import type { RefreshTarget, RefreshSnapshot, RefreshProgress } from "../../electron/contracts";
+let view: RefreshSnapshot, delayed=false, deferred: ((value:RefreshProgress)=>void)|null=null;
+const calls: {name:string;args:any}[]=[];
+const api={
+  get_session_refresh:async(args:any)=>{calls.push({name:"get",args});return structuredClone(view);},
+  prepare_session_refresh:async(args:any)=>{calls.push({name:"prepare",args});view.tasks=[{id:"original-refresh",revision:1,stage:"prepared",current:true,cancel_requested:false}];return structuredClone(view.tasks[0]);},
+  session_refresh_step:async(args:any)=>{calls.push({name:"step",args});if(delayed)return new Promise<RefreshProgress>(resolve=>{deferred=resolve;});return {task:structuredClone(view.tasks[0]),condition:"retry" as const,http_status:null};},
+  cancel_session_refresh:async(args:any)=>{calls.push({name:"cancel",args});if(view.tasks[0].stage!=="prepared"&&!args.confirmedFamilyExit)throw new Error("已发送续期需要明确确认退出原登录家族");view.tasks[0].cancel_requested=true;if(view.tasks[0].stage==="prepared")view.tasks[0].stage="cancelled";return structuredClone(view.tasks[0]);},
+  forget_session_refresh:async(args:any)=>{calls.push({name:"forget",args});view.tasks=[];},
+};
+function reset(target:RefreshTarget={kind:"root"}){view={target,current:{generation:1,account:"synthetic-account",device:"synthetic-device",session:"synthetic-session",has_credentials:true,eligible:true,access_expired:false,access_expires_at:Date.now()+60000,refresh_expires_at:Date.now()+180000},tasks:[]};delayed=false;calls.length=0;window.confirm=()=>true;window.desktop=new Proxy(api,{get(target,key:keyof typeof api){if(!(key in target))throw new Error("refresh used secret/legacy/internal API "+String(key));return target[key];}}) as any;}
+const sleep=()=>new Promise(resolve=>setTimeout(resolve,65));
+const check=(value:unknown,message:string)=>{if(!value)throw new Error(message);};
+const button=(text:string)=>[...document.querySelectorAll<HTMLButtonElement>("button")].find(b=>b.textContent?.trim()===text);
+async function click(text:string){check(button(text),"missing refresh button "+text);button(text)!.click();await sleep();}
+let generation=0;
+const panel=(target:RefreshTarget=view.target)=>root.render(<StrictMode><SessionRefreshPanel key={++generation} target={target} onClose={()=>root.render(<div>closed</div>)}/></StrictMode>);
+(window as any).runSessionRefreshTests=async()=>{
+  const results:string[]=[];
+  reset();panel();await sleep();check(calls.every(c=>c.name==="get"),"mount starts refresh network task");await click("准备会话续期");check(calls.find(c=>c.name==="prepare")!.args.target.kind==="root","root target missing");await click("继续原续期任务");check(calls.find(c=>c.name==="step")!.args.id==="original-refresh","retry changes original id");check(document.body.textContent!.includes("结果未确认"),"unknown result lost");results.push("explicit root preparation and original retry preserve unknown outcome");
+  await click("取消未发送续期");check(calls.find(c=>c.name==="cancel")!.args.confirmedFamilyExit===false,"unissued cancellation closes family");await click("整理续期结果");check(!view.tasks.length,"terminal cleanup failed");results.push("unissued cancellation requires no family exit and explicit cleanup");
+  reset({kind:"join",profileId:"independent-profile"});view.tasks=[{id:"join-original",revision:2,stage:"started",current:true,cancel_requested:false}];panel();await sleep();window.confirm=()=>false;await click("退出原登录家族");check(!calls.some(c=>c.name==="cancel"),"denied confirmation exits family");window.confirm=()=>true;await click("退出原登录家族");check(calls.find(c=>c.name==="cancel")!.args.confirmedFamilyExit===true&&calls.every(c=>c.args.target.profileId==="independent-profile"),"join target or confirmed intent lost");results.push("joining profile stays independently scoped and issued cancellation requires consent");
+  reset();view.tasks=[{id:"original-refresh",revision:1,stage:"prepared",current:true,cancel_requested:false}];panel();await sleep();view.tasks[0].stage="started";await click("取消未发送续期");check(document.body.textContent!.includes("需要明确确认")&&!view.tasks[0].cancel_requested&&button("退出原登录家族"),"prepared-to-started race silently exits");results.push("actual-stage cancellation race refreshes view without silently exiting family");
+  delayed=true;button("继续原续期任务")!.click();await sleep();await click("退出原登录家族");deferred!({task:{...view.tasks[0],stage:"complete"},condition:"complete",http_status:null});await sleep();check(!document.body.textContent!.includes("原续期完成，正式能力"),"late result overrides cancellation");results.push("cancel intent replaces in-flight UI epoch and rejects late success");
+  reset();view.tasks=[{id:"original-refresh",revision:1,stage:"started",current:true,cancel_requested:false}];panel();await sleep();delayed=true;button("继续原续期任务")!.click();await sleep();window.dispatchEvent(new Event("liteseal-device-paused"));deferred!({task:{...view.tasks[0],stage:"complete"},condition:"complete",http_status:null});await sleep();check(!document.body.textContent!.includes("synthetic-account")&&!document.querySelector('[aria-label="原续期任务"]')&&button("查询本机续期状态")!.disabled,"pause exposes late scoped data");results.push("system pause clears current data and rejects late response");
+  reset({kind:"join",profileId:"profile-a"});view.tasks=[{id:"profile-a-job",revision:1,stage:"started",current:true,cancel_requested:false}];panel();await sleep();delayed=true;button("继续原续期任务")!.click();await sleep();const finish=deferred!;reset({kind:"join",profileId:"profile-b"});panel();await sleep();finish({task:{id:"profile-a-job",revision:1,stage:"complete",current:false,cancel_requested:false},condition:"complete",http_status:null});await sleep();check(!document.body.textContent!.includes("profile-a-job")&&!document.body.textContent!.includes("原续期完成，正式能力"),"profile switch accepts old response");results.push("profile switch rejects prior target result and no private/internal API is exposed");
+  return results;
+};
+(window as any).showSessionRefreshPanel=async()=>{reset();view.tasks=[{id:"original-refresh",revision:3,stage:"proving",current:true,cancel_requested:false},{id:"previous-refresh",revision:4,stage:"complete",current:false,cancel_requested:false}];panel();await sleep();};

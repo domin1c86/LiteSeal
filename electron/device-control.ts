@@ -2,6 +2,7 @@ import type { CommandName } from "./contracts";
 import type { DesktopBridge } from "./bridge";
 
 export const deviceCommands = new Set<CommandName>([
+  "get_session_refresh","prepare_session_refresh","session_refresh_step","cancel_session_refresh","forget_session_refresh",
   "get_root_session", "prepare_root_session", "root_session_step", "inspect_root_session", "cancel_root_session", "forget_root_session", "save_root_session",
   "get_root_messaging", "check_root_messaging", "prepare_root_messaging", "root_messaging_step", "cancel_root_messaging", "forget_root_messaging",
   "get_join_activation", "prepare_join_activation", "join_activation_step", "inspect_join_activation", "cancel_join_activation", "forget_join_activation", "save_join_activation", "clear_join_activation_session",

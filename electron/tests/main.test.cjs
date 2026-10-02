@@ -21,13 +21,14 @@ for (const startupLocked of [false, true]) test(`main restricts IPC, locks and a
   let loaded;
   const load = new Promise(resolve => { loaded = resolve; });
   const child = new EventEmitter();
-  let holdDevice = false, heldDevice;
+  let holdDevice = false, heldDevice, holdRefresh = false, heldRefresh;
   child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
   child.kill = () => { child.emit('exit', 0); child.emit('close', 0); };
   child.stdin.on('finish', child.kill);
   child.stdin.on('data', frame => {
     const request = JSON.parse(frame.toString());
     commands.push(request.command.name);
+    if (holdRefresh && request.command.name === 'process_session_refreshes') { heldRefresh = request; return; }
     if (holdDevice && request.command.name === 'get_device_control') { heldDevice = request; return; }
     child.stdout.write(JSON.stringify({ id: request.id, result: request.command.name === 'process_scheduled_messages' ? 1 : request.command.name === 'process_groups' ? { changed: 1, errors: [] } : [] }) + '\n');
   });
@@ -93,6 +94,7 @@ for (const startupLocked of [false, true]) test(`main restricts IPC, locks and a
   const valid = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
   assert.equal(handlers.has('liteseal:resume_device_control'), false);
   assert.equal(handlers.has('liteseal:suspend_device_control'), false);
+  assert.equal(handlers.has('liteseal:process_session_refreshes'), false);
   if (startupLocked) {
     assert.equal((await handlers.get('liteseal:app_lock_state')(valid, {})).result, true);
     assert.equal((await handlers.get('liteseal:get_device_control')(valid, {})).ok, false);
@@ -110,6 +112,12 @@ for (const startupLocked of [false, true]) test(`main restricts IPC, locks and a
   await new Promise(resolve => setTimeout(resolve, 0));
   assert.ok(heldDevice);
   electron.powerMonitor.emit('lock-screen');
+  const beforeLockedRefresh = commands.filter(n=>n==='process_session_refreshes').length;
+  intervals[2](); await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(commands.filter(n=>n==='process_session_refreshes').length,beforeLockedRefresh);
+  for(const name of ['get_session_refresh','prepare_session_refresh','session_refresh_step','cancel_session_refresh','forget_session_refresh']) {
+    assert.equal((await handlers.get(`liteseal:${name}`)(valid,{})).ok,false,name);
+  }
   assert.equal((await devices(valid, {})).ok, false, 'system lock blocks authorization without optional app lock');
   for(const name of ['list_device_join_profiles','create_device_join_profile','get_device_join_profile','confirm_device_join_root','device_join_step','cancel_device_join','abandon_device_join','forget_device_join_profile','get_join_activation','prepare_join_activation','join_activation_step','inspect_join_activation','cancel_join_activation','forget_join_activation','save_join_activation','clear_join_activation_session','get_root_messaging','check_root_messaging','prepare_root_messaging','root_messaging_step','cancel_root_messaging','forget_root_messaging']) {
     assert.equal((await handlers.get(`liteseal:${name}`)(valid,{})).ok,false,name);
@@ -134,6 +142,20 @@ for (const startupLocked of [false, true]) test(`main restricts IPC, locks and a
   electron.powerMonitor.emit('unlock-screen');
   await new Promise(resolve => setTimeout(resolve, 0));
   assert.equal((await devices(valid, {})).ok, true);
+  holdRefresh=true;
+  const beforeRefresh=commands.filter(n=>n==='process_session_refreshes').length;
+  intervals[2](); intervals[2](); await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(commands.filter(n=>n==='process_session_refreshes').length,beforeRefresh+1,'refresh scheduler serializes overlapping ticks');
+  assert.ok(heldRefresh);
+  electron.powerMonitor.emit('suspend');
+  intervals[2]();
+  child.stdout.write(JSON.stringify({id:heldRefresh.id,result:true})+'\n');
+  await new Promise(resolve=>setTimeout(resolve,0));
+  assert.ok(!rendererEvents.some(event=>event[0]==='liteseal:session-refresh-changed'),'suspend rejects late scheduler event');
+  holdRefresh=false;
+  electron.powerMonitor.emit('resume'); await new Promise(resolve=>setTimeout(resolve,0));
+  intervals[2](); await new Promise(resolve=>setTimeout(resolve,0));
+  assert.ok(rendererEvents.some(event=>event[0]==='liteseal:session-refresh-changed'));
   holdDevice=true;
   const beforeRootSave=devices(valid,{});
   await new Promise(resolve=>setTimeout(resolve,0));
@@ -174,6 +196,9 @@ for (const startupLocked of [false, true]) test(`main restricts IPC, locks and a
   const reader = windows[1];
   assert.ok(reader);
   const readerEvent = { sender: reader.webContents, senderFrame: reader.webContents.mainFrame };
+  for(const name of ['get_session_refresh','prepare_session_refresh','session_refresh_step','cancel_session_refresh','forget_session_refresh']) {
+    assert.equal((await handlers.get(`liteseal:${name}`)(readerEvent,{})).ok,false,name);
+  }
   for (const name of ['get_contacts', 'send_message', 'connect_relay', 'sign_message', 'prepare_identity', 'process_groups', 'start_backup_export', 'start_backup_restore', 'get_device_control', 'prepare_device_grant', 'cancel_device_task', 'list_device_join_profiles', 'device_join_step', 'create_device_join_profile', 'get_join_activation', 'prepare_join_activation', 'join_activation_step', 'inspect_join_activation', 'cancel_join_activation', 'forget_join_activation', 'save_join_activation', 'clear_join_activation_session', 'get_root_messaging', 'check_root_messaging', 'prepare_root_messaging', 'root_messaging_step', 'cancel_root_messaging', 'forget_root_messaging']) {
     assert.equal((await handlers.get(`liteseal:${name}`)(readerEvent, {})).ok, false, name);
   }

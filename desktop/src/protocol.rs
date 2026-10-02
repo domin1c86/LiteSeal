@@ -16,6 +16,33 @@ pub struct Request {
 #[derive(Deserialize)]
 #[serde(tag = "name", content = "args", deny_unknown_fields)]
 pub enum Command {
+    #[serde(rename = "get_session_refresh")]
+    GetSessionRefresh {
+        target: commands::session_refresh::Target,
+    },
+    #[serde(rename = "prepare_session_refresh")]
+    PrepareSessionRefresh {
+        target: commands::session_refresh::Target,
+    },
+    #[serde(rename = "session_refresh_step")]
+    SessionRefreshStep {
+        target: commands::session_refresh::Target,
+        id: String,
+    },
+    #[serde(rename = "cancel_session_refresh")]
+    CancelSessionRefresh {
+        target: commands::session_refresh::Target,
+        id: String,
+        #[serde(rename = "confirmedFamilyExit")]
+        confirmed_family_exit: bool,
+    },
+    #[serde(rename = "forget_session_refresh")]
+    ForgetSessionRefresh {
+        target: commands::session_refresh::Target,
+        id: String,
+    },
+    #[serde(rename = "process_session_refreshes")]
+    ProcessSessionRefreshes {},
     #[serde(rename = "get_root_messaging")]
     GetRootMessaging {},
     #[serde(rename = "check_root_messaging")]
@@ -960,6 +987,31 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
         None
     };
     let result = match command {
+        Command::GetSessionRefresh { target } => {
+            serde_json::to_value(commands::session_refresh::snapshot(state, target)?)
+        }
+        Command::PrepareSessionRefresh { target } => {
+            serde_json::to_value(commands::session_refresh::prepare(state, target)?)
+        }
+        Command::SessionRefreshStep { target, id } => {
+            serde_json::to_value(commands::session_refresh::step(state, target, id).await?)
+        }
+        Command::CancelSessionRefresh {
+            target,
+            id,
+            confirmed_family_exit,
+        } => serde_json::to_value(commands::session_refresh::cancel(
+            state,
+            target,
+            id,
+            confirmed_family_exit,
+        )?),
+        Command::ForgetSessionRefresh { target, id } => {
+            serde_json::to_value(commands::session_refresh::forget(state, target, id)?)
+        }
+        Command::ProcessSessionRefreshes {} => {
+            serde_json::to_value(commands::session_refresh::process(state).await?)
+        }
         Command::GetRootSession {} => {
             serde_json::to_value(commands::root_session::snapshot(state)?)
         }

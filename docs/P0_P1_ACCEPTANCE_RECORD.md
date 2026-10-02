@@ -1,5 +1,18 @@
 # P0/P1 验收记录（待执行）
 
+## 2026-10-02 正式会话续期桌面与调度短测
+
+基线 `f5268a4` 与本轮改动工作树；仅合成身份、随机临时数据库/密钥文件和隔离原生保护目标，报告在 `target/test-results/`。只做短测，没有启动新长期或操作真实用户资料。
+
+- `session-refresh-final-engineering-2026-10-02.txt`：完整 `npm test` 18 Node/Electron、311 普通 Rust 通过，0 失败，71 PostgreSQL 用例 ignored；格式检查、全 workspace/all-targets Clippy（-D warnings）及核心 FFI 编译通过。此批无服务端线格式或数据库迁移变化。
+- `session-refresh-final-build-2026-10-02.txt`：完整 `npm run build` 通过，Rust release 43.86 秒；保留既有 LNK4098/LNK4099 链接警告。汇总 `session-refresh-summary-2026-10-02.json` 同时登记工程、界面和未执行环境范围。
+- Rust：7 核心续期与 9 原设备桌面用例通过。两种拥有者原任务/重开、受保护当前记录、失响应后原证明重试、锁定/清除/独立新登录拒绝迟到、家族退出后继与独立登录隔离继续通过；新增未确认的已发取消不改变修订/意图、未发取消仍只撤销任务。桌面严格目标与未知字段/秘密/路径注入拒绝、错误加入目标不能借根任务、公开视图无能力、重启原编号、锁定拒绝、自动创建/重试同一任务、本机退出不再自动调度通过。3 个调度选择测试覆盖成功后代次变化的明确退出优先、旧/终态不重启、冲突保留原编号。完整 HTTP 家族事务仍须真实 PostgreSQL 验证。
+- Node：锁屏/休眠期间五个业务接口拒绝、离线窗口全部拒绝、私有后台命令不进入 preload/页面、重复 tick 串行、暂停拒绝迟到通知、恢复后可调度均通过。初轮私有桥接白名单遗漏和根目标 unit variant 忽略附加字段已修正；原子取消确认和退出优先也分别补测试。失败日志保留，以最终通过结果为准。
+- `session-refresh-ui-final-2026-10-02.txt`、`devices-ui-OvqZyE/`：真实 Electron Chromium、模拟业务接口，四种浅深色/宽窄组合，24 组共 180 项检查，75 秒通过，无 renderer 错误/横向溢出。续期各 7 项覆盖明确准备、原编号未知重试、未发取消/整理、加入独立范围与退出确认、Prepared→Started 竞争、取消期间迟到成功、系统暂停清空和档案切换。最终浅色窄窗截图已人工核对，深色宽窗也核对过；模拟暂停不代表 Windows 实际锁屏/休眠验收。
+- `session-refresh-group-ui-2026-10-02.txt`、`group-ui-SIl3cW/`：群 UI 宽窄及 16 类既有检查通过；`session-refresh-style-2026-10-02.txt`、`ui-style-pkqacU/`：72 张风格截图和既有四种配置检查通过，无 renderer 错误。附件/语音/活动模拟界面继续可用，不冒充麦克风/真实多人验收。
+- `session-refresh-database-2026-10-02.txt`、`session-refresh-group-integration-2026-10-02.txt`：隔离入口实际执行了环境检查，结果均为 `not_executed`，当前进程没有专用测试库配置，DockerDesktopLinuxEngine 管道仍缺失；没有读取业务库、重置 Docker 或停止原后台。71 ignored 不计通过。
+- 原设备已有正式记录可自动续期，加入档案仍手动，未选档案不后台请求。正常档案选择、v3 收发/历史/媒体/备份和选定历史仍待实现；真实系统/双 Windows、故障中断及独立审查保持待验收，T23 整体不关闭。不推送，预览文件和 `src-tauri/` 不纳入功能提交。
+
 ## 2026-10-02 原设备与加入档案正式凭据来源短测
 
 基线 `6e04c3e` 和改动工作树，汇总 `session-routing-summary-2026-10-02.json`，报告位于 `target/test-results/`，隔离数据/身份与合成 HTTP。

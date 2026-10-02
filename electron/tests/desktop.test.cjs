@@ -41,7 +41,9 @@ test('preload exposes exactly the typed business commands, with error propagatio
   assert.deepEqual(Object.keys(exposed).sort(), [...commandNames].sort());
   assert.equal(exposed.resume_device_control, undefined);
   assert.equal(exposed.suspend_device_control, undefined);
+  assert.equal(exposed.process_session_refreshes, undefined);
   listeners.get('liteseal:device-paused')();assert.deepEqual(events,['liteseal-device-paused']);
+  listeners.get('liteseal:session-refresh-changed')();assert.equal(events.at(-1),'liteseal-session-refresh-changed');
   assert.deepEqual(await exposed.get_contacts({}), []);
   assert.equal((await exposed.stage_attachment_file({ peerId: 'bob', file: selectedFile })).id, 'staged');
   await assert.rejects(exposed.stage_attachment_file({ peerId: 'bob', file: {} }), /没有本机路径/);

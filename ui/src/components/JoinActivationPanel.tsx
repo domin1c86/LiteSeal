@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { getDesktopApi } from "../lib/desktopApi";
+import SessionRefreshPanel from "./SessionRefreshPanel";
 import type { ActivationProgress, ActivationTask, JoinActivationSnapshot } from "../../../electron/contracts";
 
 const stages: Record<ActivationTask["stage"], string> = { prepared:"申请已保存", started:"正在查询原申请", proving:"原证明已保存", conflict:"原申请冲突", complete:"正式会话已确认", cancelled:"已确认取消", ineligible:"原授权已失效", ended:"原申请已结束" };
@@ -11,6 +12,7 @@ export default function JoinActivationPanel({ profileId, onClose }: { profileId:
   const [view,setView]=useState<JoinActivationSnapshot|null>(null),[password,setPassword]=useState("");
   const [confirmed,setConfirmed]=useState(false),[busy,setBusy]=useState(false),[status,setStatus]=useState(""),[error,setError]=useState("");
   const live=useRef(false),paused=useRef(false),epoch=useRef(0),operation=useRef<number|null>(null);
+  const [showRefresh,setShowRefresh]=useState(false);
   const current=(generation:number)=>live.current&&!paused.current&&generation===epoch.current;
   async function run(work?:()=>Promise<string|void>,replace=false) {
     if(!live.current||paused.current||operation.current!==null&&!replace)return;
@@ -32,12 +34,14 @@ export default function JoinActivationPanel({ profileId, onClose }: { profileId:
   },[profileId]);
   const pending=view?.tasks.find(task=>!terminal(task));
   const normal=view?.normal;
+  const refresh=<>{normal&&<button disabled={paused.current} onClick={()=>setShowRefresh(true)}>管理这个档案的会话续期</button>}{showRefresh&&<SessionRefreshPanel target={{kind:"join",profileId}} onClose={()=>setShowRefresh(false)}/>}</>;
   const credentialTask=view?.tasks.find(task=>["prepared","started"].includes(task.stage)&&!task.cancel_requested);
   function step(task:ActivationTask) {
     const secret=password;setPassword("");
     void run(async()=>{const result=await getDesktopApi().join_activation_step({profileId,id:task.id,...(secret?{password:secret}:{})});return outcomes[result.condition];});
   }
   return <section aria-label="正式激活申请">
+    {refresh}
     <h3>正式激活与本机档案</h3>
     <p>先由原设备明确启用单聊 v3，再使用此档案的原密钥完成账号验证。保存后保留独立会话档案，消息界面尚未开放。</p>
     <button disabled={busy||paused.current} onClick={()=>void run()}>刷新本机激活任务</button>

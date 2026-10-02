@@ -13,6 +13,12 @@ export interface GroupPoll { id: string; creator: string; question: string; opti
 export interface GroupCollaboration { polls: GroupPoll[]; pin: string | null; pin_unavailable: boolean; pin_revision: number; pending: boolean; conflict: boolean; pending_message: string | null }
 export type CollaborationCommand = { kind: "mention"; text: string; mentions: CollaborationMember[] } | { kind: "poll"; question: string; options: string[] } | { kind: "vote"; poll: string; option: string; revision: number } | { kind: "close"; poll: string; revision: number } | { kind: "pin"; message: string | null; revision: number };
 export interface CommandMap {
+  get_session_refresh:{args:{target:RefreshTarget};result:RefreshSnapshot};
+  prepare_session_refresh:{args:{target:RefreshTarget};result:RefreshTask};
+  session_refresh_step:{args:{target:RefreshTarget;id:string};result:RefreshProgress};
+  cancel_session_refresh:{args:{target:RefreshTarget;id:string;confirmedFamilyExit:boolean};result:RefreshTask};
+  forget_session_refresh:{args:{target:RefreshTarget;id:string};result:void};
+  process_session_refreshes:{args:{};result:boolean};
   get_root_session: { args: {}; result: RootSessionSnapshot };
   prepare_root_session: { args: { username:string }; result: ActivationTask };
   root_session_step: { args: { id:string; password?:string }; result: ActivationProgress };
@@ -223,15 +229,21 @@ export interface GroupInspection { group_id: string; name: string; owner_id: str
 export interface GroupSnapshot { groups: GroupView[]; invitations: { id: string; group_id: string; expires_at: number }[]; errors: string[]; next_cursor: string | null }
 export interface ScheduledTask { id: string; peer_id: string; due_at: number; text: string; state: string; error: string; sealed: boolean }
 export interface AttachmentTask { id: string; peer_id: string; message_id: string; name: string; size: number; mime: string; duration_ms?: number; offset: number; total: number; direction: string }
+export type RefreshTarget={kind:"root"}|{kind:"join";profileId:string};
+export interface RefreshCurrent{generation:number;account:string;device:string;session:string;has_credentials:boolean;access_expired:boolean;eligible:boolean;access_expires_at:number;refresh_expires_at:number}
+export interface RefreshTask{id:string;revision:number;stage:"prepared"|"started"|"proving"|"conflict"|"complete"|"cancelled"|"ended";current:boolean;cancel_requested:boolean}
+export interface RefreshProgress{task:RefreshTask;condition:"complete"|"cancelled"|"ended"|"superseded"|"ineligible"|"retry"|"conflict"|"pending";http_status:number|null}
+export interface RefreshSnapshot{target:RefreshTarget;current:RefreshCurrent|null;tasks:RefreshTask[]}
 export type DesktopApi = {
   // The mapped business API never exposes private attachment descriptors.
-  [K in Exclude<CommandName, "suspend_device_control" | "resume_device_control">]: (args: CommandMap[K]["args"]) => Promise<CommandMap[K]["result"]>;
+  [K in Exclude<CommandName, "suspend_device_control" | "resume_device_control" | "process_session_refreshes">]: (args: CommandMap[K]["args"]) => Promise<CommandMap[K]["result"]>;
 };
 export type GroupAnswer="yes"|"no"|"maybe";
 export interface GroupActivity { id:string;creator:string;title:string;start_at:number;timezone:string;location:string;description:string;responses:Record<string,GroupAnswer>;participants:string[];departed:string[];closed:boolean;cancelled:boolean;eligible:boolean;can_manage:boolean;revision:number }
 export interface GroupExtensions { attachments:{id:string;blob:string;name:string;size:number;mime:string;duration_ms:number|null}[];activities:GroupActivity[];pending:boolean;conflict:boolean;pending_root:string|null }
 export type GroupExtensionCommand={kind:"activity";title:string;start_at:number;timezone:string;location:string;description:string}|{kind:"respond";activity:string;answer:GroupAnswer;revision:number}|{kind:"close"|"cancel";activity:string;revision:number};
 export const commandNames = [
+  "get_session_refresh","prepare_session_refresh","session_refresh_step","cancel_session_refresh","forget_session_refresh",
   "get_root_messaging", "check_root_messaging", "prepare_root_messaging", "root_messaging_step", "cancel_root_messaging", "forget_root_messaging",
   "get_root_session", "prepare_root_session", "root_session_step", "inspect_root_session", "cancel_root_session", "forget_root_session", "save_root_session",
   "get_join_activation", "prepare_join_activation", "join_activation_step", "inspect_join_activation", "cancel_join_activation", "forget_join_activation", "save_join_activation", "clear_join_activation_session",

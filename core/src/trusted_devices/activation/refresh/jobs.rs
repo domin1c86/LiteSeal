@@ -76,6 +76,8 @@ pub struct CurrentView {
     pub has_credentials: bool,
     pub access_expired: bool,
     pub eligible: bool,
+    pub access_expires_at: i64,
+    pub refresh_expires_at: i64,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -552,6 +554,8 @@ impl Store {
                 has_credentials: record.active,
                 access_expired: record.session.expires_at <= chrono::Utc::now().timestamp_millis(),
                 eligible: self.owner.member(&state).ok() == Some(record.session.authorization),
+                access_expires_at: record.session.expires_at,
+                refresh_expires_at: record.session.refresh_expires_at,
             }))
         })
     }
@@ -651,11 +655,22 @@ impl Store {
         })
     }
     pub fn request_cancel(&mut self, id: &str, keys: &KeyPair) -> Result<View, String> {
+        self.request_cancel_confirmed(id, keys, true)
+    }
+    pub fn request_cancel_confirmed(
+        &mut self,
+        id: &str,
+        keys: &KeyPair,
+        confirmed_family_exit: bool,
+    ) -> Result<View, String> {
         let expected = self.task(id, keys)?.view();
         if matches!(expected.stage, Stage::Cancelled | Stage::Ended) {
             return Ok(expected);
         }
         self.edit(&expected, keys, |_, task| {
+            if task.started && !confirmed_family_exit {
+                return Err("已发送续期取消会退出原登录家族，请明确确认".into());
+            }
             task.cancel_requested = true;
             if !task.started {
                 task.stage = Stage::Cancelled;
@@ -882,6 +897,17 @@ impl Coordinator {
     pub fn request_cancel(&self, id: &str, keys: &KeyPair) -> Result<View, String> {
         let lease = self.gate.lease()?;
         self.with(&lease, |s| s.request_cancel(id, keys))
+    }
+    pub fn request_cancel_confirmed(
+        &self,
+        id: &str,
+        keys: &KeyPair,
+        confirmed_family_exit: bool,
+    ) -> Result<View, String> {
+        let lease = self.gate.lease()?;
+        self.with(&lease, |s| {
+            s.request_cancel_confirmed(id, keys, confirmed_family_exit)
+        })
     }
     pub fn forget_ended(&self, id: &str, keys: &KeyPair) -> Result<(), String> {
         let lease = self.gate.lease()?;

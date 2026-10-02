@@ -104,6 +104,15 @@ else {
         if (report.changed > 0 && !locked) mainWindow?.webContents.send("liteseal:groups-changed");
       }).catch(() => {}).finally(() => { groupsBusy = false; });
     }, 10000).unref();
+    let refreshBusy=false;
+    setInterval(()=>{
+      if(refreshBusy||locked||screenLocked||systemSuspended||quitting||exitRequested)return;
+      let epoch:number;try{epoch=deviceControl.capture();}catch{return;}
+      refreshBusy=true;
+      void bridge.call("process_session_refreshes",{}).then(changed=>{
+        deviceControl.check(epoch);if(changed&&!locked&&!screenLocked&&!systemSuspended)mainWindow?.webContents.send("liteseal:session-refresh-changed");
+      }).catch(()=>{}).finally(()=>{refreshBusy=false;});
+    },30000).unref();
     try {
       const configuration = JSON.parse(await fs.readFile(path.join(app.getPath("userData"), "app-lock.json"), "utf8"));
       if (typeof configuration.enabled !== "boolean") throw new Error("应用锁配置损坏");

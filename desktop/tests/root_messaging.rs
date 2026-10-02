@@ -10,7 +10,10 @@ use liteseal_core::{
     },
 };
 use liteseal_desktop::{
-    commands::{device_control, keystore, root_messaging as r, root_session as s},
+    commands::{
+        device_control, keystore, root_messaging as r, root_session as s,
+        session_refresh as refresh,
+    },
     protocol::{self, Command},
     AppState,
 };
@@ -145,6 +148,51 @@ impl Fixture {
             .unwrap();
         (task.view().id, challenge, envelope, session)
     }
+}
+
+#[tokio::test]
+async fn refresh_ipc_requires_explicit_target_and_rejects_secret_injection() {
+    let f = Fixture::new("http://127.0.0.1:1");
+    for name in [
+        "get_session_refresh",
+        "prepare_session_refresh",
+        "session_refresh_step",
+        "cancel_session_refresh",
+        "forget_session_refresh",
+    ] {
+        let mut args = serde_json::json!({"target":{"kind":"root"}});
+        if name.contains("step") || name.contains("cancel") || name.contains("forget") {
+            args["id"] = "original".into();
+        }
+        if name.contains("cancel") {
+            args["confirmedFamilyExit"] = false.into();
+        }
+        assert!(
+            serde_json::from_value::<Command>(serde_json::json!({"name":name,"args":args})).is_ok()
+        );
+        for extra in ["token", "refreshToken", "secretKey", "path", "profileId"] {
+            let mut injected = args.clone();
+            injected[extra] = "injected".into();
+            assert!(serde_json::from_value::<Command>(
+                serde_json::json!({"name":name,"args":injected})
+            )
+            .is_err());
+            let mut injected = args.clone();
+            injected["target"][extra] = "injected".into();
+            assert!(serde_json::from_value::<Command>(
+                serde_json::json!({"name":name,"args":injected})
+            )
+            .is_err());
+        }
+        args["target"] = serde_json::json!({"kind":"join"});
+        assert!(
+            serde_json::from_value::<Command>(serde_json::json!({"name":name,"args":args}))
+                .is_err()
+        );
+    }
+    assert!(!refresh::process(&f.state).await.unwrap());
+    assert!(refresh::prepare(&f.state, refresh::Target::Root {}).is_err());
+    f.unchanged();
 }
 
 #[tokio::test]
@@ -502,7 +550,72 @@ async fn root_formal_save_preserves_original_identity_masks_credentials_and_fenc
                 )
                 .unwrap();
             assert_eq!(current.session(&f.keys).unwrap().id, session.id);
+            let target = refresh::Target::Root {};
+            let snapshot = refresh::snapshot(&f.state, target.clone()).unwrap();
+            let public = serde_json::to_string(&snapshot).unwrap();
+            assert!(
+                !public.contains(&session.access_token) && !public.contains(&session.refresh_token)
+            );
+            assert_eq!(
+                snapshot.current.unwrap().access_expires_at,
+                session.expires_at
+            );
+            assert!(refresh::snapshot(
+                &f.state,
+                refresh::Target::Join {
+                    profile_id: "missing-profile".into()
+                }
+            )
+            .is_err());
+            let job = refresh::prepare(&f.state, target.clone()).unwrap();
+            assert_eq!(
+                refresh::snapshot(&reopened, target.clone()).unwrap().tasks[0].id,
+                job.id
+            );
+            assert!(refresh::prepare(&f.state, target.clone()).is_err());
+            device_control::suspend(&f.state).unwrap();
+            assert!(refresh::snapshot(&f.state, target.clone()).is_err());
+            assert!(refresh::process(&f.state).await.is_err());
+            device_control::resume(&f.state).unwrap();
+            assert_eq!(
+                refresh::cancel(&f.state, target.clone(), job.id.clone(), false)
+                    .unwrap()
+                    .stage,
+                liteseal_core::trusted_devices::activation::refresh::jobs::Stage::Cancelled
+            );
+            refresh::forget(&f.state, target.clone(), job.id).unwrap();
+            assert!(!refresh::process(&f.state).await.unwrap());
+            let job = refresh::snapshot(&f.state, target.clone())
+                .unwrap()
+                .tasks
+                .remove(0);
+            assert_eq!(
+                job.stage,
+                liteseal_core::trusted_devices::activation::refresh::jobs::Stage::Started
+            );
+            assert!(!refresh::process(&f.state).await.unwrap());
+            let resumed = refresh::snapshot(&f.state, target.clone()).unwrap().tasks;
+            assert_eq!(resumed.len(), 1);
+            assert_eq!(resumed[0].id, job.id);
+            // The original listener is gone: unknown network results retain the original started task.
+            let result = refresh::step(&f.state, target.clone(), job.id.clone())
+                .await
+                .unwrap();
+            assert_eq!(
+                result.condition,
+                liteseal_core::trusted_devices::activation::refresh::jobs::Condition::Retry
+            );
+            assert!(refresh::cancel(&f.state, target.clone(), job.id.clone(), false).is_err());
+            assert!(
+                !refresh::snapshot(&f.state, target.clone()).unwrap().tasks[0].cancel_requested
+            );
+            assert!(
+                refresh::cancel(&f.state, target, job.id, true)
+                    .unwrap()
+                    .cancel_requested
+            );
             current.clear_local(&f.keys).unwrap();
+            assert!(!refresh::process(&f.state).await.unwrap());
             assert!(f.state.identity().unwrap().token.is_empty());
             assert!(reopened.identity().unwrap().refresh_token.is_empty());
             f.unchanged();

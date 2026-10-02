@@ -17,6 +17,7 @@ pub mod root_messaging;
 pub mod root_refresh;
 pub mod root_session;
 pub mod scheduled;
+pub mod session_refresh;
 pub mod storage;
 pub mod typing;
 pub mod windows_lock;

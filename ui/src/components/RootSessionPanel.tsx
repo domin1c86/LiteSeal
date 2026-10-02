@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import PanelDialog from "./PanelDialog";
+import SessionRefreshPanel from "./SessionRefreshPanel";
 import { getDesktopApi } from "../lib/desktopApi";
 import type { ActivationTask, ActivationProgress, RootSessionSnapshot } from "../../../electron/contracts";
 const terminal=(task:ActivationTask)=>["complete","cancelled","ineligible","ended"].includes(task.stage);
@@ -7,6 +8,7 @@ const outcomes:Record<ActivationProgress["condition"],string>={complete:"原正�
 export default function RootSessionPanel({onClose,initialUsername=""}:{onClose:()=>void;initialUsername?:string}){
   const [view,setView]=useState<RootSessionSnapshot|null>(null),[username,setUsername]=useState(initialUsername),[password,setPassword]=useState(""),[busy,setBusy]=useState(false),[status,setStatus]=useState(""),[error,setError]=useState("");
   const live=useRef(false),paused=useRef(false),epoch=useRef(0),operation=useRef<number|null>(null);
+  const [showRefresh,setShowRefresh]=useState(false);
   const current=(n:number)=>live.current&&!paused.current&&epoch.current===n;
   async function run(work?:()=>Promise<string|void>,replace=false){
     if(!live.current||paused.current||operation.current!==null&&!replace)return;
@@ -23,6 +25,8 @@ export default function RootSessionPanel({onClose,initialUsername=""}:{onClose:(
   return <PanelDialog label="恢复原设备正式会话" onClose={onClose} wide><section aria-label="原设备正式会话恢复">
     <p>使用本机保留的原身份和原密钥恢复已启用 v3 的原设备。保存后可重新打开应用查看原历史；新协议消息后台尚未接入。</p>
     <button disabled={busy||paused.current} onClick={()=>void run()}>刷新原会话任务</button>
+    <button disabled={paused.current} onClick={()=>setShowRefresh(true)}>管理原设备会话续期</button>
+    {showRefresh&&<SessionRefreshPanel target={{kind:"root"}} onClose={()=>setShowRefresh(false)}/>}
     {view&&<><p>原设备指纹</p><code>{view.root_fingerprint}</code><p>{view.has_local_credentials?"本机保留会话凭据，在线有效性需查询":"本机已退出，原身份与密钥保留"}</p>
       <label>原账号名<input aria-label="原账号名" value={username} disabled={busy||paused.current} autoComplete="username" onChange={e=>setUsername(e.target.value)}/></label>
       <label>原账号密码<input aria-label="原账号密码" type="password" value={password} disabled={busy||paused.current} autoComplete="current-password" onChange={e=>setPassword(e.target.value)}/></label>

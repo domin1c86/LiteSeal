@@ -295,7 +295,7 @@ async fn root_and_secondary_current_records_are_private_scoped_and_original_prep
         );
         assert_eq!(
             reopened
-                .request_cancel(&job.id, f.keys(root))
+                .request_cancel_confirmed(&job.id, f.keys(root), false)
                 .unwrap()
                 .stage,
             r::Stage::Cancelled
@@ -559,7 +559,14 @@ async fn cancellation_during_proof_rejects_late_acceptance_and_confirms_family_l
     tokio::time::timeout(std::time::Duration::from_secs(5), seen.notified())
         .await
         .unwrap();
-    actor.request_cancel(&job.id, f.keys(root)).unwrap();
+    let before_cancel = actor.views(f.keys(root)).unwrap();
+    assert!(actor
+        .request_cancel_confirmed(&job.id, f.keys(root), false)
+        .is_err());
+    assert_eq!(actor.views(f.keys(root)).unwrap(), before_cancel);
+    actor
+        .request_cancel_confirmed(&job.id, f.keys(root), true)
+        .unwrap();
     release.notify_one();
     assert!(pending.await.unwrap().is_err());
     assert_eq!(actor.session(f.keys(root)).unwrap().id, session.id);
