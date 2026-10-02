@@ -13,6 +13,7 @@ pub mod keystore;
 pub mod message_operations;
 pub mod reactions;
 pub mod read_receipts;
+pub mod root_messaging;
 pub mod scheduled;
 pub mod storage;
 pub mod typing;

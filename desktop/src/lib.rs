@@ -16,6 +16,8 @@ pub struct AppState {
     pub(crate) device_control_runtime: Mutex<commands::device_control::Runtime>,
     pub(crate) device_join_runtime: Mutex<commands::device_join::Runtime>,
     pub(crate) device_activation_runtime: Mutex<commands::device_activation::Runtime>,
+    pub(crate) root_messaging_runtime: Mutex<commands::root_messaging::Runtime>,
+    pub(crate) legacy_direct_gate: tokio::sync::RwLock<()>,
     pub(crate) backup_runtime: std::sync::Arc<Mutex<commands::backup::Runtime>>,
     pub(crate) backup_commit: std::sync::Arc<Mutex<()>>,
     // Last field: isolated test cleanup runs after cached SQLite task handles drop.
@@ -53,6 +55,8 @@ impl AppState {
             device_control_runtime: Default::default(),
             device_join_runtime: Default::default(),
             device_activation_runtime: Default::default(),
+            root_messaging_runtime: Default::default(),
+            legacy_direct_gate: Default::default(),
             backup_runtime: Default::default(),
             backup_commit: Default::default(),
             device_protection,

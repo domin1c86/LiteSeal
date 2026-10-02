@@ -441,11 +441,11 @@ fn kind_name(kind: Kind) -> &'static str {
         Kind::Login => "activation_login",
     }
 }
-pub(super) fn legacy_blocked(
+pub(super) fn legacy_state(
     conn: &Connection,
     anchor: &Anchor,
     keys: &KeyPair,
-) -> Result<bool, String> {
+) -> Result<super::legacy::Admission, String> {
     // Route by the public identity first, so unrelated old test/account IDs do
     // not need to satisfy the newer activation UUID rules when no task exists.
     let owner = Owner {
@@ -463,12 +463,15 @@ pub(super) fn legacy_blocked(
     if ids.len() > 128 {
         return Err(bad());
     }
+    let mut state = super::legacy::Admission::Legacy;
     for id in ids {
-        if get(conn, &owner, &id, keys)?.stage != Stage::Cancelled {
-            return Ok(true);
+        match get(conn, &owner, &id, keys)?.stage {
+            Stage::Complete => return Ok(super::legacy::Admission::V3),
+            Stage::Cancelled => {}
+            _ => state = super::legacy::Admission::Switching,
         }
     }
-    Ok(false)
+    Ok(state)
 }
 fn put(
     conn: &Connection,

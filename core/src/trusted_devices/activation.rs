@@ -30,6 +30,11 @@ pub struct VerifiedMode {
     pub(super) query: ModeQuery,
     pub(super) event: Option<Enable>,
 }
+impl VerifiedMode {
+    pub fn enabled(&self) -> bool {
+        self.event.is_some()
+    }
+}
 #[derive(Debug)]
 pub struct ActivationError {
     pub status: Option<u16>,

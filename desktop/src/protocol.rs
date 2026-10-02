@@ -16,6 +16,21 @@ pub struct Request {
 #[derive(Deserialize)]
 #[serde(tag = "name", content = "args", deny_unknown_fields)]
 pub enum Command {
+    #[serde(rename = "get_root_messaging")]
+    GetRootMessaging {},
+    #[serde(rename = "check_root_messaging")]
+    CheckRootMessaging {},
+    #[serde(rename = "prepare_root_messaging")]
+    PrepareRootMessaging {
+        #[serde(rename = "confirmedFingerprint")]
+        confirmed_fingerprint: String,
+    },
+    #[serde(rename = "root_messaging_step")]
+    RootMessagingStep { id: String },
+    #[serde(rename = "cancel_root_messaging")]
+    CancelRootMessaging { id: String },
+    #[serde(rename = "forget_root_messaging")]
+    ForgetRootMessaging { id: String },
     #[serde(rename = "get_join_activation")]
     GetJoinActivation {
         #[serde(rename = "profileId")]
@@ -884,7 +899,70 @@ impl Response {
 }
 
 pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, String> {
+    // A single async read gate covers the full legacy business operation. Root
+    // preparation waits for these operations to finish before its atomic check.
+    let legacy_write = matches!(
+        &command,
+        Command::SendMessage { .. }
+            | Command::RetryMessage { .. }
+            | Command::SelectAttachment { .. }
+            | Command::StageClipboardImage { .. }
+            | Command::StageRecordedAudio { .. }
+            | Command::AttachmentStep { .. }
+            | Command::PublishAttachment { .. }
+            | Command::SaveScheduledMessage { .. }
+            | Command::SendScheduledNow { .. }
+            | Command::ProcessScheduledMessages {}
+            | Command::SubmitMessageOperation { .. }
+            | Command::SubmitReaction { .. }
+            | Command::MarkVisibleMessages { .. }
+            | Command::SendTyping { .. }
+    );
+    let _legacy_guard = if legacy_write {
+        let guard = state.legacy_direct_gate.read().await;
+        if commands::root_messaging::admission(state)?
+            != liteseal_core::trusted_devices::activation::legacy::Admission::Legacy
+        {
+            match &command {
+                Command::ProcessScheduledMessages {} => return Ok(serde_json::json!(0)),
+                Command::MarkVisibleMessages { user_id, ids } => {
+                    commands::root_messaging::local_seen(state, user_id, ids)?;
+                    return Ok(Value::Null);
+                }
+                Command::AttachmentStep { id }
+                    if commands::root_messaging::download(state, id)? => {}
+                _ => {
+                    return Err(
+                        "原设备已准备或启用协议切换，旧单聊发送已暂停；原任务和历史保留".into(),
+                    )
+                }
+            }
+        }
+        Some(guard)
+    } else {
+        None
+    };
     let result = match command {
+        Command::GetRootMessaging {} => {
+            serde_json::to_value(commands::root_messaging::snapshot(state)?)
+        }
+        Command::CheckRootMessaging {} => {
+            serde_json::to_value(commands::root_messaging::check(state).await?)
+        }
+        Command::PrepareRootMessaging {
+            confirmed_fingerprint,
+        } => serde_json::to_value(
+            commands::root_messaging::prepare(state, confirmed_fingerprint).await?,
+        ),
+        Command::RootMessagingStep { id } => {
+            serde_json::to_value(commands::root_messaging::step(state, id).await?)
+        }
+        Command::CancelRootMessaging { id } => {
+            serde_json::to_value(commands::root_messaging::cancel(state, id)?)
+        }
+        Command::ForgetRootMessaging { id } => {
+            serde_json::to_value(commands::root_messaging::forget(state, id)?)
+        }
         Command::GetJoinActivation { profile_id } => {
             serde_json::to_value(commands::device_activation::snapshot(state, profile_id)?)
         }

@@ -13,6 +13,12 @@ export interface GroupPoll { id: string; creator: string; question: string; opti
 export interface GroupCollaboration { polls: GroupPoll[]; pin: string | null; pin_unavailable: boolean; pin_revision: number; pending: boolean; conflict: boolean; pending_message: string | null }
 export type CollaborationCommand = { kind: "mention"; text: string; mentions: CollaborationMember[] } | { kind: "poll"; question: string; options: string[] } | { kind: "vote"; poll: string; option: string; revision: number } | { kind: "close"; poll: string; revision: number } | { kind: "pin"; message: string | null; revision: number };
 export interface CommandMap {
+  get_root_messaging: { args: {}; result: RootMessagingSnapshot };
+  check_root_messaging: { args: {}; result: RootMessagingSnapshot };
+  prepare_root_messaging: { args: { confirmedFingerprint:string }; result: ActivationTask };
+  root_messaging_step: { args: { id:string }; result: ActivationProgress };
+  cancel_root_messaging: { args: { id:string }; result: ActivationTask };
+  forget_root_messaging: { args: { id:string }; result: void };
   get_join_activation: { args: { profileId: string }; result: JoinActivationSnapshot };
   prepare_join_activation: { args: { profileId: string }; result: ActivationTask };
   join_activation_step: { args: { profileId: string; id: string; password?: string }; result: ActivationProgress };
@@ -186,6 +192,7 @@ export interface ActivationTask { id: string; revision: number; kind: "enable" |
 export interface ActivationProgress { task: ActivationTask; condition: "complete" | "cancelled" | "ineligible" | "needs_password" | "session_required" | "retry" | "conflict" | "pending" | "ended"; http_status: number | null }
 export interface NormalJoinProfile { id: string; origin: string; username: string; device_name: string; account: string; device: string; root_fingerprint: string; encryption_fingerprint: string; signing_fingerprint: string; revision: number; has_saved_session: boolean; access_expired: boolean; eligible: boolean }
 export interface JoinActivationSnapshot { profile_id: string; tasks: ActivationTask[]; normal: NormalJoinProfile | null }
+export interface RootMessagingSnapshot { root_fingerprint:string; admission:"legacy"|"switching"|"v3"; pending:{messages:number;uploads:number;scheduled:number;operations:number;reactions:number;receipts:number}; tasks:ActivationTask[] }
 export type CommandName = keyof CommandMap;
 export interface DeviceJoinProfile { id: string; origin: string; username: string; device_name: string; local_device_id: string; encryption_fingerprint: string; signing_fingerprint: string }
 export interface DeviceJoinListing { id: string; profile: DeviceJoinProfile | null; error: string | null }
@@ -216,6 +223,7 @@ export interface GroupActivity { id:string;creator:string;title:string;start_at:
 export interface GroupExtensions { attachments:{id:string;blob:string;name:string;size:number;mime:string;duration_ms:number|null}[];activities:GroupActivity[];pending:boolean;conflict:boolean;pending_root:string|null }
 export type GroupExtensionCommand={kind:"activity";title:string;start_at:number;timezone:string;location:string;description:string}|{kind:"respond";activity:string;answer:GroupAnswer;revision:number}|{kind:"close"|"cancel";activity:string;revision:number};
 export const commandNames = [
+  "get_root_messaging", "check_root_messaging", "prepare_root_messaging", "root_messaging_step", "cancel_root_messaging", "forget_root_messaging",
   "get_join_activation", "prepare_join_activation", "join_activation_step", "inspect_join_activation", "cancel_join_activation", "forget_join_activation", "save_join_activation", "clear_join_activation_session",
   "list_device_join_profiles", "create_device_join_profile", "get_device_join_profile", "confirm_device_join_root", "device_join_step", "cancel_device_join", "abandon_device_join", "forget_device_join_profile",
   "get_device_control", "inspect_device_request", "prepare_device_challenge", "prepare_device_grant", "prepare_device_revoke", "device_task_step", "cancel_device_task", "discard_device_task",

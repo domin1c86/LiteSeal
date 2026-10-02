@@ -1,6 +1,7 @@
 import { root } from "./device-harness-root";
 import "./joining-harness";
 import "./activation-harness";
+import "./root-messaging-harness";
 import DeviceControlPanel from "../src/components/DeviceControlPanel";
 import type { DeviceControlSnapshot, DeviceRequest, DeviceTask } from "../../electron/contracts";
 import "../src/theme.css";
@@ -12,6 +13,7 @@ const calls: { name: string; args: unknown }[] = [];
 const task = (kind: DeviceTask["kind"], phase: DeviceTask["phase"] = "prepared"): DeviceTask => ({ id: `task-${kind}`, kind, phase, revision: 1, request_id: request.request_id, event_id: null, root_fingerprint: null });
 const reset = () => { view = { root_fingerprint: "b".repeat(64), supported: true, syncing: false, messaging_enabled: false, requests: [{ ...request }], tasks: [], authorized: null }; delay = false; calls.length = 0; };
 const api = {
+  get_root_messaging:async()=>({root_fingerprint:view.root_fingerprint,admission:"legacy" as const,pending:{messages:0,uploads:0,scheduled:0,operations:0,reactions:0,receipts:0},tasks:[]}),
   get_device_control: async () => delay ? new Promise<DeviceControlSnapshot>(resolve => { deferred = resolve; }) : structuredClone(view),
   inspect_device_request: async (args: unknown) => { calls.push({ name: "inspect", args }); return structuredClone(view.requests[0]); },
   prepare_device_challenge: async (args: unknown) => { calls.push({ name: "challenge", args }); view.tasks.push(task("challenge")); return view.tasks[view.tasks.length - 1]; },
@@ -45,6 +47,7 @@ const panel = () => root.render(<DeviceControlPanel key={++generation} onClose={
   check((calls.find(row => row.name === "challenge")!.args as any).confirmedFingerprint === request.combined_fingerprint, "wrong public binding");
   check(document.body.textContent!.includes("待发送"), "durable task absent");
   results.push("dual fingerprint confirmation and safe device name rendering");
+  await click("管理原设备协议切换");check(document.querySelector('section[aria-label="原设备单聊协议切换"]'),"root control entry missing");await click("收起协议切换");results.push("verified original-device control opens scoped root messaging management");
   await click("继续原任务"); check(document.body.textContent!.includes("已完成"), "task did not complete");
   check(!document.querySelector('section[aria-label="设备指纹确认"]'), "stage change retained confirmation");
   await click("清除已结束任务"); check(!view.tasks.length, "terminal task retained");

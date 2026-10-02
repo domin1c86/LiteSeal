@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import PanelDialog from "./PanelDialog";
+import RootMessagingPanel from "./RootMessagingPanel";
 import { getDesktopApi } from "../lib/desktopApi";
 import type { DeviceControlSnapshot, DeviceRequest, DeviceTask, DeviceTaskPhase, DeviceProgress } from "../../../electron/contracts";
 
@@ -20,6 +21,7 @@ const conditions: Record<DeviceProgress["condition"], string> = {
 const terminal = (task: DeviceTask) => ["complete", "cancelled", "expired", "revoked"].includes(task.phase);
 
 export default function DeviceControlPanel({ onClose }: { onClose: () => void }) {
+  const [showMessaging,setShowMessaging]=useState(false);
   const [snapshot, setSnapshot] = useState<DeviceControlSnapshot | null>(null);
   const [selected, setSelected] = useState<DeviceRequest | null>(null);
   const [confirmed, setConfirmed] = useState(false), [revokeConfirmed, setRevokeConfirmed] = useState(false);
@@ -123,6 +125,7 @@ export default function DeviceControlPanel({ onClose }: { onClose: () => void })
         {terminal(task) && <button disabled={busy} onClick={() => void run(() => getDesktopApi().discard_device_task({ id: task.id }))}>清除已结束任务</button>}
       </div>)}
       {!snapshot.tasks.length && <p>没有本机设备任务</p>}
+      {snapshot.supported&&!snapshot.syncing&&(!showMessaging?<button disabled={paused.current} onClick={()=>setShowMessaging(true)}>管理原设备协议切换</button>:<RootMessagingPanel onClose={()=>setShowMessaging(false)}/>)}
     </>}
     {status && <p role="status">{status}</p>}
     {error && <p role="alert">{error}</p>}

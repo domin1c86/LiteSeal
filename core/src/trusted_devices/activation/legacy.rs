@@ -60,11 +60,7 @@ pub(super) fn admission_in(
     if fact(conn, anchor, keys)?.is_some() {
         return Ok(Admission::V3);
     }
-    if jobs::legacy_blocked(conn, anchor, keys)? {
-        Ok(Admission::Switching)
-    } else {
-        Ok(Admission::Legacy)
-    }
+    jobs::legacy_state(conn, anchor, keys)
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
