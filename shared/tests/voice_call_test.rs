@@ -124,3 +124,35 @@ fn authenticated_duplicate_is_idempotent_but_gap_replacement_and_terminal_restar
         .admit(&envelope(&a, &sa, &sb, 3, Kind::Restart))
         .is_err());
 }
+#[test]
+fn admission_and_stop_are_separate_proofs_bound_to_exact_original_participants() {
+    use voice_call::{Admission, Stop};
+    let (a, sa) = identity("alice");
+    let (b, sb) = identity("bob");
+    let signal = envelope(&a, &sa, &sb, 1, Kind::Offer);
+    let admission = Admission::make(signal.header.clone(), &a).unwrap();
+    admission.verify(&sa, &sb).unwrap();
+    admission.fresh(1001).unwrap();
+    assert!(admission.fresh(999).is_err());
+    assert!(admission.fresh(1000 + LIFETIME_MS).is_err());
+    let mut reused = admission.clone();
+    reused.signature = signal.signature;
+    assert!(reused.verify(&sa, &sb).is_err());
+    for (member, keys) in [
+        (&admission.header.source, &a),
+        (&admission.header.target, &b),
+    ] {
+        let stop = Stop::make(admission.clone(), member.clone(), keys).unwrap();
+        stop.verify(&sa, &sb).unwrap();
+        let mut changed = stop.clone();
+        changed.admission.header.id = "b".repeat(64);
+        assert!(changed.verify(&sa, &sb).is_err());
+        let mut changed = stop.clone();
+        changed.signature = admission.signature.clone();
+        assert!(changed.verify(&sa, &sb).is_err());
+    }
+    assert!(Stop::make(admission.clone(), admission.header.target.clone(), &a).is_err());
+    let mut changed = admission;
+    changed.header.kind = Kind::Hangup;
+    assert!(changed.verify(&sa, &sb).is_err());
+}

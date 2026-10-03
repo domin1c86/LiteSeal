@@ -1,4 +1,6 @@
 //! Real HTTP/PostgreSQL and activation APIs; all identities are synthetic.
+#[path = "direct_audio_tests.rs"]
+mod audio_tests;
 #[path = "direct_history_tests.rs"]
 mod history_tests;
 #[path = "direct_media_tests.rs"]

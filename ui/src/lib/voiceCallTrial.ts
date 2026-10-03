@@ -1,5 +1,5 @@
-/** T24 runnable engine. Production needs an authenticated native transport and
- * current-profile lifecycle wiring before this can be offered in the app. */
+/** Audio engine shared by the isolated harness and the scoped desktop panel.
+ * Authentication and private signalling capabilities belong to native code. */
 export type VoiceCallState = 'idle' | 'calling' | 'ringing' | 'connecting' | 'connected' | 'ended' | 'failed';
 import type {VoiceCallPlayback} from './voiceCallPlayback';
 export type VoiceSignalKind = 'offer' | 'answer' | 'restart' | 'reject' | 'hangup';
