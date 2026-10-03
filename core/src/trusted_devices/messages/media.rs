@@ -257,7 +257,7 @@ fn chunk(conn: &Connection, owner: &Owner, job: &Job, part: usize) -> Result<Vec
     }
     Ok(bytes)
 }
-fn ciphertext(conn: &Connection, owner: &Owner, job: &Job) -> Result<Vec<u8>, String> {
+pub(super) fn ciphertext(conn: &Connection, owner: &Owner, job: &Job) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::with_capacity(job.descriptor.size as usize + 40);
     for part in 0..job.hashes.len() {
         bytes.extend(chunk(conn, owner, job, part)?);

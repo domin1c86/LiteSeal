@@ -26,7 +26,7 @@ cargo run -p liteseal-server
 - Root package-lock and Cargo.lock are tracked. Install desktop and UI dependencies using root npm workspace.
 - Node 24+, Rust stable Windows x64 MSVC, C++ Build Tools and libsodium are development prerequisites. Installed apps bundle Chromium; no WebView2 required.
 - libsodium-sys 0.2.7 rejects SODIUM_STATIC. For a manually supplied static Windows library set SODIUM_LIB_DIR, leaving SODIUM_SHARED and SODIUM_USE_PKG_CONFIG unset.
-- Preserve `%APPDATA%/liteseal/data.db` and `%LOCALAPPDATA%/liteseal/keystore.bin`. Do not touch real user data during tests. Non-Windows secret storage remains unsupported.
+- Preserve `%APPDATA%/liteseal/data.db` and `%LOCALAPPDATA%/liteseal/keystore.bin`. Do not touch real user data during tests. Android FFI uses a private Keystore/JNI adapter; build and system-validation scope is recorded in ANDROID_ALIGNMENT.md. Other non-Windows secret storage remains unsupported.
 - Keep blocking SQLite mutexes out of await scopes. Async WebSocket handles use Tokio mutexes.
 - IPC exposes only business commands. Never expose raw ipcRenderer, generic filesystem/shell operations or secret-bearing logs to pages.
 - Secret keys never cross the Electron bridge: the sidecar keeps the identity (`AppState::identity`), returns only public keys and session fields, and performs encrypt/decrypt/sign itself. Tests pass `--keystore-path` so the real keystore is never touched.

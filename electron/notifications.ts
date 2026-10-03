@@ -44,6 +44,10 @@ export class ChatNotifications {
   clear() { for (const note of this.visible.values()) note.close(); this.visible.clear(); this.target = null; this.directTarget = null; }
   directGeneration() { return this.directEpoch; }
   directRevision() { return this.directSuppressionRevision; }
+  retireDirectOperations() {
+    for(const [key,note] of this.visible)if(key.startsWith("v3:")){note.close();this.visible.delete(key);}
+    this.directTarget=null;this.directEpoch++;this.directSuppressionRevision++;
+  }
   directContext(scope:string|null, peer:string|null) {
     if(scope!==this.directScope){this.clear();this.directEpoch++;this.lastShown.clear();this.directSeen.clear();this.suppressedDirect.clear();}
     this.directScope=scope;this.directPeer=peer;

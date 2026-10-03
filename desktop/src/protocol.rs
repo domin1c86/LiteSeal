@@ -16,8 +16,123 @@ pub struct Request {
 #[derive(Deserialize)]
 #[serde(tag = "name", content = "args", deny_unknown_fields)]
 pub enum Command {
+    #[serde(rename = "get_audio_targets")]
+    GetAudioTargets { scope: String, peer: String },
+    #[serde(rename = "begin_audio_call")]
+    BeginAudioCall { scope: String, peer: String, device: String },
+    #[serde(rename = "prepare_audio_signal")]
+    PrepareAudioSignal { scope: String, id: String, kind: liteseal_shared::voice_call::Kind, sdp: Option<String> },
+    #[serde(rename = "publish_audio_signal")]
+    PublishAudioSignal { scope: String, handle: String },
+    #[serde(rename = "open_audio_signal")]
+    OpenAudioSignal { scope: String, handle: String },
+    #[serde(rename = "retire_audio_call")]
+    RetireAudioCall { scope: String, id: String },
+    #[serde(rename = "process_audio_calls")]
+    ProcessAudioCalls {},
+    #[serde(rename = "process_direct_history")]
+    ProcessDirectHistory { receive: bool },
+    #[serde(rename = "set_direct_history_pause")]
+    SetDirectHistoryPause {
+        scope: String,
+        id: String,
+        revision: u64,
+        receive: bool,
+        paused: bool,
+        abandon: bool,
+    },
+    #[serde(rename = "direct_history_relay_step")]
+    DirectHistoryRelayStep {
+        scope: String,
+        id: String,
+        revision: u64,
+    },
+    #[serde(rename = "cancel_direct_history_relay")]
+    CancelDirectHistoryRelay {
+        scope: String,
+        id: String,
+        revision: u64,
+    },
+    #[serde(rename = "receive_direct_history_relay")]
+    ReceiveDirectHistoryRelay { scope: String },
     #[serde(rename = "get_direct_chat")]
     GetDirectChat {},
+    #[serde(rename = "get_direct_history_transfers")]
+    GetDirectHistoryTransfers { scope: String },
+    #[serde(rename = "prepare_direct_history_transfer")]
+    PrepareDirectHistoryTransfer(commands::direct::history_transfer::Preparation),
+    #[serde(rename = "cancel_direct_history_transfer")]
+    CancelDirectHistoryTransfer {
+        scope: String,
+        id: String,
+        revision: u64,
+    },
+    #[serde(rename = "export_direct_history_transfer")]
+    ExportDirectHistoryTransfer {
+        scope: String,
+        id: String,
+        revision: u64,
+        path: String,
+    },
+    #[serde(rename = "import_direct_history_transfer")]
+    ImportDirectHistoryTransfer { scope: String, path: String },
+    #[serde(rename = "get_transferred_history")]
+    GetTransferredHistory {
+        scope: String,
+        account: Option<String>,
+        before: Option<String>,
+    },
+    #[serde(rename = "hide_transferred_message")]
+    HideTransferredMessage { scope: String, id: String },
+    #[serde(rename = "export_transferred_media")]
+    ExportTransferredMedia {
+        scope: String,
+        id: String,
+        path: String,
+    },
+    #[serde(rename = "get_backup_transferred_history")]
+    GetBackupTransferredHistory {
+        id: String,
+        account: String,
+        before: Option<String>,
+    },
+    #[serde(rename = "export_backup_transferred_media")]
+    ExportBackupTransferredMedia {
+        id: String,
+        #[serde(rename = "messageId")]
+        message_id: String,
+        path: String,
+    },
+    #[serde(rename = "prepare_direct_operation")]
+    PrepareDirectOperation {
+        scope: String,
+        id: String,
+        target: String,
+        #[serde(rename = "createdAt")]
+        created_at: i64,
+        action: liteseal_shared::direct_operation::Action,
+        text: Option<String>,
+    },
+    #[serde(rename = "direct_operation_step")]
+    DirectOperationStep {
+        scope: String,
+        id: String,
+        revision: u64,
+    },
+    #[serde(rename = "cancel_direct_operation")]
+    CancelDirectOperation {
+        scope: String,
+        id: String,
+        revision: u64,
+    },
+    #[serde(rename = "forget_direct_operation")]
+    ForgetDirectOperation {
+        scope: String,
+        id: String,
+        revision: u64,
+    },
+    #[serde(rename = "process_direct_operations")]
+    ProcessDirectOperations {},
     #[serde(rename = "get_direct_media_tasks")]
     GetDirectMediaTasks { scope: String },
     #[serde(rename = "set_direct_media_transfer")]
@@ -437,6 +552,8 @@ pub enum Command {
         before_id: Option<String>,
         #[serde(rename = "beforeGroup", default)]
         before_group: Option<i64>,
+        #[serde(rename = "beforeDirect", default)]
+        before_direct: Option<i64>,
     },
     #[serde(rename = "export_backup_attachment")]
     ExportBackupAttachment {
@@ -446,6 +563,8 @@ pub enum Command {
         path: String,
         #[serde(rename = "groupId", default)]
         group_id: Option<String>,
+        #[serde(rename = "directV3", default)]
+        direct_v3: bool,
     },
     #[serde(rename = "close_backup_archive")]
     CloseBackupArchive {},
@@ -1071,6 +1190,33 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
     let management = matches!(
         &command,
         Command::GetDirectChat {}
+            | Command::GetAudioTargets { .. }
+            | Command::BeginAudioCall { .. }
+            | Command::PrepareAudioSignal { .. }
+            | Command::PublishAudioSignal { .. }
+            | Command::OpenAudioSignal { .. }
+            | Command::RetireAudioCall { .. }
+            | Command::ProcessAudioCalls {}
+            | Command::GetDirectHistoryTransfers { .. }
+            | Command::ProcessDirectHistory { .. }
+            | Command::SetDirectHistoryPause { .. }
+            | Command::DirectHistoryRelayStep { .. }
+            | Command::CancelDirectHistoryRelay { .. }
+            | Command::ReceiveDirectHistoryRelay { .. }
+            | Command::PrepareDirectHistoryTransfer(_)
+            | Command::CancelDirectHistoryTransfer { .. }
+            | Command::ExportDirectHistoryTransfer { .. }
+            | Command::ImportDirectHistoryTransfer { .. }
+            | Command::GetTransferredHistory { .. }
+            | Command::HideTransferredMessage { .. }
+            | Command::ExportTransferredMedia { .. }
+            | Command::GetBackupTransferredHistory { .. }
+            | Command::ExportBackupTransferredMedia { .. }
+            | Command::PrepareDirectOperation { .. }
+            | Command::DirectOperationStep { .. }
+            | Command::CancelDirectOperation { .. }
+            | Command::ForgetDirectOperation { .. }
+            | Command::ProcessDirectOperations {}
             | Command::GetDirectMediaTasks { .. }
             | Command::SetDirectMediaTransfer { .. }
             | Command::GetDirectMediaInfo { .. }
@@ -1148,6 +1294,7 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
             | Command::SuspendDeviceControl {}
             | Command::ResumeDeviceControl {}
             | Command::StartBackupRestore { .. }
+            | Command::StartBackupExport { .. }
             | Command::GetBackupJob { .. }
             | Command::CancelBackupJob { .. }
             | Command::OpenBackupArchive { .. }
@@ -1222,7 +1369,138 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
         None
     };
     let result = match command {
+        Command::GetAudioTargets { scope, peer } => serde_json::to_value(commands::direct::audio::targets(state, scope, peer).await?),
+        Command::BeginAudioCall { scope, peer, device } => serde_json::to_value(commands::direct::audio::begin(state, scope, peer, device).await?),
+        Command::PrepareAudioSignal { scope, id, kind, sdp } => serde_json::to_value(commands::direct::audio::prepare(state, scope, id, kind, sdp)?),
+        Command::PublishAudioSignal { scope, handle } => serde_json::to_value(commands::direct::audio::publish(state, scope, handle).await?),
+        Command::OpenAudioSignal { scope, handle } => serde_json::to_value(commands::direct::audio::open(state, scope, handle)?),
+        Command::RetireAudioCall { scope, id } => serde_json::to_value(commands::direct::audio::retire(state, scope, id)?),
+        Command::ProcessAudioCalls {} => serde_json::to_value(commands::direct::audio::process(state).await?),
+        Command::ProcessDirectHistory { receive } => {
+            serde_json::to_value(commands::direct::history_transfer::process(state, receive).await?)
+        }
+        Command::SetDirectHistoryPause {
+            scope,
+            id,
+            revision,
+            receive,
+            paused,
+            abandon,
+        } => serde_json::to_value(commands::direct::history_transfer::pause(
+            state, scope, id, revision, receive, paused, abandon,
+        )?),
+        Command::DirectHistoryRelayStep {
+            scope,
+            id,
+            revision,
+        } => serde_json::to_value(
+            commands::direct::history_transfer::relay_step(state, scope, id, revision, false)
+                .await?,
+        ),
+        Command::CancelDirectHistoryRelay {
+            scope,
+            id,
+            revision,
+        } => serde_json::to_value(
+            commands::direct::history_transfer::relay_step(state, scope, id, revision, true)
+                .await?,
+        ),
+        Command::ReceiveDirectHistoryRelay { scope } => serde_json::to_value(
+            commands::direct::history_transfer::receive_relay(state, scope).await?,
+        ),
         Command::GetDirectChat {} => serde_json::to_value(commands::direct::snapshot(state)?),
+        Command::GetDirectHistoryTransfers { scope } => {
+            serde_json::to_value(commands::direct::history_transfer::snapshot(state, scope)?)
+        }
+        Command::PrepareDirectHistoryTransfer(request) => {
+            serde_json::to_value(commands::direct::history_transfer::prepare(state, request).await?)
+        }
+        Command::CancelDirectHistoryTransfer {
+            scope,
+            id,
+            revision,
+        } => serde_json::to_value(commands::direct::history_transfer::cancel(
+            state, scope, id, revision,
+        )?),
+        Command::ExportDirectHistoryTransfer {
+            scope,
+            id,
+            revision,
+            path,
+        } => serde_json::to_value(
+            commands::direct::history_transfer::write_transfer(state, scope, id, revision, path)
+                .await?,
+        ),
+        Command::ImportDirectHistoryTransfer { scope, path } => serde_json::to_value(
+            commands::direct::history_transfer::read_transfer(state, scope, path).await?,
+        ),
+        Command::GetTransferredHistory {
+            scope,
+            account,
+            before,
+        } => serde_json::to_value(commands::direct::history_transfer::history(
+            state, scope, account, before,
+        )?),
+        Command::HideTransferredMessage { scope, id } => {
+            serde_json::to_value(commands::direct::history_transfer::hide(state, scope, id)?)
+        }
+        Command::ExportTransferredMedia { scope, id, path } => serde_json::to_value(
+            commands::direct::history_transfer::write_media(state, scope, id, path)?,
+        ),
+        Command::GetBackupTransferredHistory {
+            id,
+            account,
+            before,
+        } => serde_json::to_value(commands::backup::transferred_history(
+            state, &id, &account, before,
+        )?),
+        Command::ExportBackupTransferredMedia {
+            id,
+            message_id,
+            path,
+        } => serde_json::to_value(commands::backup::export_transferred_media(
+            state,
+            &id,
+            &message_id,
+            &path,
+        )?),
+        Command::PrepareDirectOperation {
+            scope,
+            id,
+            target,
+            created_at,
+            action,
+            text,
+        } => serde_json::to_value(
+            commands::direct::operations::prepare(
+                state, scope, id, target, created_at, action, text,
+            )
+            .await?,
+        ),
+        Command::DirectOperationStep {
+            scope,
+            id,
+            revision,
+        } => serde_json::to_value(
+            commands::direct::operations::step(state, scope, id, revision).await?,
+        ),
+        Command::CancelDirectOperation {
+            scope,
+            id,
+            revision,
+        } => serde_json::to_value(commands::direct::operations::cancel(
+            state, scope, id, revision,
+        )?),
+        Command::ForgetDirectOperation {
+            scope,
+            id,
+            revision,
+        } => serde_json::to_value(commands::direct::operations::forget(
+            state, scope, id, revision,
+        )?),
+        Command::ProcessDirectOperations {} => {
+            serde_json::to_value(commands::direct::operations::process(state).await?)
+        }
         Command::GetDirectMediaTasks { scope } => {
             serde_json::to_value(commands::direct::media::tasks(state, scope)?)
         }
@@ -1659,6 +1937,7 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
             before_time,
             before_id,
             before_group,
+            before_direct,
         } => Ok(commands::backup::page(
             state,
             &id,
@@ -1667,13 +1946,19 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
             before_time,
             before_id.as_deref(),
             before_group,
+            before_direct,
         )?),
         Command::ExportBackupAttachment {
             id,
             message_id,
             path,
             group_id,
-        } => serde_json::to_value(if let Some(group) = group_id {
+            direct_v3,
+        } => serde_json::to_value(if direct_v3 && group_id.is_some() {
+            return Err("恢复附件范围无效".into());
+        } else if direct_v3 {
+            commands::backup::export_direct_attachment(state, &id, &message_id, &path)?
+        } else if let Some(group) = group_id {
             commands::backup::export_group_attachment(state, &id, &group, &message_id, &path)?
         } else {
             commands::backup::export_attachment(state, &id, &message_id, &path)?

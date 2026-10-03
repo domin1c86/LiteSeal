@@ -666,22 +666,58 @@ impl Batch {
             )
             .map_err(|_| DirectError::Proof)?,
         );
-        if plain.0.len() < 77 || plain.0[..8] != *b"LSEALD03" {
+        self.open_plain(&plain.0)
+    }
+    /// Authenticate the local author's cached body against an original signed
+    /// recipient ciphertext. The source device has no self-delivery payload.
+    pub fn open_authored(
+        &self,
+        sender: &DeviceState,
+        peer: &DeviceState,
+        keys: &KeyPair,
+    ) -> Result<Vec<u8>> {
+        self.verify(sender, peer)?;
+        let source = self.header.source()?;
+        if source.encryption_key != keys.public_key || source.signing_key != keys.ed25519_pk {
+            return Err(DirectError::Recipient);
+        }
+        let payload = self.payloads.first().ok_or(DirectError::Recipient)?;
+        let member = self
+            .header
+            .targets()
+            .into_iter()
+            .find(|(account, member)| {
+                *account == payload.account && member.device.device_id == payload.device
+            })
+            .ok_or(DirectError::Recipient)?
+            .1;
+        let plain = Plain(
+            crypto::decrypt(
+                &payload.ciphertext,
+                &member.device.encryption_key,
+                &keys.secret_key,
+            )
+            .map_err(|_| DirectError::Proof)?,
+        );
+        self.open_plain(&plain.0)
+    }
+    fn open_plain(&self, plain: &[u8]) -> Result<Vec<u8>> {
+        if plain.len() < 77 || plain[..8] != *b"LSEALD03" {
             return Err(DirectError::Proof);
         }
-        let context: [u8; 32] = plain.0[8..40].try_into().map_err(|_| DirectError::Proof)?;
-        let salt = Salt(plain.0[40..72].try_into().map_err(|_| DirectError::Proof)?);
-        let size = u32::from_be_bytes(plain.0[72..76].try_into().map_err(|_| DirectError::Proof)?)
-            as usize;
+        let context: [u8; 32] = plain[8..40].try_into().map_err(|_| DirectError::Proof)?;
+        let salt = Salt(plain[40..72].try_into().map_err(|_| DirectError::Proof)?);
+        let size =
+            u32::from_be_bytes(plain[72..76].try_into().map_err(|_| DirectError::Proof)?) as usize;
         if context != hash(&self.header.encode())
             || !(1..=MAX_BODY).contains(&size)
-            || plain.0.len() != 76 + size
-            || commitment(&context, &salt.0, &plain.0[76..]) != self.commitment
-            || self.header.kind == Kind::Text && std::str::from_utf8(&plain.0[76..]).is_err()
+            || plain.len() != 76 + size
+            || commitment(&context, &salt.0, &plain[76..]) != self.commitment
+            || self.header.kind == Kind::Text && std::str::from_utf8(&plain[76..]).is_err()
         {
             return Err(DirectError::Proof);
         }
-        Ok(plain.0[76..].to_vec())
+        Ok(plain[76..].to_vec())
     }
     pub fn to_wire(&self) -> Result<Vec<u8>> {
         self.shape()?;

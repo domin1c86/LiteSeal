@@ -116,6 +116,298 @@ impl Fixture {
         }
     }
 }
+#[cfg(windows)]
+#[test]
+fn selected_history_media_survives_missing_cache_update_backup_and_retraction() {
+    use crate::{
+        backup,
+        keystore::KeystoreData,
+        trusted_devices::{
+            messages::{archive::Reader, history_transfer::PrepareHistory},
+            Checkpoint,
+        },
+    };
+    use liteseal_shared::trusted_device::*;
+    use std::sync::atomic::AtomicBool;
+    let mut f = Fixture::new();
+    let id = uuid::Uuid::new_v4().to_string();
+    let payload = "selected authenticated media 中文 🦭"
+        .as_bytes()
+        .repeat(40_000);
+    let bytes = payload.as_slice();
+    f.stage(&id, bytes);
+    f.upload(&id);
+    f.store.prepare_media(&id, 100, &f.keys).unwrap();
+    let original = f.store.original(&id, &f.keys).unwrap();
+    f.store.begin_publish(&id, 0, &f.keys).unwrap();
+    f.store
+        .confirm_accepted(
+            &super::super::Acceptance::from_authenticated_response(
+                &original,
+                &id,
+                original.digest().unwrap(),
+                200,
+            )
+            .unwrap(),
+            &f.keys,
+        )
+        .unwrap();
+    let initial = f
+        .store
+        .trust()
+        .load(
+            &Anchor {
+                origin: f.owner.origin.clone(),
+                account: f.owner.account.clone(),
+                root: f.owner.device.clone(),
+            },
+            None,
+        )
+        .unwrap();
+    let second = crypto::generate_keypair().unwrap();
+    let device = "joined-target";
+    let intent = make_intent(
+        initial.anchor(),
+        "media-join".into(),
+        device.into(),
+        crypto::random_challenge().unwrap(),
+        1000,
+        &second,
+    )
+    .unwrap();
+    let challenge = make_challenge(&initial, &intent, 1001, &f.keys).unwrap();
+    let proof = answer_challenge(&initial, &intent, &challenge, 1002, &second).unwrap();
+    let grant = make_event(
+        &initial,
+        "media-grant".into(),
+        DeviceAction::Grant {
+            intent: Box::new(intent),
+            challenge: Box::new(challenge),
+            proof,
+        },
+        1003,
+        &f.keys,
+    )
+    .unwrap();
+    let path = f._work.0.join("joined-media.db");
+    let target_native = Arc::new(Memory::default());
+    let mut target = Store::open(
+        &path,
+        Owner::new(&f.owner.origin, &f.owner.account, device, &second).unwrap(),
+        Witness::new(&path, target_native.clone()),
+    )
+    .unwrap();
+    target.trust().pin(initial.anchor()).unwrap();
+    target.trust().pin(f.peer.anchor()).unwrap();
+    for store in [&mut f.store, &mut target] {
+        store
+            .trust()
+            .import_verified(
+                initial.anchor(),
+                &Checkpoint::from_state(&initial),
+                std::slice::from_ref(&grant),
+            )
+            .unwrap();
+    }
+    let selection = vec![id.clone()];
+    for include_media in [true, false] {
+        let transfer = uuid::Uuid::new_v4().to_string();
+        let view = f
+            .store
+            .prepare_history(
+                PrepareHistory {
+                    id: &transfer,
+                    peer: &f.peer.anchor().account,
+                    target: device,
+                    selection: &selection,
+                    created_at: 3000 + i64::from(!include_media),
+                    include_media,
+                },
+                &f.keys,
+            )
+            .unwrap();
+        let wire = f
+            .store
+            .history_transfer_wire(&transfer, view.revision, 3002, &f.keys)
+            .unwrap();
+        if include_media {
+            let envelope = liteseal_shared::history_transfer::Envelope::from_wire(&wire).unwrap();
+            let offer = envelope.offer();
+            assert!(offer.size > liteseal_shared::history_transfer::CHUNK);
+            assert_eq!(target.history_receive_next(&offer, &second).unwrap(), 0);
+            target
+                .history_receive_chunk(&offer, 0, envelope.ciphertext_chunk(0).unwrap(), &second)
+                .unwrap();
+            drop(target);
+            target = Store::open(
+                &path,
+                Owner::new(&f.owner.origin, &f.owner.account, device, &second).unwrap(),
+                Witness::new(&path, target_native.clone()),
+            )
+            .unwrap();
+            assert_eq!(target.history_receive_next(&offer, &second).unwrap(), 1);
+            for part in 1..offer
+                .size
+                .div_ceil(liteseal_shared::history_transfer::CHUNK)
+            {
+                target
+                    .history_receive_chunk(
+                        &offer,
+                        part,
+                        envelope.ciphertext_chunk(part).unwrap(),
+                        &second,
+                    )
+                    .unwrap();
+            }
+            let conn = Connection::open(&path).unwrap();
+            conn.execute("UPDATE direct_v3_history_receive_chunks SET data=zeroblob(length(data)) WHERE part=0",[]).unwrap();
+            drop(conn);
+            assert!(target.history_receive_complete(&offer, &second).is_err());
+            assert!(target
+                .transferred_history(None, &second)
+                .unwrap()
+                .is_empty());
+            target
+                .clear_history_receive(&offer.header.id, &second)
+                .unwrap();
+            for part in 0..offer
+                .size
+                .div_ceil(liteseal_shared::history_transfer::CHUNK)
+            {
+                target
+                    .history_receive_chunk(
+                        &offer,
+                        part,
+                        envelope.ciphertext_chunk(part).unwrap(),
+                        &second,
+                    )
+                    .unwrap();
+            }
+            target
+                .finish_history_receive(&offer, 3002, &second)
+                .unwrap();
+        } else {
+            target.import_history(&wire, 3002, &second).unwrap();
+        }
+        assert_eq!(
+            target.transferred_media(&id, &second).unwrap().as_slice(),
+            bytes
+        );
+        assert!(
+            target.transferred_history(None, &second).unwrap()[0]
+                .media
+                .as_ref()
+                .unwrap()
+                .cached
+        );
+    }
+    let identity = KeystoreData {
+        user_id: f.owner.account.clone(),
+        device_id: device.into(),
+        server_url: f.owner.origin.clone(),
+        token: "excluded-synthetic-token".into(),
+        refresh_token: String::new(),
+        public_key: second.public_key.to_vec(),
+        secret_key: second.secret_key.to_vec(),
+        ed25519_pk: second.ed25519_pk.to_vec(),
+        ed25519_sk: second.ed25519_sk.to_vec(),
+    };
+    let output = f._work.0.join("transferred-media.lseal");
+    let summary = backup::export_direct_guarded(
+        &path,
+        identity,
+        &mut target,
+        b"isolated transferred media backup",
+        false,
+        &output,
+        &AtomicBool::new(false),
+        &Mutex::new(()),
+        |_, _| {},
+    )
+    .unwrap();
+    assert_eq!(
+        (
+            summary.messages,
+            summary.attachments,
+            summary.missing_attachments
+        ),
+        (1, 1, 0)
+    );
+    let restored = backup::restore(
+        &output,
+        b"isolated transferred media backup",
+        &f._work.0,
+        &AtomicBool::new(false),
+        |_, _| {},
+    )
+    .unwrap();
+    let mut reader =
+        Reader::open(&restored.directory.0.join("history.db"), &restored.identity).unwrap();
+    assert_eq!(
+        reader.transferred_media(&id, &second).unwrap().as_slice(),
+        bytes
+    );
+    let own = f.store.trust().load(initial.anchor(), None).unwrap();
+    let operation = liteseal_shared::direct_operation::Operation::make(
+        original.clone(),
+        (&initial, &f.peer),
+        (&own, &f.peer),
+        &f.keys,
+        liteseal_shared::direct_operation::Header {
+            version: 1,
+            id: uuid::Uuid::new_v4().to_string(),
+            original: original.digest().unwrap(),
+            action: liteseal_shared::direct_operation::Action::Retract,
+            base: 0,
+            revision: 1,
+            created_at: 3100,
+        },
+        None,
+    )
+    .unwrap();
+    f.store
+        .import_operations(
+            0,
+            &liteseal_shared::direct_operation::Page {
+                events: vec![liteseal_shared::direct_operation::Event {
+                    order: 1,
+                    accepted_at: 3101,
+                    operation,
+                }],
+                through: 1,
+                has_more: false,
+            },
+            &f.keys,
+        )
+        .unwrap();
+    let transfer = uuid::Uuid::new_v4().to_string();
+    let view = f
+        .store
+        .prepare_history(
+            PrepareHistory {
+                id: &transfer,
+                peer: &f.peer.anchor().account,
+                target: device,
+                selection: &selection,
+                created_at: 3200,
+                include_media: true,
+            },
+            &f.keys,
+        )
+        .unwrap();
+    target
+        .import_history(
+            &f.store
+                .history_transfer_wire(&transfer, view.revision, 3201, &f.keys)
+                .unwrap(),
+            3201,
+            &second,
+        )
+        .unwrap();
+    assert!(target.transferred_history(None, &second).unwrap()[0].retracted);
+    assert!(target.transferred_media(&id, &second).is_err());
+}
+
 #[test]
 fn staged_ciphertext_reopens_and_original_preparation_is_immutable() {
     let mut f = Fixture::new();
@@ -212,6 +504,190 @@ fn staged_ciphertext_reopens_and_original_preparation_is_immutable() {
         f.store.clear_media(&id, &f.keys).unwrap(),
         bytes.len() as u64 + 40
     );
+}
+
+#[cfg(windows)]
+#[test]
+fn portable_v3_media_includes_only_confirmed_complete_cache_and_blocks_hidden_or_retracted_reading()
+{
+    use crate::{backup, keystore::KeystoreData, trusted_devices::messages::archive::Reader};
+    use std::sync::atomic::AtomicBool;
+    let mut f = Fixture::new();
+    let id = uuid::Uuid::new_v4().to_string();
+    let bytes = "portable authenticated media 中文 🦭".as_bytes();
+    f.stage(&id, bytes);
+    f.upload(&id);
+    f.store.prepare_media(&id, 100, &f.keys).unwrap();
+    let original = f.store.original(&id, &f.keys).unwrap();
+    let accepted = super::super::Acceptance::from_authenticated_response(
+        &original,
+        &id,
+        original.digest().unwrap(),
+        200,
+    )
+    .unwrap();
+    f.store.begin_publish(&id, 0, &f.keys).unwrap();
+    f.store.confirm_accepted(&accepted, &f.keys).unwrap();
+    let staged = uuid::Uuid::new_v4().to_string();
+    f.stage(&staged, b"staged excluded");
+    let identity = KeystoreData {
+        user_id: f.owner.account.clone(),
+        device_id: f.owner.device.device_id.clone(),
+        server_url: f.owner.origin.clone(),
+        token: "synthetic-token".into(),
+        refresh_token: String::new(),
+        public_key: f.keys.public_key.to_vec(),
+        secret_key: f.keys.secret_key.to_vec(),
+        ed25519_pk: f.keys.ed25519_pk.to_vec(),
+        ed25519_sk: f.keys.ed25519_sk.to_vec(),
+    };
+    for include in [true, false] {
+        let output = f._work.0.join(format!("media-{include}.lseal"));
+        let summary = backup::export_direct_guarded(
+            &f.path,
+            identity.clone(),
+            &mut f.store,
+            b"independent media archive password",
+            include,
+            &output,
+            &AtomicBool::new(false),
+            &Mutex::new(()),
+            |_, _| {},
+        )
+        .unwrap();
+        assert_eq!(summary.messages, 1);
+        assert_eq!(summary.attachments, u64::from(include));
+        assert_eq!(summary.missing_attachments, u64::from(!include));
+        let restored = backup::restore(
+            &output,
+            b"independent media archive password",
+            &f._work.0,
+            &AtomicBool::new(false),
+            |_, _| {},
+        )
+        .unwrap();
+        let path = restored.directory.0.join("history.db");
+        let mut reader = Reader::open(&path, &restored.identity).unwrap();
+        if include {
+            assert_eq!(reader.media(&id, &f.keys).unwrap().1, bytes);
+        } else {
+            assert!(reader.media(&id, &f.keys).is_err());
+        }
+        assert!(reader.media(&staged, &f.keys).is_err());
+        drop(reader);
+        let conn = Connection::open(&path).unwrap();
+        conn.execute(
+            "INSERT INTO backup_direct_hidden(scope,id) VALUES(?1,?2)",
+            params![f.owner.scope(), id],
+        )
+        .unwrap();
+        let mut reader = Reader::open(&path, &restored.identity).unwrap();
+        assert!(reader.media(&id, &f.keys).is_err());
+        drop(reader);
+        conn.execute("DELETE FROM backup_direct_hidden", [])
+            .unwrap();
+        if include {
+            conn.execute(
+                "UPDATE backup_direct_media SET ciphertext=zeroblob(length(ciphertext))",
+                [],
+            )
+            .unwrap();
+            let mut reader = Reader::open(&path, &restored.identity).unwrap();
+            assert!(reader.media(&id, &f.keys).is_err());
+        }
+    }
+    let own = crate::trusted_devices::messages::current(
+        &Connection::open(&f.path).unwrap(),
+        &f.owner.origin,
+        &f.owner.account,
+    )
+    .unwrap();
+    let operation = liteseal_shared::direct_operation::Operation::make(
+        original.clone(),
+        (&own, &f.peer),
+        (&own, &f.peer),
+        &f.keys,
+        liteseal_shared::direct_operation::Header {
+            version: 1,
+            id: uuid::Uuid::new_v4().to_string(),
+            original: original.digest().unwrap(),
+            action: liteseal_shared::direct_operation::Action::Retract,
+            base: 0,
+            revision: 1,
+            created_at: 300,
+        },
+        None,
+    )
+    .unwrap();
+    f.store
+        .import_operations(
+            0,
+            &liteseal_shared::direct_operation::Page {
+                events: vec![liteseal_shared::direct_operation::Event {
+                    order: 1,
+                    accepted_at: 300,
+                    operation,
+                }],
+                through: 1,
+                has_more: false,
+            },
+            &f.keys,
+        )
+        .unwrap();
+    let output = f._work.0.join("retracted-media.lseal");
+    backup::export_direct_guarded(
+        &f.path,
+        identity.clone(),
+        &mut f.store,
+        b"independent media archive password",
+        true,
+        &output,
+        &AtomicBool::new(false),
+        &Mutex::new(()),
+        |_, _| {},
+    )
+    .unwrap();
+    let restored = backup::restore(
+        &output,
+        b"independent media archive password",
+        &f._work.0,
+        &AtomicBool::new(false),
+        |_, _| {},
+    )
+    .unwrap();
+    let mut reader =
+        Reader::open(&restored.directory.0.join("history.db"), &restored.identity).unwrap();
+    assert_eq!(restored.summary.attachments, 1);
+    assert!(reader.has_media(&id).unwrap());
+    assert!(reader.media(&id, &f.keys).is_err());
+    assert!(
+        reader
+            .history(&f.peer.anchor().account, None, 50, &f.keys)
+            .unwrap()[0]
+            .retracted
+    );
+    let conn = Connection::open(&f.path).unwrap();
+    conn.execute(
+        "UPDATE direct_v3_media_chunks SET ciphertext=zeroblob(length(ciphertext)) WHERE id=?1",
+        [&id],
+    )
+    .unwrap();
+    drop(conn);
+    let output = f._work.0.join("missing-corrupt.lseal");
+    let summary = backup::export_direct_guarded(
+        &f.path,
+        identity,
+        &mut f.store,
+        b"independent media archive password",
+        true,
+        &output,
+        &AtomicBool::new(false),
+        &Mutex::new(()),
+        |_, _| {},
+    )
+    .unwrap();
+    assert_eq!(summary.attachments, 0);
+    assert_eq!(summary.missing_attachments, 1);
 }
 #[test]
 fn cancellation_fences_late_upload_and_clear_does_not_reuse_original_id() {

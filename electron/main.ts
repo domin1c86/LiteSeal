@@ -5,9 +5,11 @@ import fs from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { DesktopBridge } from "./bridge";
 import { commandNames } from "./contracts";
+import type {CommandMap} from "./contracts";
 import { deviceCommands, DeviceControlGate } from "./device-control";
 import {DirectMedia,directMediaCommands} from "./direct-media";
 import {MediaWorkspace} from "./media-workspace";
+import {historyFileCommands,historyFileCommand} from "./history-files";
 
 protocol.registerSchemesAsPrivileged([{ scheme: "liteseal", privileges: { standard: true, secure: true, supportFetchAPI: true } },{scheme:"liteseal-media",privileges:{standard:true,secure:true,supportFetchAPI:true,stream:true}}]);
 const devUrl = "http://127.0.0.1:1420";
@@ -21,7 +23,7 @@ let mainWindow: BrowserWindow | undefined;
 let archiveWindow: BrowserWindow | undefined;
 let archiveHandle: string | null = null;
 let backupGeneration = 0;
-const archiveCommands = new Set(["get_backup_archive_info", "get_backup_conversations", "get_backup_history", "export_backup_attachment", "close_backup_archive", "app_lock_state"]);
+const archiveCommands = new Set(["get_backup_archive_info", "get_backup_conversations", "get_backup_history", "get_backup_transferred_history", "export_backup_transferred_media", "export_backup_attachment", "close_backup_archive", "app_lock_state"]);
 function invalidateBackups() {
   backupGeneration++;
   archiveHandle = null;
@@ -119,6 +121,22 @@ else {
       }).catch(()=>{}).finally(()=>{refreshBusy=false;});
     },30000).unref();
     let directBusy=false;
+    let audioBusy = false;
+    setInterval(() => {
+      if (audioBusy || locked || screenLocked || systemSuspended || quitting || exitRequested) return;
+      let epoch: number; try { epoch = deviceControl.capture(); } catch { return; }
+      const generation = lockGeneration; audioBusy = true;
+      void bridge.call("process_audio_calls", {}).then(report => {
+        deviceControl.check(epoch); if (generation !== lockGeneration) return;
+        mainWindow?.webContents.send("liteseal:audio-status", report);
+      }).catch(() => {
+        try {
+          deviceControl.check(epoch);
+          if (generation === lockGeneration) mainWindow?.webContents.send("liteseal:audio-status",
+            {scope: null, call: null, handle: null, closed: null, unavailable: true});
+        } catch { /* A suspended context already releases local audio. */ }
+      }).finally(() => { audioBusy = false; });
+    }, 2000).unref();
     setInterval(()=>{
       if(directBusy||locked||screenLocked||systemSuspended||quitting||exitRequested)return;
       let epoch:number;try{epoch=deviceControl.capture();}catch{return;}
@@ -141,6 +159,33 @@ else {
         if(report.changed)mainWindow?.webContents.send("liteseal:direct-changed");
       }).catch(()=>{}).finally(()=>{directMediaBusy=false;});
     },2000).unref();
+    let directOperationsBusy=false;
+    setInterval(()=>{
+      if(directOperationsBusy||locked||screenLocked||systemSuspended||quitting||exitRequested)return;
+      let epoch:number;try{epoch=deviceControl.capture();}catch{return;}
+      const generation=lockGeneration;directOperationsBusy=true;
+      void bridge.call("process_direct_operations",{}).then(report=>{
+        deviceControl.check(epoch);if(generation!==lockGeneration)return;
+        mainWindow?.webContents.send("liteseal:direct-status",report);
+        if((report.operation_poll?.received??0)>0||report.operation?.condition==="accepted"){
+          directMedia?.invalidate();notifications.retireDirectOperations();
+        }
+        if(report.changed)mainWindow?.webContents.send("liteseal:direct-changed");
+      }).catch(()=>{}).finally(()=>{directOperationsBusy=false;});
+    },2000).unref();
+    for(const receive of [false,true]) {
+      let historyBusy=false;
+      setInterval(()=>{
+        if(historyBusy||locked||screenLocked||systemSuspended||quitting||exitRequested)return;
+        let epoch:number;try{epoch=deviceControl.capture();}catch{return;}
+        const generation=lockGeneration;historyBusy=true;
+        void bridge.call("process_direct_history",{receive}).then(report=>{
+          deviceControl.check(epoch);if(generation!==lockGeneration)return;
+          mainWindow?.webContents.send("liteseal:direct-status",report);
+          if(report.changed)mainWindow?.webContents.send("liteseal:direct-changed");
+        }).catch(()=>{}).finally(()=>{historyBusy=false;});
+      },2000).unref();
+    }
     try {
       const configuration = JSON.parse(await fs.readFile(path.join(app.getPath("userData"), "app-lock.json"), "utf8"));
       if (typeof configuration.enabled !== "boolean") throw new Error("应用锁配置损坏");
@@ -218,10 +263,21 @@ else {
           if (locked) throw new Error("应用已锁定，请先验证 Windows 身份");
           const generation = lockGeneration;
           const deviceEpoch = deviceCommands.has(name) ? deviceControl.capture() : null;
+          if(historyFileCommands.has(name)){
+            const archiveEpoch=backupGeneration;
+            const check=()=>{if(locked||generation!==lockGeneration)throw new Error("应用已锁定，历史文件结果失效");if(deviceEpoch!==null)deviceControl.check(deviceEpoch);if(readingArchive&&archiveEpoch!==backupGeneration)throw new Error("离线档案已关闭或变化");};
+            const result=await historyFileCommand(name,args,bridge,{
+              open:async()=>{const choice=await dialog.showOpenDialog(senderWindow,{title:"选择仅本设备可解密的授权历史文件",properties:["openFile"],filters:[{name:"LiteSeal 授权历史",extensions:["lhistory"]}]});return choice.canceled?null:choice.filePaths[0]??null;},
+              save:async history=>{const choice=await dialog.showSaveDialog(senderWindow,{title:history?"保存选定历史授权（10 分钟内导入）":"保存认证后的迁移附件",defaultPath:history?"LiteSeal-selected-history.lhistory":"LiteSeal-history-attachment",...(history?{filters:[{name:"LiteSeal 授权历史",extensions:["lhistory"]}]}:{})});return choice.canceled?null:choice.filePath??null;},
+            },check);
+            if(name==="import_direct_history_transfer"&&result){directMedia?.invalidate();notifications.retireDirectOperations();mainWindow?.webContents.send("liteseal:direct-changed");}
+            return{ok:true,result};
+          }
           if(directMediaCommands.has(name)){const result=await directMedia!.run(name,args);if(deviceEpoch!==null)deviceControl.check(deviceEpoch);if(locked||generation!==lockGeneration)throw new Error("媒体结果已失效");return{ok:true,result};}
           if(["select_normal_profile","clear_normal_profile","sign_out","clear_keypair","logout_all_sessions","change_password","save_root_session"].includes(name))directMedia?.invalidate();
           if(name==="clear_direct_media_cache")directMedia?.invalidate();
-          if(name==="hide_direct_message"||name==="clear_direct_media"||name==="cancel_direct_media")directMedia?.invalidate((args as {id:string}).id);
+          if(name==="hide_direct_message"||name==="hide_transferred_message"||name==="clear_direct_media"||name==="cancel_direct_media")directMedia?.invalidate((args as {id:string}).id);
+          if(name==="direct_operation_step")directMedia?.invalidate();
           if(name==="stage_group_recorded_audio"){
             const input=args as {groupId:string;encoded:string;durationMs:number};if(Object.keys(args).some(k=>!["groupId","encoded","durationMs"].includes(k))||typeof input.groupId!=="string"||input.groupId.length>128||typeof input.encoded!=="string"||input.encoded.length>15*1024*1024||!Number.isInteger(input.durationMs)||input.durationMs<1||input.durationMs>60000)throw new Error("群语音长度、大小或参数无效");const bytes=Buffer.from(input.encoded,"base64");if(bytes.length>11*1024*1024||!bytes.subarray(0,4).equals(Buffer.from([0x1a,0x45,0xdf,0xa3])))throw new Error("群语音格式无效");const result=await bridge.call(name,input);if(locked||generation!==lockGeneration)throw new Error("应用已锁定");return{ok:true,result};
           }
@@ -287,14 +343,14 @@ else {
           }
           if (name === "close_backup_archive") { invalidateBackups(); return { ok: true, result: null }; }
           if (name === "export_backup_attachment") {
-            const input = args as { id: string; messageId: string; groupId?:string; preview?: boolean };
-            if (typeof input.id !== "string" || typeof input.messageId !== "string" || Object.keys(args).some(key => !["id", "messageId", "groupId", "preview"].includes(key)) || input.preview !== undefined && typeof input.preview !== "boolean" || readingArchive && input.id !== archiveHandle) throw new Error("恢复附件参数无效");
+            const input = args as { id: string; messageId: string; groupId?:string; directV3?:boolean; preview?: boolean };
+            if (typeof input.id !== "string" || typeof input.messageId !== "string" || Object.keys(args).some(key => !["id", "messageId", "groupId", "directV3", "preview"].includes(key)) || input.directV3 !== undefined && typeof input.directV3 !== "boolean" || input.directV3 && input.groupId !== undefined || input.preview !== undefined && typeof input.preview !== "boolean" || readingArchive && input.id !== archiveHandle) throw new Error("恢复附件参数无效");
             let destination: string | undefined;
             if (!input.preview) { const choice = await dialog.showSaveDialog(senderWindow, { title: "从离线档案保存附件（新文件）", defaultPath: "attachment" }); if (choice.canceled || !choice.filePath) return { ok: true, result: null }; destination = choice.filePath; }
             const directory = await fs.mkdtemp(path.join(destination ? path.dirname(destination) : app.getPath("temp"), ".liteseal-archive-media-"));
             try {
               const temporary = path.join(directory, "verified");
-              const mime = await bridge.call(name, { id: input.id, messageId: input.messageId, groupId:input.groupId, path: temporary } as never);
+              const mime = await bridge.call(name, { id: input.id, messageId: input.messageId, groupId:input.groupId, directV3:input.directV3, path: temporary } as never);
               if (locked || generation !== lockGeneration || backupEpoch !== backupGeneration) throw new Error("应用锁定或恢复档案已关闭");
               await bridge.call("get_backup_archive_info", { id: input.id });
               if (locked || generation !== lockGeneration || backupEpoch !== backupGeneration) throw new Error("应用锁定或恢复档案已关闭");
@@ -482,7 +538,11 @@ else {
           if (["save_session", "sign_out", "clear_keypair", "logout_all_sessions", "change_password"].includes(name)) deviceControl.invalidate();
           const result = await bridge.call(name, args as never);
           if (locked || generation !== lockGeneration) throw new Error("应用已锁定");
+          if(name==="direct_operation_step"&&(result as CommandMap["direct_operation_step"]["result"]).condition==="accepted"){
+            notifications.retireDirectOperations();mainWindow?.webContents.send("liteseal:direct-changed");
+          }
           if (deviceEpoch !== null) deviceControl.check(deviceEpoch);
+          if(name==="receive_direct_history_relay"&&(result as CommandMap["receive_direct_history_relay"]["result"]).imported){directMedia?.invalidate();notifications.retireDirectOperations();mainWindow?.webContents.send("liteseal:direct-changed");}
           if (name === "save_root_session") { notifications.context(null, null); deviceControl.invalidate(); mainWindow?.webContents.send("liteseal:normal-profile-changed"); }
           if(name==="select_normal_profile"||name==="clear_normal_profile"){
             lockGeneration++;invalidateBackups();notifications.context(null,null);deviceControl.invalidate();

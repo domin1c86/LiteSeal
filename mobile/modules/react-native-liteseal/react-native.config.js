@@ -5,10 +5,7 @@ module.exports = {
   dependency: {
     platforms: {
       android: {
-        cmakeListsPath: 'generated/jni/CMakeLists.txt',
-        cxxModuleCMakeListsModuleName: 'react-native-liteseal',
-        cxxModuleCMakeListsPath: 'CMakeLists.txt',
-        cxxModuleHeaderName: 'LitesealImpl',
+        cmakeListsPath: 'build/generated/source/codegen/jni/CMakeLists.txt',
       },
     },
   },

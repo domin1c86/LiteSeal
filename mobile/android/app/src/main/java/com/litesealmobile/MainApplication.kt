@@ -14,6 +14,9 @@ class MainApplication : Application(), ReactApplication {
       context = applicationContext,
       packageList =
         PackageList(this).packages.apply {
+          // Legacy credentials are migrated by Kotlin/Rust only. The keychain
+          // module must never offer old identity JSON to JavaScript again.
+          removeAll { it is com.oblador.keychain.KeychainPackage }
           add(LitesealPathsPackage())
         },
     )
@@ -21,6 +24,8 @@ class MainApplication : Application(), ReactApplication {
 
   override fun onCreate() {
     super.onCreate()
+    com.liteseal.NativeSecretStorage.initializeApplication(this)
     loadReactNative(this)
+    com.liteseal.NativeMobileSync.initialize(this)
   }
 }

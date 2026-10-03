@@ -364,9 +364,12 @@ fn rebuild(
     include_attachments: bool,
     cancel: &AtomicBool,
     restoring: bool,
+    version: u32,
 ) -> Result<Summary> {
     validate_identity(identity)?;
-    crate::trusted_devices::messages::require_backup_support(source, identity)?;
+    if version != 3 {
+        crate::trusted_devices::messages::require_backup_support(source, identity)?;
+    }
     let scope = clean_schema(path, identity)?;
     let target = Connection::open(path).map_err(db)?;
     target
@@ -573,6 +576,20 @@ fn rebuild(
     }
     summary.attachments += included;
     summary.missing_attachments += count.saturating_sub(included);
+    if version == 3 {
+        let direct = crate::trusted_devices::messages::archive::rebuild(
+            source,
+            &target,
+            identity,
+            include_attachments,
+            cancel,
+            restoring,
+        )?;
+        summary.messages += direct.messages;
+        summary.attachments += direct.attachments;
+        summary.missing_attachments += direct.missing_attachments;
+        summary.skipped_attachments += direct.skipped_attachments;
+    }
     Ok(summary)
 }
 
@@ -607,6 +624,54 @@ pub fn export_guarded(
     commit_gate: &std::sync::Mutex<()>,
     progress: impl Fn(u64, u64),
 ) -> Result<Summary> {
+    export_inner(
+        db_path,
+        identity,
+        None,
+        password,
+        include_attachments,
+        destination,
+        cancel,
+        commit_gate,
+        progress,
+    )
+}
+#[allow(clippy::too_many_arguments)]
+pub fn export_direct_guarded(
+    db_path: &Path,
+    identity: KeystoreData,
+    store: &mut crate::trusted_devices::messages::Store,
+    password: &[u8],
+    include_attachments: bool,
+    destination: &Path,
+    cancel: &AtomicBool,
+    commit_gate: &std::sync::Mutex<()>,
+    progress: impl Fn(u64, u64),
+) -> Result<Summary> {
+    export_inner(
+        db_path,
+        identity,
+        Some(store),
+        password,
+        include_attachments,
+        destination,
+        cancel,
+        commit_gate,
+        progress,
+    )
+}
+#[allow(clippy::too_many_arguments)]
+fn export_inner(
+    db_path: &Path,
+    identity: KeystoreData,
+    direct: Option<&mut crate::trusted_devices::messages::Store>,
+    password: &[u8],
+    include_attachments: bool,
+    destination: &Path,
+    cancel: &AtomicBool,
+    commit_gate: &std::sync::Mutex<()>,
+    progress: impl Fn(u64, u64),
+) -> Result<Summary> {
     let mut identity = Zeroizing::new(identity);
     identity.token.clear();
     identity.refresh_token.clear();
@@ -619,7 +684,10 @@ pub fn export_guarded(
     let source =
         Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(db)?;
     let mut snapshot = Connection::open(work.0.join("snapshot.db")).map_err(db)?;
-    {
+    let version = if let Some(store) = direct {
+        store.backup_snapshot(&mut snapshot, &identity, cancel)?;
+        3
+    } else {
         let backup = rusqlite::backup::Backup::new(&source, &mut snapshot).map_err(db)?;
         loop {
             check_cancel(cancel)?;
@@ -629,8 +697,12 @@ pub fn export_guarded(
                 _ => return Err("数据库忙，请稍后重试备份".into()),
             }
         }
-    }
+        2
+    };
     let clean = work.0.join("history.db");
+    if version == 3 {
+        clean_schema(&work.0.join("snapshot.db"), &identity)?;
+    }
     let summary = rebuild(
         &snapshot,
         &clean,
@@ -638,6 +710,7 @@ pub fn export_guarded(
         include_attachments,
         cancel,
         false,
+        version,
     )?;
     drop(snapshot);
     let total = fs::metadata(&clean).map_err(io)?.len();
@@ -645,7 +718,7 @@ pub fn export_guarded(
         return Err("备份数据库大小不支持（上限 8 GiB）".into());
     }
     let metadata = Zeroizing::new(Manifest {
-        version: 2,
+        version,
         identity: (*identity).clone(),
         summary: summary.clone(),
         database_bytes: total,
@@ -691,6 +764,7 @@ pub struct Restored {
     pub directory: WorkDirectory,
     pub identity: Zeroizing<KeystoreData>,
     pub summary: Summary,
+    pub version: u32,
 }
 pub fn restore(
     input: &Path,
@@ -706,7 +780,7 @@ pub fn restore(
         Zeroizing::new(serde_json::from_slice(&header).map_err(|_| "备份清单无效")?);
     let identity = Zeroizing::new(manifest.identity.clone());
     validate_identity(&identity)?;
-    if !matches!(manifest.version, 1 | 2)
+    if !matches!(manifest.version, 1..=3)
         || manifest.database_bytes > 8 * 1024 * 1024 * 1024
         || manifest.database_bytes < 512
     {
@@ -758,6 +832,7 @@ pub fn restore(
         true,
         cancel,
         true,
+        manifest.version,
     )?;
     if summary.messages != manifest.summary.messages
         || summary.groups != manifest.summary.groups
@@ -773,5 +848,6 @@ pub fn restore(
         directory,
         identity,
         summary: manifest.summary.clone(),
+        version: manifest.version,
     })
 }

@@ -17,6 +17,7 @@ const api = Object.fromEntries(commandNames.map(name => [name, async (args: obje
   return response.result;
 }])) as DesktopApi;
 contextBridge.exposeInMainWorld("desktop", Object.freeze(api));
+ipcRenderer.on("liteseal:audio-status", (_event, report) => window.dispatchEvent(new CustomEvent("liteseal-audio-status", {detail: report})));
 // A fixed event only; no raw ipcRenderer or arbitrary channel subscription.
 ipcRenderer.on("liteseal:locked", () => window.dispatchEvent(new Event("liteseal-app-locked")));
 ipcRenderer.on("liteseal:device-paused", () => window.dispatchEvent(new Event("liteseal-device-paused")));

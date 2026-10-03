@@ -4,7 +4,10 @@ use crate::AppState;
 use liteseal_core::trusted_devices::{
     api::DeviceControlApi,
     messages::{
-        coordinator::{Condition, MediaProgress, MessageCoordinator, Poll, Preparation, Progress},
+        coordinator::{
+            Condition, MediaProgress, MessageCoordinator, OperationPoll, OperationPreparation,
+            OperationProgress, Poll, Preparation, Progress,
+        },
         Owner, RecordView, TaskView,
     },
     profiles::active,
@@ -18,8 +21,14 @@ use liteseal_shared::{
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{collections::HashMap, sync::Arc, time::Duration};
+#[path = "direct_history_transfer.rs"]
+pub mod history_transfer;
 #[path = "direct_media.rs"]
 pub mod media;
+#[path = "direct_operations.rs"]
+pub mod operations;
+#[path = "direct_audio.rs"]
+pub mod audio;
 #[derive(Default)]
 pub(crate) struct Runtime {
     cache: Option<Cached>,
@@ -64,6 +73,7 @@ pub struct Snapshot {
     pub peers: Vec<Peer>,
     pub conversations: Vec<liteseal_core::trusted_devices::messages::conversations::View>,
     pub tasks: Vec<TaskView>,
+    pub operations: Vec<liteseal_core::trusted_devices::messages::operations::OperationTaskView>,
     pub can_network: bool,
 }
 #[derive(Serialize)]
@@ -80,6 +90,8 @@ pub struct History {
 }
 #[derive(Serialize, Default)]
 pub struct Report {
+    pub operation: Option<OperationProgress>,
+    pub operation_poll: Option<OperationPoll>,
     pub media: Option<MediaProgress>,
     pub errors: Vec<String>,
     pub changed: bool,
@@ -239,6 +251,10 @@ pub fn snapshot(state: &AppState) -> Result<Snapshot, String> {
             .conversations(&ctx.keys)
             .map_err(|e| e.to_string())?,
         tasks: ctx.actor.tasks(&ctx.keys).map_err(|e| e.to_string())?,
+        operations: ctx
+            .actor
+            .operation_tasks(&ctx.keys)
+            .map_err(|e| e.to_string())?,
         can_network: !ctx.selected.identity.token.is_empty(),
     };
     current(state, &ctx)?;
@@ -483,6 +499,8 @@ pub async fn process(state: &AppState) -> Result<Report, String> {
             poll: Some(poll),
             notification_scope: Some(ctx.key.clone()),
             notifications: ctx.actor.claim_notifications(&ctx.keys)?,
+            operation: None,
+            operation_poll: None,
         })
     };
     let result = bounded(work).await?;

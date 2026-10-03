@@ -10,7 +10,11 @@ pub fn protect_local(bytes: &[u8]) -> Result<Vec<u8>, String> {
     {
         WindowsDpapiSecretStore::protect(bytes)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "android")]
+    {
+        crate::android_secret_store::protect(bytes)
+    }
+    #[cfg(not(any(windows, target_os = "android")))]
     {
         let _ = bytes;
         Err("Local payload protection is unavailable on this platform".into())
@@ -22,7 +26,11 @@ pub fn unprotect_local(bytes: &[u8]) -> Result<Vec<u8>, String> {
     {
         WindowsDpapiSecretStore::unprotect(bytes)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "android")]
+    {
+        crate::android_secret_store::unprotect(bytes)
+    }
+    #[cfg(not(any(windows, target_os = "android")))]
     {
         let _ = bytes;
         Err("Local payload protection is unavailable on this platform".into())
@@ -34,7 +42,11 @@ pub fn secret_store(path: std::path::PathBuf) -> Box<dyn SecretStore + Send + Sy
     {
         Box::new(WindowsDpapiSecretStore { path })
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "android")]
+    {
+        Box::new(crate::android_secret_store::AndroidSecretStore { path })
+    }
+    #[cfg(not(any(windows, target_os = "android")))]
     {
         Box::new(UnsupportedSecretStore { path })
     }

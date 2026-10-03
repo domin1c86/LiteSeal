@@ -13,9 +13,15 @@ use sha2::{Digest, Sha256};
 use std::path::Path;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 pub mod api;
+pub mod archive;
 pub mod conversations;
 pub mod coordinator;
 pub mod drafts;
+pub mod expiry_trial;
+pub mod history_jobs;
+mod history_receive;
+pub use history_receive::ReceiveView;
+pub mod history_transfer;
 pub mod media;
 pub mod operations;
 mod ordering;
@@ -34,7 +40,10 @@ pub(crate) fn require_backup_support(
         .map_err(|_| invalid())?;
     let scope = Owner::new(&origin, &identity.user_id, &identity.device_id, &keys)?.scope();
     let task_table:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='device_control_tasks')",[],|r|r.get(0)).map_err(db)?;
-    if task_table&&conn.query_row("SELECT EXISTS(SELECT 1 FROM device_control_tasks WHERE scope IN (?1,?2) AND kind='direct_v3_operation')",params![format!("operation:{scope}"),format!("operation-wire:{scope}")],|r|r.get::<_,bool>(0)).map_err(db)?{
+    if task_table&&conn.query_row("SELECT EXISTS(SELECT 1 FROM device_control_tasks WHERE (scope=?1 AND kind='authorized_history_transfer') OR (scope=?2 AND kind='history_receive'))",params![format!("history:{scope}"),format!("history-receive:{scope}")],|r|r.get::<_,bool>(0)).map_err(db)? {
+        return Err("当前身份含授权历史或收件任务，请使用 v3 备份；旧备份不能遗漏这些历史".into());
+    }
+    if task_table&&conn.query_row("SELECT EXISTS(SELECT 1 FROM device_control_tasks WHERE scope IN (?1,?2,?3,?4) AND kind='direct_v3_operation')",params![format!("operation:{scope}"),format!("operation-wire:{scope}"),format!("operation-task:{scope}"),format!("operation-task-wire:{scope}")],|r|r.get::<_,bool>(0)).map_err(db)?{
         return Err("当前身份含单聊 v3 操作日志，本版备份尚不支持；未生成会遗漏编辑或撤回的备份".into());
     }
     if task_table && conn.query_row("SELECT EXISTS(SELECT 1 FROM device_control_tasks WHERE scope=?1 AND kind='direct_v3_media')", [format!("media:{scope}")], |r|r.get::<_,bool>(0)).map_err(db)? {
@@ -226,6 +235,7 @@ pub struct RecordView {
     pub accepted_at: i64,
     pub operation_revision: u64,
     pub retracted: bool,
+    pub transferred_update: bool,
 }
 /// Metadata only, constructed by a bound authenticated transport, never by page
 /// IPC. This is not cryptographic evidence of remote acceptance on its own.
@@ -476,7 +486,10 @@ impl Store {
         // it is deliberately outside the bounded native write-ahead journal.
         trust.read_checked(|conn| {
             conn.execute_batch(media::SCHEMA).map_err(db)?;
-            media::validate_cache(conn)
+            media::validate_cache(conn)?;
+            conn.execute_batch(history_transfer::SCHEMA).map_err(db)?;
+            conn.execute_batch(history_receive::SCHEMA).map_err(db)?;
+            history_transfer::validate_cache(conn)
         })?;
         trust.write_checked(|conn| ordering::initialize(conn, &owner.scope()))?;
         Ok(Self { trust, owner })
@@ -1097,6 +1110,7 @@ impl Store {
         self.trust.read_checked(|conn| {
             if let Some(peer) = peer { current(conn, &owner.origin, peer)?; }
             ordering::check(conn, &scope)?;
+            let transfers=history_transfer::updates(conn,&owner,keys)?;
             let mut query=conn.prepare("SELECT rowid,id FROM direct_v3_records r WHERE scope=?1 AND rowid<?2 AND (?4 IS NULL OR CASE WHEN json_extract(CAST(wire AS TEXT),'$.header.sender')=?5 THEN json_extract(CAST(wire AS TEXT),'$.header.peer') ELSE json_extract(CAST(wire AS TEXT),'$.header.sender') END=?4) AND NOT EXISTS(SELECT 1 FROM direct_v3_hidden h WHERE h.scope=r.scope AND h.id=r.id) ORDER BY rowid DESC LIMIT ?3").map_err(db)?;
             let rows=query.query_map(params![scope,before.unwrap_or(i64::MAX),limit,peer,owner.account],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?))).map_err(db)?.collect::<rusqlite::Result<Vec<_>>>().map_err(db)?;
             rows.into_iter().map(|(cursor,id)| {
@@ -1104,8 +1118,9 @@ impl Store {
                 let (batch,_)=checked_record(conn,&owner,&row,keys)?;
                 let other=if batch.header.sender==owner.account {batch.header.peer.clone()}else{batch.header.sender.clone()};
                 let (operation_revision,action,_)=operations::projection(conn,&owner,&batch,keys)?;
-                let retracted=action==Some(liteseal_shared::direct_operation::Action::Retract);
-                Ok(RecordView{cursor,id:row.id,sender:batch.header.sender,sender_device:batch.header.sender_device,peer:other,role:row.role,kind:batch.header.kind,outcome:if retracted {"retracted".into()}else{row.outcome},sent_at:batch.header.sent_at,accepted_at:row.accepted_at,operation_revision,retracted})
+                let transferred_update=transfers.get(&row.id).is_some_and(|(revision,_)|*revision>operation_revision);
+                let (operation_revision,retracted)=if transferred_update {*transfers.get(&row.id).ok_or_else(invalid)?} else {(operation_revision,action==Some(liteseal_shared::direct_operation::Action::Retract))};
+                Ok(RecordView{cursor,id:row.id,sender:batch.header.sender,sender_device:batch.header.sender_device,peer:other,role:row.role,kind:batch.header.kind,outcome:if transferred_update {"authorized_history_transfer".into()}else if retracted {"retracted".into()}else{row.outcome},sent_at:batch.header.sent_at,accepted_at:row.accepted_at,operation_revision,retracted,transferred_update})
             }).collect()
         })
     }
@@ -1131,7 +1146,14 @@ impl Store {
             if row.outcome != "processed" {
                 return Err("此消息正文认证失败，已隔离".into());
             }
-            match operations::projection(conn, &owner, &batch, keys)? {
+            let projection = operations::projection(conn, &owner, &batch, keys)?;
+            if history_transfer::updates(conn, &owner, keys)?
+                .get(id)
+                .is_some_and(|(revision, _)| *revision > projection.0)
+            {
+                return Err("原消息的后续变更来自授权迁移，请读取标明来源的授权副本".into());
+            }
+            match projection {
                 (_, Some(liteseal_shared::direct_operation::Action::Retract), _) => {
                     Err("此消息已撤回".into())
                 }

@@ -1,42 +1,16 @@
-import * as Keychain from 'react-native-keychain';
+import type {FfiPublicIdentity} from 'react-native-liteseal';
+import {getCore} from './core';
+import {bufferToBytes} from './bytes';
+import type {Session} from './AppContext';
 
-// Same shape as the desktop keystore JSON (core/src/keystore.rs), stored in
-// the Android Keystore-backed credential storage instead of a DPAPI file.
-export interface KeystoreData {
-  user_id: string;
-  token: string;
-  refresh_token: string;
-  device_id: string;
-  server_url: string;
-  public_key: number[];
-  secret_key: number[];
-  ed25519_pk: number[];
-  ed25519_sk: number[];
+// Public metadata only. Legacy keychain JSON is migrated entirely in Kotlin /
+// Rust; the keychain module and private-key crypto exports are unavailable to JS.
+export function publicSession(value: FfiPublicIdentity, connected = false): Session {
+  return {userId:value.userId,deviceId:value.deviceId,serverUrl:value.serverUrl,
+    publicKey:bufferToBytes(value.publicKey),ed25519Pk:bufferToBytes(value.ed25519Pk),connected};
 }
-
-const SERVICE = 'liteseal.keystore';
-
-export async function saveKeystore(data: KeystoreData): Promise<void> {
-  const ok = await Keychain.setGenericPassword('liteseal', JSON.stringify(data), {
-    service: SERVICE,
-  });
-  if (!ok) {
-    throw new Error('Failed to save keystore');
-  }
+export async function loadKeystore(): Promise<Session | null> {
+  const identity=await getCore().restoreIdentity();
+  return identity ? publicSession(identity) : null;
 }
-
-export async function loadKeystore(): Promise<KeystoreData | null> {
-  const credentials = await Keychain.getGenericPassword({ service: SERVICE });
-  if (!credentials) {
-    return null;
-  }
-  const data = JSON.parse(credentials.password) as KeystoreData;
-  if (!data.user_id || data.public_key?.length !== 32 || data.ed25519_sk?.length !== 64) {
-    return null;
-  }
-  return data;
-}
-
-export async function clearKeystore(): Promise<void> {
-  await Keychain.resetGenericPassword({ service: SERVICE });
-}
+export async function clearKeystore(): Promise<void> { await getCore().nativeSignOut(); }

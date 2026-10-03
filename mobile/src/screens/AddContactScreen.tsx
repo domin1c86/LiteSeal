@@ -8,7 +8,7 @@ import {
   View,
 } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { searchUsers, type FfiUserSearchResult } from 'react-native-liteseal';
+import type { FfiUserSearchResult } from 'react-native-liteseal';
 import Avatar from '../components/Avatar';
 import { bufferToBytes } from '../lib/bytes';
 import { useApp } from '../lib/AppContext';
@@ -34,7 +34,7 @@ export default function AddContactScreen({ navigation }: Props) {
     setSearching(true);
     setError(null);
     try {
-      const found = await searchUsers(session.serverUrl, query.trim(), session.token);
+      const found = await getCore().searchUsers(query.trim());
       setResults(found.filter(r => r.userId !== session.userId));
     } catch (err) {
       setError(String(err));

@@ -11,6 +11,22 @@ pub const MAX_WIRE: usize = 512 * 1024 - 1024;
 pub const MAX_EVENTS: i64 = 10_000;
 pub const MAX_PAGE: usize = 100;
 pub const MAX_PAGE_BYTES: usize = 512 * 1024;
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Receipt {
+    pub id: String,
+    pub digest: [u8; 32],
+    pub revision: u64,
+    pub order: i64,
+    pub accepted_at: i64,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Outcome {
+    Unknown { id: String, digest: [u8; 32] },
+    Cancelled { id: String, digest: [u8; 32] },
+    Accepted { receipt: Receipt },
+}
 const DOMAIN: &[u8] = b"LiteSeal/direct-operation-body/v1\0";
 type Result<T> = std::result::Result<T, DirectError>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

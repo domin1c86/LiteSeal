@@ -38,6 +38,7 @@ struct Fixture {
     protection: Protection,
     id: String,
     keys: crypto::KeyPair,
+    root: crypto::KeyPair,
     directory: DeviceState,
     mode: Enable,
     path: std::path::PathBuf,
@@ -153,6 +154,7 @@ impl Fixture {
             protection,
             id,
             keys,
+            root,
             directory,
             mode,
             path,
@@ -451,6 +453,15 @@ async fn accepted_original_session_saves_only_independent_profile_and_clear_fenc
         let seen = Arc::new(Notify::new());
         let release = Arc::new(Notify::new());
         let (seen_, release_) = (seen.clone(), release.clone());
+        let manifests = Arc::new(std::sync::Mutex::new(std::collections::HashMap::<
+            String,
+            DeviceState,
+        >::new()));
+        manifests
+            .lock()
+            .unwrap()
+            .insert(f.directory.anchor().account.clone(), f.directory.clone());
+        let manifests_ = manifests.clone();
         let info = SessionInfo {
             version: 1,
             id: session.id.clone(),
@@ -486,6 +497,40 @@ async fn accepted_original_session_saves_only_independent_profile_and_clear_fenc
                     header.starts_with(&format!("GET /auth/v3/session/{} ", info.device.device_id))
                 );
                 reply(&mut socket, info).await;
+                for _ in 0..2 {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let (header, _) = request(&mut socket).await;
+                    let route = header
+                        .lines()
+                        .next()
+                        .unwrap()
+                        .split_whitespace()
+                        .nth(1)
+                        .unwrap();
+                    let url =
+                        reqwest::Url::parse(&format!("http://synthetic.invalid{route}")).unwrap();
+                    assert!(
+                        url.path().starts_with("/users/")
+                            && url.path().ends_with("/device_manifest")
+                    );
+                    assert!(header
+                        .to_ascii_lowercase()
+                        .contains("authorization: bearer synthetic-new-access-token"));
+                    let account = url.path().split('/').nth(2).unwrap();
+                    let state = manifests_.lock().unwrap().get(account).unwrap().clone();
+                    reply(
+                        &mut socket,
+                        DeviceManifestPage {
+                            anchor: state.anchor().clone(),
+                            events: vec![],
+                            through_revision: state.revision(),
+                            current_revision: state.revision(),
+                            current_hash: state.head().to_vec(),
+                            more: false,
+                        },
+                    )
+                    .await;
+                }
             }
         });
         if late_clear {
@@ -575,6 +620,192 @@ async fn accepted_original_session_saves_only_independent_profile_and_clear_fenc
                     .unwrap()
                     .has_credentials
             );
+            // Back up the selected joined identity, including on a host with no
+            // original identity file. It must not borrow the root database.
+            let selected_store = active::Store::open_with_protection(
+                f.work.0.join("join-profiles"),
+                &f.id,
+                f.protection.clone(),
+            )
+            .unwrap();
+            let database = selected_store.database().unwrap();
+            let sender_keys = crypto::generate_keypair().unwrap();
+            let peer = DeviceState::pin(Anchor {
+                origin: f.directory.anchor().origin.clone(),
+                account: uuid::Uuid::new_v4().to_string(),
+                root: DeviceIdentity::from_keys(uuid::Uuid::new_v4().to_string(), &sender_keys),
+            })
+            .unwrap();
+            let mut messages = liteseal_core::trusted_devices::messages::Store::open(
+                &database,
+                liteseal_core::trusted_devices::messages::Owner::new(
+                    &f.directory.anchor().origin,
+                    &session.account,
+                    &session.device,
+                    &f.keys,
+                )
+                .unwrap(),
+                f.protection.witness(&database).unwrap(),
+            )
+            .unwrap();
+            messages.trust().pin(peer.anchor()).unwrap();
+            let id = uuid::Uuid::new_v4().to_string();
+            let batch = liteseal_shared::direct_message::Batch::make(
+                liteseal_shared::direct_message::Header::new(
+                    &peer,
+                    &f.directory,
+                    &peer.anchor().root.device_id,
+                    liteseal_shared::direct_message::MessageSpec {
+                        id: id.clone(),
+                        sequence: 1,
+                        previous: vec![],
+                        sent_at: chrono_time(),
+                        kind: liteseal_shared::direct_message::Kind::Text,
+                    },
+                )
+                .unwrap(),
+                &peer,
+                &f.directory,
+                &sender_keys,
+                "仅选中加入档案的历史 🦭".as_bytes(),
+            )
+            .unwrap();
+            messages.receive(&batch,&liteseal_core::trusted_devices::messages::Acceptance::from_authenticated_response(&batch,&id,batch.digest().unwrap(),chrono_time()).unwrap(),&f.keys).unwrap();
+            messages
+                .save_draft(&peer.anchor().account, 0, "加入档案草稿", &f.keys)
+                .unwrap();
+            drop(messages);
+            manifests
+                .lock()
+                .unwrap()
+                .insert(peer.anchor().account.clone(), peer.clone());
+            let initial = DeviceState::pin(f.directory.anchor().clone()).unwrap();
+            let historical_id = uuid::Uuid::new_v4().to_string();
+            let original = liteseal_shared::direct_message::Batch::make(
+                liteseal_shared::direct_message::Header::new(
+                    &peer,
+                    &initial,
+                    &peer.anchor().root.device_id,
+                    liteseal_shared::direct_message::MessageSpec {
+                        id: historical_id.clone(),
+                        sequence: 1,
+                        previous: vec![],
+                        sent_at: chrono_time(),
+                        kind: liteseal_shared::direct_message::Kind::Text,
+                    },
+                )
+                .unwrap(),
+                &peer,
+                &initial,
+                &sender_keys,
+                "原设备明确选定的旧历史 🦭".as_bytes(),
+            )
+            .unwrap();
+            let record = liteseal_shared::history_transfer::Record {
+                original,
+                sender: liteseal_shared::history_transfer::Evidence {
+                    anchor: peer.anchor().clone(),
+                    events: vec![],
+                },
+                peer: liteseal_shared::history_transfer::Evidence {
+                    anchor: initial.anchor().clone(),
+                    events: vec![],
+                },
+                accepted_at: chrono_time(),
+                operations: vec![],
+                text: Some("原设备明确选定的旧历史 🦭".into()),
+                media: None,
+            };
+            let directory = liteseal_shared::direct_message::Directory::from_state(&f.directory);
+            let transfer_id = uuid::Uuid::new_v4().to_string();
+            let created = chrono_time();
+            let envelope = liteseal_shared::history_transfer::Envelope::make(
+                liteseal_shared::history_transfer::Header {
+                    version: 1,
+                    id: transfer_id.clone(),
+                    origin: initial.anchor().origin.clone(),
+                    account: session.account.clone(),
+                    source: initial.anchor().root.clone(),
+                    target: directory
+                        .members
+                        .iter()
+                        .find(|m| m.device.device_id == session.device)
+                        .unwrap()
+                        .clone(),
+                    directory,
+                    peer: peer.anchor().account.clone(),
+                    created_at: created,
+                    expires_at: created + liteseal_shared::history_transfer::LIFETIME,
+                    selection: vec![record.reference().unwrap()],
+                },
+                &f.directory,
+                &f.root,
+                vec![record],
+            )
+            .unwrap();
+            let input = f.work.0.join("selected.lhistory");
+            std::fs::write(&input, envelope.to_wire().unwrap()).unwrap();
+            let scope = liteseal_desktop::commands::direct::snapshot(&reopened)
+                .unwrap()
+                .notification_scope;
+            let imported=protocol::dispatch(serde_json::from_value(serde_json::json!({"name":"import_direct_history_transfer","args":{"scope":scope,"path":input.to_str().unwrap()}})).unwrap(),&reopened).await.unwrap();
+            assert_eq!(imported["id"], transfer_id);
+            assert_eq!(imported["state"], "imported");
+            let migrated=protocol::dispatch(serde_json::from_value(serde_json::json!({"name":"get_transferred_history","args":{"scope":scope,"account":peer.anchor().account}})).unwrap(),&reopened).await.unwrap();
+            assert_eq!(migrated["messages"][0]["text"], "原设备明确选定的旧历史 🦭");
+            assert_eq!(
+                migrated["messages"][0]["verification"],
+                "authorized_history_transfer"
+            );
+            assert!(protocol::dispatch(serde_json::from_value(serde_json::json!({"name":"get_transferred_history","args":{"scope":"stale scope"}})).unwrap(),&reopened).await.is_err());
+            let output = f.work.0.join("joined-selected.lseal");
+            let exported=protocol::dispatch(serde_json::from_value(serde_json::json!({"name":"start_backup_export","args":{"path":output.to_str().unwrap(),"password":"independent joined archive password","includeAttachments":false}})).unwrap(),&reopened).await.unwrap().as_str().unwrap().to_owned();
+            let wait = async |id: &str| {
+                for _ in 0..500 {
+                    let job = liteseal_desktop::commands::backup::status(&reopened, id).unwrap();
+                    if job.state != "running" {
+                        return job;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+                panic!("joined backup did not terminate");
+            };
+            let job = wait(&exported).await;
+            assert_eq!(job.state, "completed", "{:?}", job.error);
+            let restored = liteseal_desktop::commands::backup::start_restore(
+                &reopened,
+                output.to_str().unwrap().into(),
+                f.work.0.to_str().unwrap().into(),
+                "independent joined archive password".into(),
+            )
+            .unwrap();
+            let job = wait(&restored).await;
+            assert_eq!(job.state, "completed", "{:?}", job.error);
+            let archive = liteseal_desktop::commands::backup::open(&reopened, &restored).unwrap();
+            assert_eq!(archive["version"], 3);
+            assert_eq!(archive["user_id"], session.account);
+            assert_eq!(archive["device_id"], session.device);
+            assert_eq!(archive["summary"]["messages"], 2);
+            let page = liteseal_desktop::commands::backup::page(
+                &reopened,
+                &restored,
+                "direct_v3",
+                &format!("v3:{}", peer.anchor().account),
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+            assert_eq!(page["messages"][0]["text"], "仅选中加入档案的历史 🦭");
+            assert_eq!(page["draft"], "加入档案草稿");
+            let migrated=protocol::dispatch(serde_json::from_value(serde_json::json!({"name":"get_backup_transferred_history","args":{"id":restored,"account":peer.anchor().account}})).unwrap(),&reopened).await.unwrap();
+            assert_eq!(migrated["messages"][0]["text"], "原设备明确选定的旧历史 🦭");
+            assert_eq!(
+                migrated["messages"][0]["verification"],
+                "authorized_history_transfer"
+            );
+            liteseal_desktop::commands::backup::reset(&reopened).unwrap();
             for value in [
                 serde_json::json!({"name":"load_identity","args":{}}),
                 serde_json::json!({"name":"get_contacts","args":{}}),

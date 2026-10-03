@@ -6,20 +6,17 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import { AppState } from 'react-native';
 import type { FfiContact, FfiPollResult } from 'react-native-liteseal';
 import { getCore } from './core';
 import { dmConversationId } from './conversation';
 
 export interface Session {
   userId: string;
-  token: string;
-  refreshToken: string;
   deviceId: string;
   serverUrl: string;
   publicKey: number[];
-  secretKey: number[];
   ed25519Pk: number[];
-  ed25519Sk: number[];
   /** False when the relay could not be reached (offline session). */
   connected: boolean;
 }
@@ -30,6 +27,7 @@ export interface RelayBatch {
 }
 
 interface AppContextValue {
+  foreground: boolean;
   session: Session | null;
   setSession: (s: Session | null) => void;
   contacts: FfiContact[];
@@ -58,7 +56,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [relayBatch, setRelayBatch] = useState<RelayBatch | null>(null);
   const [unread, setUnread] = useState<Record<string, number>>({});
   const [connected, setConnected] = useState(false);
+  const [foreground, setForeground] = useState(AppState.currentState === 'active');
   const seqRef = useRef(0);
+  useEffect(() => {
+    const listener = AppState.addEventListener('change', state => setForeground(state === 'active'));
+    return () => listener.remove();
+  }, []);
 
   const refreshContacts = useCallback(() => {
     if (!session) {
@@ -88,10 +91,27 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (!session || !connected) {
       return;
     }
+    let retired = false;
+    let inFlight = false;
+    let epoch = 0;
+    let foreground = AppState.currentState === 'active';
+    const subscription = AppState.addEventListener('change', value => {
+      foreground = value === 'active';
+      epoch += 1;
+      if (foreground) {
+        void getCore().resumeNative().then(() => {
+          if (!retired && foreground) refreshContacts();
+        }).catch(() => { /* next foreground reconnect is explicit */ });
+      }
+    });
     const interval = setInterval(async () => {
+      if (retired || inFlight || !foreground) return;
+      const lease = epoch;
+      inFlight = true;
       try {
         const result = await getCore().pollMessages();
-        if (result.messages.length > 0 || result.events.length > 0) {
+        if (retired || !foreground || lease !== epoch) return;
+        if (result.messages.length > 0 || result.events.length > 0 || result.operationsChanged) {
           seqRef.current += 1;
           setRelayBatch({ seq: seqRef.current, result });
           if (result.messages.length > 0) {
@@ -106,10 +126,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         }
       } catch {
         // not connected; ignore
-      }
+      } finally { inFlight = false; }
     }, 2000);
-    return () => clearInterval(interval);
-  }, [session, connected]);
+    return () => { retired = true; epoch += 1; clearInterval(interval); subscription.remove(); };
+  }, [session, connected, refreshContacts]);
 
   const clearUnread = useCallback((conversationId: string) => {
     setUnread(prev => {
@@ -133,6 +153,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         unread,
         clearUnread,
         connected,
+        foreground,
         setConnected,
       }}
     >

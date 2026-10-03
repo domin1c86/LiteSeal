@@ -12,6 +12,8 @@ use crate::api;
 use crate::chat;
 use crate::client::LitesealClient;
 use crate::db::models::{ContactModel, MessageModel};
+use crate::mobile_identity::{MobileIdentity, PublicIdentity};
+use zeroize::Zeroizing;
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum CoreError {
@@ -28,25 +30,6 @@ impl From<String> for CoreError {
 type FfiResult<T> = Result<T, CoreError>;
 
 // ---- Records mirrored from core/shared types ----
-
-#[derive(uniffi::Record)]
-pub struct FfiEncryptedPayload {
-    pub recipient_user_id: String,
-    pub recipient_device_id: String,
-    pub ciphertext: Vec<u8>,
-    pub signature: Vec<u8>,
-}
-
-impl From<FfiEncryptedPayload> for EncryptedPayload {
-    fn from(p: FfiEncryptedPayload) -> Self {
-        EncryptedPayload {
-            recipient_user_id: p.recipient_user_id,
-            recipient_device_id: p.recipient_device_id,
-            ciphertext: p.ciphertext,
-            signature: p.signature,
-        }
-    }
-}
 
 #[derive(uniffi::Record)]
 pub struct FfiMessage {
@@ -152,6 +135,7 @@ pub enum FfiRelayEvent {
 pub struct FfiPollResult {
     pub messages: Vec<FfiIncomingMessage>,
     pub events: Vec<FfiRelayEvent>,
+    pub operations_changed: bool,
 }
 
 #[derive(uniffi::Record)]
@@ -165,36 +149,6 @@ pub struct FfiStorageStats {
 }
 
 #[derive(uniffi::Record)]
-pub struct FfiAuthResult {
-    pub user_id: String,
-    pub token: String,
-    pub access_token: Option<String>,
-    pub refresh_token: Option<String>,
-    pub device_id: Option<String>,
-}
-
-impl From<api::RegisterResult> for FfiAuthResult {
-    fn from(r: api::RegisterResult) -> Self {
-        FfiAuthResult {
-            user_id: r.user_id,
-            token: r.token,
-            access_token: r.access_token,
-            refresh_token: r.refresh_token,
-            device_id: r.device_id,
-        }
-    }
-}
-
-#[derive(uniffi::Record)]
-pub struct FfiRemoteDevice {
-    pub id: String,
-    pub name: String,
-    pub public_key: Vec<u8>,
-    pub ed25519_pk: Vec<u8>,
-    pub revoked: bool,
-}
-
-#[derive(uniffi::Record)]
 pub struct FfiUserSearchResult {
     pub user_id: String,
     pub username: String,
@@ -203,151 +157,25 @@ pub struct FfiUserSearchResult {
 }
 
 #[derive(uniffi::Record)]
-pub struct FfiKeypair {
+pub struct FfiPublicIdentity {
+    pub user_id: String,
+    pub device_id: String,
+    pub server_url: String,
     pub public_key: Vec<u8>,
-    pub secret_key: Vec<u8>,
     pub ed25519_pk: Vec<u8>,
-    pub ed25519_sk: Vec<u8>,
+    pub has_session: bool,
 }
-
-// ---- Stateless functions ----
-
-#[uniffi::export(async_runtime = "tokio")]
-pub async fn register(
-    username: String,
-    password: String,
-    server_url: String,
-    device_name: String,
-    public_key: Vec<u8>,
-    ed25519_pk: Vec<u8>,
-) -> FfiResult<FfiAuthResult> {
-    api::register(
-        String::new(), // Mobile registration needs an invite field before it can use this server.
-        username,
-        password,
-        server_url,
-        &device_name,
-        public_key,
-        ed25519_pk,
-    )
-    .await
-    .map(Into::into)
-    .map_err(Into::into)
-}
-
-#[uniffi::export(async_runtime = "tokio")]
-pub async fn login(
-    username: String,
-    password: String,
-    server_url: String,
-    device_name: String,
-    public_key: Vec<u8>,
-    ed25519_pk: Vec<u8>,
-    device_id: Option<String>,
-) -> FfiResult<FfiAuthResult> {
-    api::login(
-        username,
-        password,
-        server_url,
-        &device_name,
-        public_key,
-        ed25519_pk,
-        device_id,
-    )
-    .await
-    .map(Into::into)
-    .map_err(Into::into)
-}
-
-#[uniffi::export(async_runtime = "tokio")]
-pub async fn refresh_session(
-    server_url: String,
-    refresh_token: String,
-) -> FfiResult<FfiAuthResult> {
-    api::refresh_session(server_url, refresh_token)
-        .await
-        .map(Into::into)
-        .map_err(Into::into)
-}
-
-#[uniffi::export(async_runtime = "tokio")]
-pub async fn get_user_devices(
-    server_url: String,
-    user_id: String,
-    access_token: String,
-) -> FfiResult<Vec<FfiRemoteDevice>> {
-    let devices = api::get_user_devices(server_url, user_id, access_token).await?;
-    Ok(devices
-        .into_iter()
-        .map(|d| FfiRemoteDevice {
-            id: d.id,
-            name: d.name,
-            public_key: d.public_key,
-            ed25519_pk: d.ed25519_pk,
-            revoked: d.revoked,
-        })
-        .collect())
-}
-
-#[uniffi::export(async_runtime = "tokio")]
-pub async fn search_users(
-    server_url: String,
-    query: String,
-    access_token: String,
-) -> FfiResult<Vec<FfiUserSearchResult>> {
-    let results = api::search_users(server_url, query, access_token).await?;
-    Ok(results
-        .into_iter()
-        .map(|r| FfiUserSearchResult {
-            user_id: r.user_id,
-            username: r.username,
-            public_key: r.public_key,
-            ed25519_pk: r.ed25519_pk,
-        })
-        .collect())
-}
-
-#[uniffi::export]
-pub fn generate_keypair() -> FfiResult<FfiKeypair> {
-    let (public_key, secret_key, ed25519_pk, ed25519_sk) = chat::generate_keypair()?;
-    Ok(FfiKeypair {
-        public_key,
-        secret_key,
-        ed25519_pk,
-        ed25519_sk,
-    })
-}
-
-#[uniffi::export]
-pub fn encrypt_message(
-    plaintext: Vec<u8>,
-    recipient_public_key: Vec<u8>,
-    sender_secret_key: Vec<u8>,
-) -> FfiResult<Vec<u8>> {
-    chat::encrypt_message(plaintext, recipient_public_key, sender_secret_key).map_err(Into::into)
-}
-
-#[uniffi::export]
-pub fn decrypt_message(
-    ciphertext: Vec<u8>,
-    sender_public_key: Vec<u8>,
-    recipient_secret_key: Vec<u8>,
-) -> FfiResult<Vec<u8>> {
-    chat::decrypt_message(ciphertext, sender_public_key, recipient_secret_key).map_err(Into::into)
-}
-
-#[uniffi::export]
-pub fn sign_message(message: Vec<u8>, signing_key: Vec<u8>) -> FfiResult<Vec<u8>> {
-    chat::sign_message(message, signing_key).map_err(Into::into)
-}
-
-#[uniffi::export]
-pub fn verify_message(
-    message: Vec<u8>,
-    signature: Vec<u8>,
-    sender_public_key: Vec<u8>,
-) -> FfiResult<bool> {
-    chat::verify_message(message, signature, sender_public_key).map_err(Into::into)
+impl From<PublicIdentity> for FfiPublicIdentity {
+    fn from(value: PublicIdentity) -> Self {
+        Self {
+            user_id: value.user_id,
+            device_id: value.device_id,
+            server_url: value.server_url,
+            public_key: value.public_key,
+            ed25519_pk: value.ed25519_pk,
+            has_session: value.has_session,
+        }
+    }
 }
 
 #[uniffi::export]
@@ -367,66 +195,364 @@ pub fn key_fingerprint(key: Vec<u8>) -> String {
 #[derive(uniffi::Object)]
 pub struct LitesealCore {
     inner: LitesealClient,
+    identity: MobileIdentity,
+    auth_gate: tokio::sync::Mutex<()>,
 }
 
 #[uniffi::export(async_runtime = "tokio")]
 impl LitesealCore {
     #[uniffi::constructor]
     pub fn new(db_path: String) -> FfiResult<Arc<Self>> {
-        Ok(Arc::new(Self {
+        #[cfg(target_os = "android")]
+        let db_path = {
+            let root = crate::android_secret_store::native(7, &[])?;
+            if root.is_empty() || root.len() > 4096 {
+                return Err("移动存储目录无法验证".to_string().into());
+            }
+            let root = std::path::PathBuf::from(
+                std::str::from_utf8(&root).map_err(|_| "移动存储目录无法验证".to_string())?,
+            );
+            let requested = std::path::Path::new(&db_path);
+            if requested.file_name() != Some(std::ffi::OsStr::new("liteseal.db"))
+                || requested
+                    .parent()
+                    .and_then(|p| std::fs::canonicalize(p).ok())
+                    != Some(root.clone())
+                || requested.exists()
+                    && !std::fs::symlink_metadata(requested)
+                        .map_err(|_| "移动存储目录无法验证".to_string())?
+                        .is_file()
+            {
+                return Err("移动业务仅使用固定应用存储，拒绝任意路径"
+                    .to_string()
+                    .into());
+            }
+            root.join("liteseal.db")
+                .to_str()
+                .ok_or_else(|| "移动存储目录无法验证".to_string())?
+                .to_owned()
+        };
+        #[cfg(target_os = "android")]
+        let mut registry = android_cores()
+            .lock()
+            .map_err(|_| "移动运行时不可用".to_string())?;
+        #[cfg(target_os = "android")]
+        if let Some(core) = registry.get(&db_path).and_then(std::sync::Weak::upgrade) {
+            return Ok(core);
+        }
+        let core = Arc::new(Self {
             inner: LitesealClient::new(&db_path)?,
-        }))
+            identity: MobileIdentity::open(
+                &std::path::Path::new(&db_path).with_file_name("mobile-identity.bin"),
+            )?,
+            auth_gate: tokio::sync::Mutex::new(()),
+        });
+        #[cfg(target_os = "android")]
+        registry.insert(db_path, Arc::downgrade(&core));
+        Ok(core)
     }
 
-    pub async fn connect_relay(
-        &self,
-        server_url: String,
-        user_id: String,
-        token: String,
-        device_id: String,
-    ) -> FfiResult<()> {
-        self.inner
-            .connect_relay(server_url, user_id, token, device_id)
-            .await
+    pub async fn restore_identity(&self) -> FfiResult<Option<FfiPublicIdentity>> {
+        self.identity
+            .restore_legacy()
+            .map(|value| value.map(Into::into))
             .map_err(Into::into)
+    }
+    pub async fn native_register(
+        &self,
+        invite_code: String,
+        username: String,
+        password: String,
+        server_url: String,
+    ) -> FfiResult<FfiPublicIdentity> {
+        crate::mobile_runtime::require_foreground()?;
+        let _gate = self.auth_gate.lock().await;
+        self.identity.restore_legacy()?;
+        let snapshot = self.identity.begin_auth(&username, &server_url, true)?;
+        let password = Zeroizing::new(password);
+        let result = api::register(
+            invite_code,
+            username,
+            password.to_string(),
+            snapshot.data.server_url.clone(),
+            "Android phone",
+            snapshot.data.public_key.clone(),
+            snapshot.data.ed25519_pk.clone(),
+        )
+        .await?;
+        self.identity
+            .commit_auth(&snapshot, result)
+            .map(Into::into)
+            .map_err(Into::into)
+    }
+    pub async fn native_login(
+        &self,
+        username: String,
+        password: String,
+        server_url: String,
+    ) -> FfiResult<FfiPublicIdentity> {
+        crate::mobile_runtime::require_foreground()?;
+        let _gate = self.auth_gate.lock().await;
+        self.identity.restore_legacy()?;
+        let snapshot = self.identity.begin_auth(&username, &server_url, false)?;
+        let password = Zeroizing::new(password);
+        let result = api::login(
+            username,
+            password.to_string(),
+            snapshot.data.server_url.clone(),
+            "Android phone",
+            snapshot.data.public_key.clone(),
+            snapshot.data.ed25519_pk.clone(),
+            Some(snapshot.data.device_id.clone()),
+        )
+        .await?;
+        self.identity
+            .commit_auth(&snapshot, result)
+            .map(Into::into)
+            .map_err(Into::into)
+    }
+    pub async fn resume_native(&self) -> FfiResult<()> {
+        let _network = crate::mobile_runtime::NETWORK.lock().await;
+        self.resume_native_inner().await
+    }
+}
+
+#[cfg(target_os = "android")]
+fn android_cores(
+) -> &'static std::sync::Mutex<std::collections::HashMap<String, std::sync::Weak<LitesealCore>>> {
+    static CORES: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, std::sync::Weak<LitesealCore>>>,
+    > = std::sync::OnceLock::new();
+    CORES.get_or_init(Default::default)
+}
+
+impl LitesealCore {
+    fn foreground_local<T>(
+        &self,
+        action: impl FnOnce(&LitesealClient) -> Result<T, String>,
+    ) -> FfiResult<T> {
+        let _commit = crate::mobile_runtime::COMMIT
+            .lock()
+            .map_err(|_| "移动本机业务不可用".to_string())?;
+        crate::mobile_runtime::require_foreground()?;
+        let snapshot = self.identity.snapshot(false)?;
+        self.identity.check(&snapshot)?;
+        let value =
+            action(&self.inner).map_err(|_| "移动本机业务失败；原数据已保留".to_string())?;
+        self.identity.check(&snapshot)?;
+        Ok(value)
+    }
+    /// Private worker entry. The caller supplies only the fixed app-private DB
+    /// path through JNI; no result contains plaintext, credentials or keys.
+    #[cfg(target_os = "android")]
+    pub(crate) async fn background_round(&self) -> Result<usize, String> {
+        let _network = crate::mobile_runtime::NETWORK.lock().await;
+        if crate::mobile_runtime::foreground() {
+            return Ok(0);
+        }
+        let epoch = crate::mobile_runtime::epoch();
+        self.resume_native_inner()
+            .await
+            .map_err(|_| "原生会话补收暂不可用".to_string())?;
+        crate::mobile_runtime::check(epoch)?;
+        let result = async {
+            let snapshot = self.identity.snapshot(true)?;
+            let mut count = 0;
+            // Bounded sleep yields to the runtime, letting initial offline
+            // envelopes arrive. A process death leaves unacknowledged work at
+            // the relay; already persisted messages can be safely replayed.
+            for _ in 0..8 {
+                crate::mobile_runtime::check(epoch)?;
+                self.identity.check(&snapshot)?;
+                let result = self.inner.poll_messages_bounded(32).await?;
+                count += result.messages.len();
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            }
+            count += crate::mobile_operations::poll(&self.inner, &self.identity).await?;
+            crate::mobile_runtime::check(epoch)?;
+            self.identity.check(&snapshot)?;
+            Ok(count)
+        }
+        .await;
+        self.inner.disconnect().await;
+        result
+    }
+}
+impl LitesealCore {
+    pub(crate) async fn resume_native_inner(&self) -> FfiResult<()> {
+        let _gate = self.auth_gate.lock().await;
+        let mut snapshot = self.identity.snapshot(true)?;
+        let connected = self
+            .inner
+            .connect_relay(
+                snapshot.data.server_url.clone(),
+                snapshot.data.user_id.clone(),
+                snapshot.data.token.clone(),
+                snapshot.data.device_id.clone(),
+            )
+            .await;
+        if let Err(error) = connected {
+            if !(error.contains("401") || error.contains("403"))
+                || snapshot.data.refresh_token.is_empty()
+            {
+                return Err(error.into());
+            }
+            self.identity.check(&snapshot)?;
+            let result = api::refresh_session(
+                snapshot.data.server_url.clone(),
+                snapshot.data.refresh_token.clone(),
+            )
+            .await?;
+            self.identity.commit_auth(&snapshot, result)?;
+            snapshot = self.identity.snapshot(true)?;
+            self.inner
+                .connect_relay(
+                    snapshot.data.server_url.clone(),
+                    snapshot.data.user_id.clone(),
+                    snapshot.data.token.clone(),
+                    snapshot.data.device_id.clone(),
+                )
+                .await?;
+        }
+        if let Err(error) = self.identity.check(&snapshot) {
+            self.inner.disconnect().await;
+            return Err(error.into());
+        }
+        Ok(())
+    }
+}
+#[uniffi::export(async_runtime = "tokio")]
+impl LitesealCore {
+    pub async fn native_sign_out(&self) -> FfiResult<()> {
+        let result = self.identity.clear_session();
+        self.inner.disconnect().await;
+        result.map_err(Into::into)
+    }
+    pub async fn search_users(&self, query: String) -> FfiResult<Vec<FfiUserSearchResult>> {
+        let snapshot = self.identity.snapshot(true)?;
+        let users = api::search_users(
+            snapshot.data.server_url.clone(),
+            query,
+            snapshot.data.token.clone(),
+        )
+        .await?;
+        self.identity.check(&snapshot)?;
+        Ok(users
+            .into_iter()
+            .map(|r| FfiUserSearchResult {
+                user_id: r.user_id,
+                username: r.username,
+                public_key: r.public_key,
+                ed25519_pk: r.ed25519_pk,
+            })
+            .collect())
     }
 
     pub async fn disconnect(&self) {
         self.inner.disconnect().await;
     }
 
-    pub async fn send_message(
-        &self,
-        sender_id: String,
-        ciphertext: Vec<u8>,
-        signature: Vec<u8>,
-        sender_device_id: String,
-        payloads: Vec<FfiEncryptedPayload>,
-        signing_key: Vec<u8>,
-    ) -> FfiResult<String> {
-        let payloads = payloads.into_iter().map(Into::into).collect();
-        // Signs the relay envelope; each payload's own signature is replaced.
-        let signing_key: [u8; 64] = signing_key
-            .try_into()
-            .map_err(|_| "Invalid signing key length".to_string())?;
+    pub async fn send_text(&self, peer: String, text: String) -> FfiResult<String> {
+        crate::mobile_runtime::require_foreground()?;
+        let _network = crate::mobile_runtime::NETWORK.lock().await;
+        let snapshot = self.identity.snapshot(true)?;
+        if text.is_empty() || text.len() > 16 * 1024 {
+            return Err("文字为空或超出 16 KiB".to_string().into());
+        }
+        let contact = self
+            .inner
+            .db
+            .lock()
+            .map_err(|_| "移动本机存储不可用".to_string())?
+            .get_contact(&peer)
+            .map_err(|_| "联系人存储不可用".to_string())?
+            .ok_or("联系人不存在".to_string())?;
+        if contact.key_changed || contact.trust_state == "key_changed" {
+            return Err("联系人身份已改变；停止发送".to_string().into());
+        }
+        let devices = api::get_user_devices(
+            snapshot.data.server_url.clone(),
+            peer.clone(),
+            snapshot.data.token.clone(),
+        )
+        .await?;
+        self.identity.check(&snapshot)?;
+        let devices: Vec<_> = devices
+            .into_iter()
+            .filter(|device| !device.revoked)
+            .collect();
+        if devices.len() != 1
+            || devices[0].public_key != contact.public_key
+            || contact.ed25519_pk.as_ref() != Some(&devices[0].ed25519_pk)
+        {
+            return Err("当前设备与独立钉住的联系人身份不符；不能降级或替换"
+                .to_string()
+                .into());
+        }
+        let plain = Zeroizing::new(text);
+        let ciphertext = chat::encrypt_message(
+            plain.as_bytes().to_vec(),
+            contact.public_key.clone(),
+            snapshot.data.secret_key.clone(),
+        )?;
+        let signature = chat::sign_message(ciphertext.clone(), snapshot.data.ed25519_sk.clone())?;
+        let signing_key = Zeroizing::new(
+            <[u8; 64]>::try_from(snapshot.data.ed25519_sk.as_slice())
+                .map_err(|_| "原生签名身份无效".to_string())?,
+        );
+        let payload = EncryptedPayload {
+            recipient_user_id: peer,
+            recipient_device_id: devices[0].id.clone(),
+            ciphertext: ciphertext.clone(),
+            signature: signature.clone(),
+        };
+        self.identity.check(&snapshot)?;
         let result = self
             .inner
             .send_message_with_id(
-                sender_id,
+                snapshot.data.user_id.clone(),
                 ciphertext,
                 signature,
-                sender_device_id,
-                payloads,
+                snapshot.data.device_id.clone(),
+                vec![payload],
                 None,
                 Some(&signing_key),
             )
             .await?;
+        self.identity.check(&snapshot)?;
         Ok(result.message_id)
     }
-
+    pub fn read_message(&self, id: String) -> FfiResult<String> {
+        crate::mobile_runtime::require_foreground()?;
+        let snapshot = self.identity.snapshot(false)?;
+        let db = self
+            .inner
+            .db
+            .lock()
+            .map_err(|_| "移动本机存储不可用".to_string())?;
+        let text = crate::mobile_messages::read(&db, &snapshot.data, &id)?;
+        self.identity.check(&snapshot)?;
+        Ok(text)
+    }
     pub async fn poll_messages(&self) -> FfiResult<FfiPollResult> {
-        let result = self.inner.poll_messages().await?;
+        crate::mobile_runtime::require_foreground()?;
+        let _network = crate::mobile_runtime::NETWORK.lock().await;
+        let snapshot = self.identity.snapshot(true)?;
+        let mut result = self.inner.poll_messages().await?;
+        let operations_changed =
+            match crate::mobile_operations::poll(&self.inner, &self.identity).await {
+                Ok(count) => count > 0,
+                Err(_) => {
+                    result.events.push(chat::RelayEvent::Error {
+                        code: "operations_pending".into(),
+                        message: "消息变更补收暂未完成".into(),
+                    });
+                    false
+                }
+            };
+        self.identity.check(&snapshot)?;
         Ok(FfiPollResult {
+            operations_changed,
             messages: result
                 .messages
                 .into_iter()
@@ -486,10 +612,40 @@ impl LitesealCore {
         limit: i64,
         offset: i64,
     ) -> FfiResult<Vec<FfiMessage>> {
+        crate::mobile_runtime::require_foreground()?;
+        if !(1..=1000).contains(&limit) || !(0..=10_000).contains(&offset) {
+            return Err("历史分页超出本机范围".to_string().into());
+        }
+        let snapshot = self.identity.snapshot(false)?;
+        let hidden = {
+            let db = self
+                .inner
+                .db
+                .lock()
+                .map_err(|_| "移动本机存储不可用".to_string())?;
+            if !db
+                .get_contacts()
+                .map_err(|_| "联系人存储不可用".to_string())?
+                .iter()
+                .any(|c| {
+                    chat::canonical_conversation_id(&snapshot.data.user_id, &c.user_id)
+                        == conversation_id
+                })
+            {
+                return Err("会话不属于当前原生身份".to_string().into());
+            }
+            db.locally_deleted_ids(&snapshot.data.user_id, &conversation_id)
+                .map_err(|_| "本机隐藏记录不可用".to_string())?
+        };
         let messages = self
             .inner
             .get_local_messages(&conversation_id, limit, offset)?;
-        Ok(messages.into_iter().map(Into::into).collect())
+        self.identity.check(&snapshot)?;
+        Ok(messages
+            .into_iter()
+            .filter(|m| !hidden.contains(&m.id))
+            .map(Into::into)
+            .collect())
     }
 
     pub fn add_contact(
@@ -499,28 +655,26 @@ impl LitesealCore {
         public_key: Vec<u8>,
         ed25519_pk: Option<Vec<u8>>,
     ) -> FfiResult<()> {
-        self.inner
-            .add_contact(user_id, username, public_key, ed25519_pk)
-            .map_err(Into::into)
+        self.foreground_local(|client| {
+            client.add_contact(user_id, username, public_key, ed25519_pk)
+        })
     }
 
     pub fn get_contacts(&self) -> FfiResult<Vec<FfiContact>> {
-        let contacts = self.inner.get_contacts()?;
+        let contacts = self.foreground_local(LitesealClient::get_contacts)?;
         Ok(contacts.into_iter().map(Into::into).collect())
     }
 
     pub fn remove_contact(&self, user_id: String) -> FfiResult<()> {
-        self.inner.remove_contact(&user_id).map_err(Into::into)
+        self.foreground_local(|client| client.remove_contact(&user_id))
     }
 
     pub fn set_contact_trust(&self, user_id: String, trust_state: String) -> FfiResult<()> {
-        self.inner
-            .set_contact_trust(&user_id, &trust_state)
-            .map_err(Into::into)
+        self.foreground_local(|client| client.set_contact_trust(&user_id, &trust_state))
     }
 
     pub fn get_storage_stats(&self) -> FfiResult<FfiStorageStats> {
-        let stats = self.inner.get_storage_stats()?;
+        let stats = self.foreground_local(LitesealClient::get_storage_stats)?;
         Ok(FfiStorageStats {
             message_count: stats.message_count,
             ciphertext_bytes: stats.ciphertext_bytes,
@@ -532,10 +686,40 @@ impl LitesealCore {
     }
 
     pub fn clear_expired_messages(&self) -> FfiResult<u64> {
-        Ok(self.inner.clear_expired_messages()? as u64)
+        Ok(self.foreground_local(LitesealClient::clear_expired_messages)? as u64)
     }
 
     pub fn clear_unpinned_attachments(&self) -> FfiResult<u64> {
-        Ok(self.inner.clear_unpinned_attachments()? as u64)
+        Ok(self.foreground_local(LitesealClient::clear_unpinned_attachments)? as u64)
+    }
+}
+
+#[cfg(test)]
+mod local_boundary_tests {
+    use super::*;
+
+    #[test]
+    fn local_business_without_confirmed_identity_cannot_read_or_mutate_storage() {
+        let work = crate::backup::WorkDirectory::create(&std::env::temp_dir()).unwrap();
+        let core =
+            LitesealCore::new(work.0.join("isolated.db").to_str().unwrap().to_string()).unwrap();
+        assert!(core.get_contacts().is_err());
+        assert!(core.get_storage_stats().is_err());
+        assert!(core
+            .add_contact(
+                "synthetic-peer".into(),
+                "synthetic-name".into(),
+                vec![0; 32],
+                Some(vec![0; 32]),
+            )
+            .is_err());
+        assert!(core.remove_contact("synthetic-peer".into()).is_err());
+        assert!(core
+            .set_contact_trust("synthetic-peer".into(), "verified".into())
+            .is_err());
+        assert!(core.clear_expired_messages().is_err());
+        assert!(core.clear_unpinned_attachments().is_err());
+        assert!(core.inner.get_contacts().unwrap().is_empty());
+        assert!(!work.0.join("mobile-identity.bin").exists());
     }
 }

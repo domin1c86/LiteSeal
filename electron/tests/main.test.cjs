@@ -21,7 +21,7 @@ for (const startupLocked of [false, true]) test(`main restricts IPC, locks and a
   let loaded;
   const load = new Promise(resolve => { loaded = resolve; });
   const child = new EventEmitter();
-  let holdDevice = false, heldDevice, holdRefresh = false, heldRefresh,holdDirect=false,heldDirect,holdMedia=false,heldMedia,holdContext=false,heldContext;
+  let holdDevice = false, heldDevice, holdRefresh = false, heldRefresh,holdDirect=false,heldDirect,holdMedia=false,heldMedia,holdContext=false,heldContext,holdOperations=false,heldOperations,holdHistory=false,heldHistory=[];
   child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
   child.kill = () => { child.emit('exit', 0); child.emit('close', 0); };
   child.stdin.on('finish', child.kill);
@@ -30,6 +30,8 @@ for (const startupLocked of [false, true]) test(`main restricts IPC, locks and a
     commands.push(request.command.name);
     if(holdDirect&&request.command.name==='process_direct_chat'){heldDirect=request;return;}
     if(holdMedia&&request.command.name==='process_direct_media'){heldMedia=request;return;}
+    if(holdOperations&&request.command.name==='process_direct_operations'){heldOperations=request;return;}
+    if(holdHistory&&request.command.name==='process_direct_history'){heldHistory.push(request);return;}
     if(holdContext&&request.command.name==='get_direct_chat'){heldContext=request;return;}
     if(request.command.name==='get_direct_chat'){child.stdout.write(JSON.stringify({id:request.id,result:{notification_scope:'native-scope',peers:[{account:'bob'}]}})+'\n');return;}
     if (holdRefresh && request.command.name === 'process_session_refreshes') { heldRefresh = request; return; }
@@ -102,6 +104,8 @@ for (const startupLocked of [false, true]) test(`main restricts IPC, locks and a
   assert.equal(handlers.has('liteseal:process_session_refreshes'), false);
   assert.equal(handlers.has('liteseal:process_direct_chat'),false);
   assert.equal(handlers.has('liteseal:process_direct_media'),false);
+  assert.equal(handlers.has('liteseal:process_direct_operations'),false);
+  assert.equal(handlers.has('liteseal:process_direct_history'),false);
   for(const name of ['get_normal_profile','select_normal_profile','clear_normal_profile'])assert.ok(handlers.has(`liteseal:${name}`));
   if (startupLocked) {
     assert.equal((await handlers.get('liteseal:app_lock_state')(valid, {})).result, true);
@@ -169,9 +173,14 @@ for (const startupLocked of [false, true]) test(`main restricts IPC, locks and a
   intervals[2](); await new Promise(resolve=>setTimeout(resolve,0));
   assert.ok(rendererEvents.some(event=>event[0]==='liteseal:session-refresh-changed'));
   holdMedia=true;intervals[4]();intervals[4]();await new Promise(resolve=>setTimeout(resolve,0));assert.equal(commands.filter(n=>n==='process_direct_media').length,1);assert.ok(heldMedia);
+  holdOperations=true;intervals[5]();intervals[5]();await new Promise(resolve=>setTimeout(resolve,0));assert.equal(commands.filter(n=>n==='process_direct_operations').length,1);assert.ok(heldOperations);
+  holdHistory=true;intervals[6]();intervals[6]();intervals[7]();intervals[7]();await new Promise(resolve=>setTimeout(resolve,0));assert.equal(heldHistory.length,2);assert.deepEqual(heldHistory.map(r=>r.command.args.receive).sort(),[false,true]);
   holdDirect=true;intervals[3]();intervals[3]();await new Promise(resolve=>setTimeout(resolve,0));
   assert.equal(commands.filter(n=>n==='process_direct_chat').length,1);
   electron.powerMonitor.emit('suspend');
+  intervals[5]();assert.equal(commands.filter(n=>n==='process_direct_operations').length,1);
+  intervals[6]();intervals[7]();assert.equal(heldHistory.length,2);for(const request of heldHistory)child.stdout.write(JSON.stringify({id:request.id,result:{changed:true,task:null,poll:null}})+'\n');
+  child.stdout.write(JSON.stringify({id:heldOperations.id,result:{changed:true,task:null,poll:null,operation:null}})+'\n');
   child.stdout.write(JSON.stringify({id:heldMedia.id,result:{changed:true,task:null,media:null,poll:null}})+'\n');
   child.stdout.write(JSON.stringify({id:heldDirect.id,result:{changed:true,task:null,poll:null}})+'\n');await new Promise(resolve=>setTimeout(resolve,0));
   assert.ok(!rendererEvents.some(event=>event[0]==='liteseal:direct-changed'));

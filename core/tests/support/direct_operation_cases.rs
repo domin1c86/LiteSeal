@@ -1,5 +1,230 @@
 use super::*;
 use liteseal_shared::direct_operation::{self as op, Action, Event, Operation, Page};
+#[test]
+fn operation_task_reopens_original_bytes_preserves_conflict_and_never_grants_replica_edit_rights() {
+    use liteseal_core::trusted_devices::messages::operations::PrepareOperation;
+    let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
+    let p = Protection::isolated_test();
+    let a = Account::new("alice");
+    let b = Account::new("bob");
+    let mut store = open(&work.0, "sender", &a, false, &p);
+    seed(&mut store, &[&a, &b]);
+    let target = uuid::Uuid::new_v4().to_string();
+    prepare(&mut store, "bob", &target, b"root task", &a.root);
+    store.begin_publish(&target, 0, &a.root).unwrap();
+    let original = store.original(&target, &a.root).unwrap();
+    store
+        .confirm_accepted(&accepted(&original), &a.root)
+        .unwrap();
+    let id = uuid::Uuid::new_v4().to_string();
+    let request = || PrepareOperation {
+        id: &id,
+        target: &target,
+        created_at: 3000,
+        action: Action::Edit,
+        text: Some("原操作 编辑 🦭"),
+    };
+    let prepared = store.prepare_operation(request(), &a.root).unwrap();
+    assert_eq!(prepared.revision, 0);
+    assert_eq!(prepared.state, TaskState::Prepared);
+    let wire = store
+        .operation_original(&id, &a.root)
+        .unwrap()
+        .to_wire()
+        .unwrap();
+    assert!(!serde_json::to_string(&prepared)
+        .unwrap()
+        .contains("编辑 🦭"));
+    let other = uuid::Uuid::new_v4().to_string();
+    assert!(store
+        .prepare_operation(
+            PrepareOperation {
+                id: &other,
+                target: &target,
+                created_at: 3000,
+                action: Action::Retract,
+                text: None
+            },
+            &a.root
+        )
+        .is_err());
+    store = open(&work.0, "sender", &a, false, &p);
+    assert_eq!(
+        store
+            .operation_original(&id, &a.root)
+            .unwrap()
+            .to_wire()
+            .unwrap(),
+        wire
+    );
+    assert_eq!(
+        store
+            .prepare_operation(request(), &a.root)
+            .unwrap()
+            .revision,
+        0
+    );
+    assert!(store.operation_task(&id, &b.root).is_err());
+    assert!(store.begin_operation_publish(&id, 9, &a.root).is_err());
+    let revoke = make_event(
+        &b.joined,
+        "revoke".into(),
+        DeviceAction::Revoke {
+            device_id: "bob-second".into(),
+            grant_hash: b.joined.grant_hash().unwrap().to_vec(),
+        },
+        3100,
+        &b.root,
+    )
+    .unwrap();
+    store
+        .trust()
+        .import_verified(
+            b.initial.anchor(),
+            &Checkpoint::from_state(&b.joined),
+            &[revoke],
+        )
+        .unwrap();
+    let conflict = store.begin_operation_publish(&id, 0, &a.root).unwrap();
+    assert_eq!(conflict.state, TaskState::Conflict);
+    assert_eq!(
+        store
+            .operation_original(&id, &a.root)
+            .unwrap()
+            .to_wire()
+            .unwrap(),
+        wire
+    );
+    assert_eq!(
+        store.prepare_operation(request(), &a.root).unwrap().state,
+        TaskState::Conflict
+    );
+    let cancelled = store
+        .request_operation_cancel(&id, conflict.revision, &a.root)
+        .unwrap();
+    assert_eq!(cancelled.state, TaskState::Cancelled);
+    assert!(store.prepare_operation(request(), &a.root).is_err());
+    let fresh = store
+        .prepare_operation(
+            PrepareOperation {
+                id: &other,
+                target: &target,
+                created_at: 3200,
+                action: Action::Edit,
+                text: Some("explicit replacement"),
+            },
+            &a.root,
+        )
+        .unwrap();
+    assert_eq!(fresh.operation_revision, 1);
+    assert_eq!(
+        store
+            .operation_original(&other, &a.root)
+            .unwrap()
+            .payloads
+            .len(),
+        3
+    );
+    let publishing = store.begin_operation_publish(&other, 0, &a.root).unwrap();
+    assert_eq!(publishing.state, TaskState::Publishing);
+    let cancel = store
+        .request_operation_cancel(&other, publishing.revision, &a.root)
+        .unwrap();
+    assert_eq!(cancel.state, TaskState::Publishing);
+    assert!(cancel.cancel_requested);
+    assert!(store
+        .begin_operation_publish(&other, cancel.revision, &a.root)
+        .is_err());
+    store = open(&work.0, "sender", &a, false, &p);
+    assert!(
+        store
+            .operation_task(&other, &a.root)
+            .unwrap()
+            .cancel_requested
+    );
+    let mut replica = open(&work.0, "replica", &a, true, &p);
+    seed(&mut replica, &[&a, &b]);
+    replica
+        .receive(&original, &accepted(&original), &a.second)
+        .unwrap();
+    assert!(replica
+        .prepare_operation(
+            PrepareOperation {
+                id: &uuid::Uuid::new_v4().to_string(),
+                target: &target,
+                created_at: 3200,
+                action: Action::Edit,
+                text: Some("not author")
+            },
+            &a.second
+        )
+        .is_err());
+}
+#[test]
+fn operation_task_native_failure_has_no_partial_chunks_and_large_wire_remains_immutable() {
+    use liteseal_core::trusted_devices::messages::operations::PrepareOperation;
+    let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
+    let a = Account::new("alice");
+    let b = Account::new("bob");
+    let path = work.0.join("operation-tasks.db");
+    let memory = std::sync::Arc::new(Memory::default());
+    let owner = Owner::new(&a.initial.anchor().origin, "alice", "alice-root", &a.root).unwrap();
+    let witness = liteseal_core::trusted_devices::witness::Witness::new(&path, memory.clone());
+    let mut store = Store::open(&path, owner.clone(), witness.clone()).unwrap();
+    seed(&mut store, &[&a, &b]);
+    let target = uuid::Uuid::new_v4().to_string();
+    prepare(&mut store, "bob", &target, b"root", &a.root);
+    store.begin_publish(&target, 0, &a.root).unwrap();
+    let batch = store.original(&target, &a.root).unwrap();
+    store.confirm_accepted(&accepted(&batch), &a.root).unwrap();
+    let id = uuid::Uuid::new_v4().to_string();
+    let text = "大".repeat(5400);
+    let request = || PrepareOperation {
+        id: &id,
+        target: &target,
+        created_at: 3000,
+        action: Action::Edit,
+        text: Some(&text),
+    };
+    {
+        let mut state = memory.state.lock().unwrap();
+        state.fail_at = Some(state.writes + 1);
+    }
+    assert!(store.prepare_operation(request(), &a.root).is_err());
+    assert!(store.operation_tasks(&a.root).unwrap().is_empty());
+    store.prepare_operation(request(), &a.root).unwrap();
+    let wire = store
+        .operation_original(&id, &a.root)
+        .unwrap()
+        .to_wire()
+        .unwrap();
+    assert!(wire.len() > 64 * 1024);
+    drop(store);
+    let mut store = Store::open(&path, owner, witness).unwrap();
+    assert_eq!(
+        store
+            .operation_original(&id, &a.root)
+            .unwrap()
+            .to_wire()
+            .unwrap(),
+        wire
+    );
+    assert_eq!(
+        store
+            .prepare_operation(request(), &a.root)
+            .unwrap()
+            .revision,
+        0
+    );
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute(
+        "UPDATE device_control_tasks SET body=zeroblob(length(body)) WHERE id=?1",
+        [format!("{id}:00")],
+    )
+    .unwrap();
+    drop(conn);
+    assert!(store.operation_task(&id, &a.root).is_err());
+}
 fn batch(a: &Account, b: &Account) -> Batch {
     let h = Header::new(
         &a.joined,
@@ -191,6 +416,7 @@ fn operation_before_root_reopens_projects_edit_without_new_unread_and_preserves_
         .import_operations(7, &page(vec![changed], 11), &b.root)
         .unwrap();
     assert!(store.body(&root.header.id, &b.root).is_err());
+    assert!(store.claim_notifications(&b.root).unwrap().is_empty());
     assert!(store.history(None, 100, &b.root).unwrap().is_empty());
     assert!(store
         .import_operations(0, &page(vec![edit], 7), &b.root)
@@ -304,4 +530,102 @@ fn large_operation_chunks_native_failure_and_sqlite_rollback_fail_closed() {
     drop(reopened);
     fs::write(&path, old).unwrap();
     assert!(Store::open(&path, owner, witness).is_err());
+}
+
+#[test]
+fn operation_window_boundary_terminal_cleanup_and_original_id_fences_survive_reopen() {
+    use liteseal_core::trusted_devices::messages::operations::PrepareOperation;
+    let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
+    let p = Protection::isolated_test();
+    let a = Account::new("alice");
+    let b = Account::new("bob");
+    let mut store = open(&work.0, "author-window", &a, false, &p);
+    seed(&mut store, &[&a, &b]);
+    let target = uuid::Uuid::new_v4().to_string();
+    prepare(&mut store, "bob", &target, b"window", &a.root);
+    store.begin_publish(&target, 0, &a.root).unwrap();
+    let root = store.original(&target, &a.root).unwrap();
+    let receipt = accepted(&root);
+    store.confirm_accepted(&receipt, &a.root).unwrap();
+    let first = store.history(None, 6, &a.root).unwrap()[0].accepted_at;
+    for created_at in [first - 1, first + 48 * 60 * 60 * 1000 + 1] {
+        assert!(store
+            .prepare_operation(
+                PrepareOperation {
+                    id: &uuid::Uuid::new_v4().to_string(),
+                    target: &target,
+                    created_at,
+                    action: Action::Edit,
+                    text: Some("invalid time")
+                },
+                &a.root
+            )
+            .is_err());
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    let request = || PrepareOperation {
+        id: &id,
+        target: &target,
+        created_at: first + 48 * 60 * 60 * 1000,
+        action: Action::Edit,
+        text: Some("exact boundary"),
+    };
+    let task = store.prepare_operation(request(), &a.root).unwrap();
+    assert!(store
+        .clear_operation_task(&id, task.revision, &a.root)
+        .is_err());
+    let publishing = store
+        .begin_operation_publish(&id, task.revision, &a.root)
+        .unwrap();
+    assert_eq!(
+        store
+            .begin_operation_publish(&id, publishing.revision, &a.root)
+            .unwrap()
+            .revision,
+        publishing.revision
+    );
+    assert!(store
+        .request_operation_cancel(&id, publishing.revision + 1, &a.root)
+        .is_err());
+    let local_id = uuid::Uuid::new_v4().to_string();
+    let local_target = uuid::Uuid::new_v4().to_string();
+    prepare(&mut store, "bob", &local_target, b"local cancel", &a.root);
+    store.begin_publish(&local_target, 0, &a.root).unwrap();
+    let original = store.original(&local_target, &a.root).unwrap();
+    store
+        .confirm_accepted(&accepted(&original), &a.root)
+        .unwrap();
+    let local = store
+        .prepare_operation(
+            PrepareOperation {
+                id: &local_id,
+                target: &local_target,
+                created_at: 3000,
+                action: Action::Retract,
+                text: None,
+            },
+            &a.root,
+        )
+        .unwrap();
+    let cancelled = store
+        .request_operation_cancel(&local_id, local.revision, &a.root)
+        .unwrap();
+    store
+        .clear_operation_task(&local_id, cancelled.revision, &a.root)
+        .unwrap();
+    store = open(&work.0, "author-window", &a, false, &p);
+    assert!(store
+        .prepare_operation(
+            PrepareOperation {
+                id: &local_id,
+                target: &local_target,
+                created_at: 3000,
+                action: Action::Retract,
+                text: None
+            },
+            &a.root
+        )
+        .is_err());
+    assert_eq!(store.operation_tasks(&a.root).unwrap().len(), 1);
+    assert_eq!(store.body(&local_target, &a.root).unwrap(), b"local cancel");
 }

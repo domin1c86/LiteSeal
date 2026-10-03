@@ -8,10 +8,9 @@ import {
 } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { refreshSession } from 'react-native-liteseal';
 import { AppProvider, useApp } from './src/lib/AppContext';
 import { getCore } from './src/lib/core';
-import { loadKeystore, saveKeystore } from './src/lib/keystore';
+import { publicSession } from './src/lib/keystore';
 import { fonts, useTheme } from './src/theme';
 import type { RootStackParamList, TabParamList } from './src/navigation';
 import LoginScreen from './src/screens/LoginScreen';
@@ -87,64 +86,21 @@ function Root() {
   const { session, setSession, setConnected } = useApp();
   const [loading, setLoading] = useState(true);
 
-  // Auto-login from the saved keystore, refreshing the access token when the
-  // saved one has expired — same flow as the desktop App.tsx.
+  // The native core owns identity, credentials, migration and token refresh.
   useEffect(() => {
-    (async () => {
+    let retired=false;
+    void (async()=>{
       try {
-        const saved = await loadKeystore();
-        if (!saved || !saved.token || !saved.device_id) {
-          return;
-        }
-        const serverUrl = saved.server_url || 'http://10.0.2.2:3000';
-        const base = {
-          userId: saved.user_id,
-          token: saved.token,
-          refreshToken: saved.refresh_token,
-          deviceId: saved.device_id,
-          serverUrl,
-          publicKey: saved.public_key,
-          secretKey: saved.secret_key,
-          ed25519Pk: saved.ed25519_pk,
-          ed25519Sk: saved.ed25519_sk,
-        };
-        try {
-          await getCore().connectRelay(serverUrl, saved.user_id, saved.token, saved.device_id);
-          setConnected(true);
-          setSession({ ...base, connected: true });
-        } catch {
-          try {
-            const r = await refreshSession(serverUrl, saved.refresh_token);
-            const token = r.accessToken ?? r.token;
-            await saveKeystore({
-              ...saved,
-              token,
-              refresh_token: r.refreshToken ?? saved.refresh_token,
-            });
-            await getCore().connectRelay(serverUrl, r.userId, token, saved.device_id);
-            setConnected(true);
-            setSession({
-              ...base,
-              token,
-              refreshToken: r.refreshToken ?? saved.refresh_token,
-              connected: true,
-            });
-          } catch {
-            // Server unreachable or refresh token stale: offline session so
-            // local history stays readable; sending will surface errors.
-            setConnected(false);
-            setSession({ ...base, connected: false });
-          }
-        }
-      } catch {
-        // no keystore: fall through to login
-      } finally {
-        setLoading(false);
-      }
+        const identity=await getCore().restoreIdentity();
+        if(retired || !identity?.hasSession) return;
+        let connected=false;
+        try {await getCore().resumeNative();connected=true;}catch{}
+        if(!retired){setConnected(connected);setSession(publicSession(identity,connected));}
+      } catch { /* Preserve damaged or unavailable native data; do not replace keys. */ }
+      finally {if(!retired)setLoading(false);}
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
+    return()=>{retired=true;};
+  },[setConnected,setSession]);
   const navTheme = {
     ...(dark ? DarkTheme : DefaultTheme),
     colors: {

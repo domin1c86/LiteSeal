@@ -25,6 +25,15 @@ use zeroize::Zeroizing;
 #[path = "schedule.rs"]
 mod schedule;
 pub use schedule::Drive;
+#[path = "operation_coordinator.rs"]
+mod operation_coordinator;
+pub use operation_coordinator::{OperationPoll, OperationPreparation, OperationProgress};
+#[path = "history_coordinator.rs"]
+mod history_coordinator;
+pub use history_coordinator::RelayReceiveProgress;
+#[path = "audio_coordinator.rs"]
+mod audio_coordinator;
+pub use audio_coordinator::{AudioPoll, AudioTarget, AudioView};
 #[derive(Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Condition {
@@ -114,6 +123,10 @@ pub struct MessageCoordinator {
     gate: TaskGate,
     network: tokio::sync::Mutex<()>,
     media_network: tokio::sync::Mutex<()>,
+    history_network: tokio::sync::Mutex<()>,
+    operation_network: tokio::sync::Mutex<()>,
+    audio_network: tokio::sync::Mutex<()>,
+    audio: Mutex<audio_coordinator::State>,
     schedule: Mutex<schedule::State>,
     session: RwLock<Zeroizing<String>>,
     // Keep isolated native targets until after all task handles close.
@@ -147,6 +160,10 @@ impl MessageCoordinator {
             gate: TaskGate::new().map_err(local)?,
             network: tokio::sync::Mutex::new(()),
             media_network: tokio::sync::Mutex::new(()),
+            history_network: tokio::sync::Mutex::new(()),
+            operation_network: tokio::sync::Mutex::new(()),
+            audio_network: tokio::sync::Mutex::new(()),
+            audio: Mutex::new(audio_coordinator::State::default()),
             schedule: Mutex::new(schedule::State::default()),
             session: RwLock::new(Zeroizing::new(String::new())),
             _protection: protection,
@@ -159,6 +176,7 @@ impl MessageCoordinator {
         }
         self.gate
             .rotate_with(|| {
+                self.clear_audio();
                 *self
                     .session
                     .write()

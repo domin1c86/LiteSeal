@@ -26,6 +26,7 @@ pub(crate) fn orphan_hours() -> i32 {
         .clamp(1, 168)
 }
 pub async fn cleanup(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
+    crate::direct_messages::history::cleanup(pool).await?;
     crate::direct_messages::media::cleanup(pool).await?;
     crate::groups::attachments::cleanup(pool).await?;
     sqlx::query("DELETE FROM attachment_objects a WHERE expires_at < now() OR (created_at < now() - make_interval(hours => $1) AND NOT EXISTS (SELECT 1 FROM beta_receipts r WHERE r.message_id = a.message_id AND r.sender_user_id = a.owner))").bind(orphan_hours()).execute(pool).await?;
@@ -35,7 +36,7 @@ pub(crate) async fn usage(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     owner: &str,
 ) -> Result<(i64, i64), Failure> {
-    let row=sqlx::query("SELECT COALESCE(SUM(size),0)::BIGINT AS bytes,COUNT(*) AS count FROM (SELECT size FROM attachment_objects WHERE owner=$1 UNION ALL SELECT size FROM group_attachment_objects WHERE owner=$1 UNION ALL SELECT size FROM direct_v3_media_objects WHERE owner=$1) a").bind(owner).fetch_one(&mut **tx).await.map_err(db)?;
+    let row=sqlx::query("SELECT COALESCE(SUM(size),0)::BIGINT AS bytes,COUNT(*) AS count FROM (SELECT size FROM attachment_objects WHERE owner=$1 UNION ALL SELECT size FROM group_attachment_objects WHERE owner=$1 UNION ALL SELECT size FROM direct_v3_media_objects WHERE owner=$1 UNION ALL SELECT size FROM direct_v3_history_transfers WHERE owner=$1 AND state IN ('staging','ready','permitted') AND expires_at>floor(extract(epoch FROM now())*1000)::BIGINT) a").bind(owner).fetch_one(&mut **tx).await.map_err(db)?;
     Ok((row.get("bytes"), row.get("count")))
 }
 #[derive(Deserialize)]

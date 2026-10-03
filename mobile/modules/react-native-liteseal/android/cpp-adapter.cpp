@@ -3,9 +3,27 @@
 #include <jsi/jsi.h>
 #include <ReactCommon/CallInvokerHolder.h>
 #include "react-native-liteseal.h"
+#include "native-secret-adapter.h"
 
 namespace jsi = facebook::jsi;
 namespace react = facebook::react;
+extern "C" void liteseal_android_foreground(bool);
+extern "C" int32_t liteseal_android_sync(const uint8_t*, size_t);
+extern "C" JNIEXPORT void JNICALL
+Java_com_liteseal_NativeMobileSync_nativeForeground(JNIEnv*, jobject, jboolean value) {
+    liteseal_android_foreground(value == JNI_TRUE);
+}
+extern "C" JNIEXPORT jint JNICALL
+Java_com_liteseal_NativeMobileSync_nativeSync(JNIEnv* env, jobject, jstring path) {
+    if (!liteseal_secret::install(env) || !path) return -1;
+    const auto length = env->GetStringUTFLength(path);
+    if (length <= 0 || length > 4096) return -1;
+    const auto bytes = env->GetStringUTFChars(path, nullptr);
+    if (!bytes) { if (env->ExceptionCheck()) env->ExceptionClear(); return -1; }
+    const auto result = liteseal_android_sync(reinterpret_cast<const uint8_t*>(bytes), static_cast<size_t>(length));
+    env->ReleaseStringUTFChars(path, bytes);
+    return result;
+}
 
 // Automated testing checks Java_com_liteseal_LitesealModule and liteseal
 // by comparing the whole line here.
@@ -24,6 +42,7 @@ Java_com_liteseal_LitesealModule_nativeInstallRustCrate(
     jlong rtPtr,
     jobject callInvokerHolderJavaObj
 ) {
+    if (!liteseal_secret::install(env)) return false;
     using JCallInvokerHolder = facebook::react::CallInvokerHolder;
 
     auto holderLocal = facebook::jni::make_local(callInvokerHolderJavaObj);

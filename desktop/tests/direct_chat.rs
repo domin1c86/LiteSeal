@@ -184,6 +184,7 @@ impl Account {
 #[derive(Default)]
 struct World {
     batches: HashMap<String, Batch>,
+    operations: Vec<liteseal_shared::direct_operation::Event>,
     pending: HashMap<String, Vec<String>>,
     publish: usize,
     acks: usize,
@@ -377,6 +378,7 @@ async fn desktop_text_original_retry_receive_ack_paging_hide_and_selected_scope(
         ..Default::default()
     }));
     let shared = world.clone();
+    let accepted_at = now();
     let server = tokio::spawn(async move {
         loop {
             let (mut socket, _) = listener.accept().await.unwrap();
@@ -429,6 +431,78 @@ async fn desktop_text_original_retry_receive_ack_paging_hide_and_selected_scope(
                         .unwrap(),
                         false,
                     )
+                } else if path == "/direct/v3/operations" && body.is_empty() {
+                    let after: i64 = url
+                        .query_pairs()
+                        .find(|(k, _)| k == "after")
+                        .unwrap()
+                        .1
+                        .parse()
+                        .unwrap();
+                    let events: Vec<_> = world
+                        .operations
+                        .iter()
+                        .filter(|e| e.order > after)
+                        .cloned()
+                        .collect();
+                    (
+                        200,
+                        serde_json::to_value(liteseal_shared::direct_operation::Page {
+                            through: events.last().map_or(after, |e| e.order),
+                            events,
+                            has_more: false,
+                        })
+                        .unwrap(),
+                        false,
+                    )
+                } else if path.starts_with("/direct/v3/operations/") && path.ends_with("/outcome") {
+                    let id = path.split('/').nth(4).unwrap().to_string();
+                    let digest: [u8; 32] = hex::decode(
+                        url.query_pairs()
+                            .find(|(k, _)| k == "digest")
+                            .unwrap()
+                            .1
+                            .as_ref(),
+                    )
+                    .unwrap()
+                    .try_into()
+                    .unwrap();
+                    let result = if let Some(e) = world
+                        .operations
+                        .iter()
+                        .find(|e| e.operation.header.id == id)
+                    {
+                        liteseal_shared::direct_operation::Outcome::Accepted {
+                            receipt: liteseal_shared::direct_operation::Receipt {
+                                id,
+                                digest,
+                                revision: e.operation.header.revision,
+                                order: e.order,
+                                accepted_at: e.accepted_at,
+                            },
+                        }
+                    } else {
+                        liteseal_shared::direct_operation::Outcome::Unknown { id, digest }
+                    };
+                    (200, serde_json::to_value(result).unwrap(), false)
+                } else if path == "/direct/v3/operations" {
+                    let operation =
+                        liteseal_shared::direct_operation::Operation::from_wire(&body).unwrap();
+                    let receipt = liteseal_shared::direct_operation::Receipt {
+                        id: operation.header.id.clone(),
+                        digest: operation.digest().unwrap(),
+                        revision: operation.header.revision,
+                        order: world.operations.len() as i64 + 1,
+                        accepted_at: now(),
+                    };
+                    world
+                        .operations
+                        .push(liteseal_shared::direct_operation::Event {
+                            order: receipt.order,
+                            accepted_at: receipt.accepted_at,
+                            operation,
+                        });
+                    (200, serde_json::to_value(receipt).unwrap(), false)
                 } else if path.starts_with("/direct/v3/batches/") {
                     let id = path.rsplit('/').next().unwrap();
                     let digest: [u8; 32] = hex::decode(
@@ -446,7 +520,7 @@ async fn desktop_text_original_retry_receive_ack_paging_hide_and_selected_scope(
                             receipt: Receipt {
                                 id: id.into(),
                                 digest,
-                                accepted_at: 123,
+                                accepted_at,
                             },
                             acknowledgements: vec![],
                         }
@@ -476,7 +550,7 @@ async fn desktop_text_original_retry_receive_ack_paging_hide_and_selected_scope(
                             receipt: Receipt {
                                 id,
                                 digest,
-                                accepted_at: 123,
+                                accepted_at,
                             },
                             acknowledgements: vec![],
                         })
@@ -506,7 +580,7 @@ async fn desktop_text_original_retry_receive_ack_paging_hide_and_selected_scope(
                                 receipt: Receipt {
                                     id: id.clone(),
                                     digest: batch.digest().unwrap(),
-                                    accepted_at: 123,
+                                    accepted_at,
                                 },
                                 batch,
                             }
@@ -771,9 +845,173 @@ async fn desktop_text_original_retry_receive_ack_paging_hide_and_selected_scope(
         .iter()
         .all(|m| m.record.id != late.id));
     assert_eq!(
-        d::step(&a.state, late.id).await.unwrap().condition,
+        d::step(&a.state, late.id.clone()).await.unwrap().condition,
         liteseal_core::trusted_devices::messages::coordinator::Condition::Accepted
     );
+    // Exercise the actual typed Rust dispatch path with a selected formal
+    // profile and signed HTTP operations; no renderer-provided keys/paths.
+    let scope = d::snapshot(&a.state).unwrap().notification_scope;
+    let edit_id = uuid::Uuid::new_v4().to_string();
+    let command:Command=serde_json::from_value(serde_json::json!({"name":"prepare_direct_operation","args":{"scope":scope,"id":edit_id,"target":late.id,"createdAt":now(),"action":"edit","text":"桌面已编辑 中文 🦭"}})).unwrap();
+    let prepared = liteseal_desktop::protocol::dispatch(command, &a.state)
+        .await
+        .unwrap();
+    assert_eq!(prepared["task"]["id"], edit_id);
+    let accepted = liteseal_desktop::protocol::dispatch(
+        Command::DirectOperationStep {
+            scope: scope.clone(),
+            id: edit_id.clone(),
+            revision: 0,
+        },
+        &a.state,
+    )
+    .await
+    .unwrap();
+    assert_eq!(accepted["condition"], "accepted");
+    assert_eq!(
+        d::history_peer(&a.state, Some(b.anchor.account.clone()), None)
+            .unwrap()
+            .messages[0]
+            .text
+            .as_deref(),
+        Some("桌面已编辑 中文 🦭")
+    );
+    assert!(d::operations::cancel(&a.state, "wrong-scope".into(), edit_id.clone(), 0).is_err());
+    let cancelled_id = uuid::Uuid::new_v4().to_string();
+    let cancelled = d::operations::prepare(
+        &a.state,
+        scope.clone(),
+        cancelled_id.clone(),
+        late.id.clone(),
+        now(),
+        liteseal_shared::direct_operation::Action::Edit,
+        Some("本机取消".into()),
+    )
+    .await
+    .unwrap()
+    .task
+    .unwrap();
+    assert_eq!(
+        d::operations::cancel(&a.state, scope.clone(), cancelled_id, cancelled.revision)
+            .unwrap()
+            .state,
+        messages::TaskState::Cancelled
+    );
+    let retract_id = uuid::Uuid::new_v4().to_string();
+    d::operations::prepare(
+        &a.state,
+        scope.clone(),
+        retract_id.clone(),
+        late.id.clone(),
+        now(),
+        liteseal_shared::direct_operation::Action::Retract,
+        None,
+    )
+    .await
+    .unwrap();
+    let report = d::operations::process(&a.state).await.unwrap();
+    assert_eq!(
+        report.operation.unwrap().task.state,
+        messages::TaskState::Accepted
+    );
+    let projected = d::history_peer(&a.state, Some(b.anchor.account.clone()), None).unwrap();
+    assert!(projected.messages[0].record.retracted);
+    assert_eq!(projected.messages[0].record.operation_revision, 2);
+    assert!(projected.messages[0].text.is_none());
+    let terminal = d::snapshot(&a.state)
+        .unwrap()
+        .operations
+        .into_iter()
+        .find(|t| t.id == retract_id)
+        .unwrap();
+    d::operations::forget(&a.state, scope.clone(), retract_id, terminal.revision).unwrap();
+    assert!(
+        d::history_peer(&a.state, Some(b.anchor.account.clone()), None)
+            .unwrap()
+            .messages[0]
+            .record
+            .retracted
+    );
+    let mut injected = serde_json::json!({"scope":scope,"id":edit_id,"target":late.id,"createdAt":now(),"action":"edit","text":"test"});
+    injected["secret_key"] = "injected".into();
+    assert!(serde_json::from_value::<Command>(
+        serde_json::json!({"name":"prepare_direct_operation","args":injected})
+    )
+    .is_err());
+    // Current selected v3 identity exports through the actual business dispatch,
+    // then restores an independent reader without any transport calls.
+    let counters = {
+        let w = world.lock().unwrap();
+        (w.publish, w.acks, w.operations.len())
+    };
+    let output = work.0.join("selected-v3.lseal");
+    let command: Command = serde_json::from_value(serde_json::json!({"name":"start_backup_export","args":{"path":output.to_str().unwrap(),"password":"independent selected archive password","includeAttachments":false}})).unwrap();
+    let job = liteseal_desktop::protocol::dispatch(command, &a.state)
+        .await
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let wait = async |id: &str| {
+        for _ in 0..500 {
+            let view = liteseal_desktop::commands::backup::status(&a.state, id).unwrap();
+            if view.state != "running" {
+                return view;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("bounded backup job did not complete");
+    };
+    let result = wait(&job).await;
+    assert_eq!(result.state, "completed", "{:?}", result.error);
+    let restored = liteseal_desktop::commands::backup::start_restore(
+        &a.state,
+        output.to_str().unwrap().into(),
+        work.0.to_str().unwrap().into(),
+        "independent selected archive password".into(),
+    )
+    .unwrap();
+    let result = wait(&restored).await;
+    assert_eq!(result.state, "completed", "{:?}", result.error);
+    let info = liteseal_desktop::commands::backup::open(&a.state, &restored).unwrap();
+    assert_eq!(info["version"], 3);
+    assert_eq!(info["user_id"], a.anchor.account);
+    assert!(info.get("token").is_none());
+    let conversations =
+        liteseal_desktop::commands::backup::conversations(&a.state, &restored, None).unwrap();
+    let conversation = format!("v3:{}", b.anchor.account);
+    assert!(conversations["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|c| c["id"] == conversation && c["kind"] == "direct_v3"));
+    let command:Command=serde_json::from_value(serde_json::json!({"name":"get_backup_history","args":{"id":restored,"kind":"direct_v3","conversationId":conversation}})).unwrap();
+    let page = liteseal_desktop::protocol::dispatch(command, &a.state)
+        .await
+        .unwrap();
+    let projected = page["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == late.id)
+        .unwrap();
+    assert_eq!(projected["text"], "[已撤回]");
+    assert_eq!(projected["operation_revision"], 2);
+    assert_eq!(projected["retracted"], true);
+    let command:Command=serde_json::from_value(serde_json::json!({"name":"get_backup_history","args":{"id":restored,"kind":"direct_v3","conversationId":conversation,"beforeDirect":page["next_direct"]}})).unwrap();
+    let earlier = liteseal_desktop::protocol::dispatch(command, &a.state)
+        .await
+        .unwrap();
+    assert!(!earlier["messages"].as_array().unwrap().is_empty());
+    assert_eq!(
+        {
+            let w = world.lock().unwrap();
+            (w.publish, w.acks, w.operations.len())
+        },
+        counters
+    );
+    liteseal_desktop::commands::backup::reset(&a.state).unwrap();
+    assert!(liteseal_desktop::commands::backup::info(&a.state, &restored).is_err());
     let generation = n::snapshot(&a.state).unwrap().generation;
     n::select(&a.state, None, generation, None).await.unwrap();
     assert!(!d::process(&a.state).await.unwrap().changed);

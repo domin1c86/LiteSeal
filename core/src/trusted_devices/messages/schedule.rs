@@ -7,8 +7,8 @@ use std::{
 };
 #[derive(Default)]
 pub(super) struct State {
-    cursors: [Option<String>; 2],
-    retries: [HashMap<String, Retry>; 2],
+    cursors: [Option<String>; 5],
+    retries: [HashMap<String, Retry>; 5],
 }
 struct Retry {
     revision: (u64, u64),
@@ -75,6 +75,119 @@ impl State {
     }
 }
 impl MessageCoordinator {
+    pub async fn drive_history_send(
+        &self,
+        keys: &KeyPair,
+    ) -> Result<Option<liteseal_shared::history_transfer::RelayStatus>> {
+        let lease = self.lease(keys)?;
+        let jobs = self.with(&lease, |s| s.history_relay_jobs(keys))?;
+        let rows: Vec<_> = jobs
+            .iter()
+            .filter(|j| j.active() && !j.paused)
+            .map(|j| Candidate {
+                id: j.id.clone(),
+                revision: (j.revision, 0),
+                cancel: j.cancel_requested,
+                blob: false,
+            })
+            .collect();
+        let picked = self
+            .schedule
+            .lock()
+            .map_err(|_| local("schedule".into()))?
+            .pick(3, &rows, Instant::now());
+        let Some(index) = picked else { return Ok(None) };
+        let row = &rows[index];
+        let old = jobs
+            .iter()
+            .find(|j| j.id == row.id)
+            .ok_or_else(|| local("history job".into()))?;
+        let result = self
+            .history_relay_job_step(&row.id, row.revision.0, keys)
+            .await;
+        let progressed = result
+            .as_ref()
+            .is_ok_and(|r| r.state != old.state || r.next != old.next);
+        self.schedule
+            .lock()
+            .map_err(|_| local("schedule".into()))?
+            .result(3, row, progressed, Instant::now());
+        result.map(Some)
+    }
+    pub async fn drive_history_receive(
+        &self,
+        keys: &KeyPair,
+    ) -> Result<Option<RelayReceiveProgress>> {
+        let lease = self.lease(keys)?;
+        self.with(&lease, |s| {
+            s.cleanup_history_receive(chrono::Utc::now().timestamp_millis(), keys)
+        })?;
+        let receives = self.with(&lease, |s| s.history_receives(keys))?;
+        let rows: Vec<_> = receives
+            .iter()
+            .filter(|r| !r.paused)
+            .map(|r| Candidate {
+                id: r.id.clone(),
+                revision: (r.revision, 0),
+                cancel: false,
+                blob: false,
+            })
+            .collect();
+        let picked = self
+            .schedule
+            .lock()
+            .map_err(|_| local("schedule".into()))?
+            .pick(4, &rows, Instant::now());
+        let Some(index) = picked else { return Ok(None) };
+        let row = &rows[index];
+        let old = receives
+            .iter()
+            .find(|r| r.id == row.id)
+            .ok_or_else(|| local("history receive".into()))?;
+        let result = self.receive_history_relay_id(Some(&row.id), keys).await;
+        let progressed = result
+            .as_ref()
+            .is_ok_and(|r| r.imported || r.downloaded > old.downloaded);
+        self.schedule
+            .lock()
+            .map_err(|_| local("schedule".into()))?
+            .result(4, row, progressed, Instant::now());
+        result.map(Some)
+    }
+    /// The operation lane shares rotation/backoff policy but cannot delay text
+    /// polling or media chunks. A saved cancellation always takes priority.
+    pub async fn drive_operations(&self, keys: &KeyPair) -> Result<Option<OperationProgress>> {
+        let lease = self.lease(keys)?;
+        let tasks = self.with(&lease, |s| s.operation_tasks(keys))?;
+        let rows: Vec<_> = tasks
+            .iter()
+            .filter(|t| !matches!(t.state, TaskState::Accepted | TaskState::Cancelled))
+            .map(|t| Candidate {
+                id: t.id.clone(),
+                revision: (t.revision, 0),
+                cancel: t.cancel_requested,
+                blob: false,
+            })
+            .collect();
+        let picked = self
+            .schedule
+            .lock()
+            .map_err(|_| local("schedule".into()))?
+            .pick(2, &rows, Instant::now());
+        let Some(index) = picked else {
+            return Ok(None);
+        };
+        let row = &rows[index];
+        let result = self.operation_step(&row.id, keys).await;
+        let progress = result
+            .as_ref()
+            .is_ok_and(|p| matches!(p.condition, Condition::Accepted | Condition::Cancelled));
+        self.schedule
+            .lock()
+            .map_err(|_| local("schedule".into()))?
+            .result(2, row, progress, Instant::now());
+        result.map(Some)
+    }
     /// Text lane advances text and cancellation fences. Media lane advances
     /// only explicit send/download intent, or an already prepared original.
     pub async fn drive(&self, media_lane: bool, keys: &KeyPair) -> Result<Drive> {

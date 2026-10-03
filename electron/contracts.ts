@@ -17,8 +17,38 @@ export interface DirectMediaStorage {
   database_allocated:number;database_reusable:number;disk_bytes:number;
   peers:{peer:string;bytes:number;clearable_bytes:number;protected_tasks:number;clearable_tasks:number}[];
 }
+export interface HistoryTransfer {id:string;revision:number;state:"prepared"|"imported"|"cancelled";peer:string;source_device:string;target_device:string;selected:number;created_at:number;expires_at:number;digest:number[];bytes:number}
+export interface TransferredRecord {id:string;peer:string;sender:string;sender_device:string;sent_at:number;accepted_at:number;operation_revision:number;retracted:boolean;kind:string;text:string|null;media:{name:string;mime:string;size:number;duration_ms:number|null;cached:boolean}|null;transfer:string;verification:"authorized_history_transfer"}
+export interface TransferredHistory {messages:TransferredRecord[];next_cursor:string|null}
 export interface CommandMap {
+  get_audio_targets:{args:{scope:string;peer:string};result:AudioTarget[]};
+  begin_audio_call:{args:{scope:string;peer:string;device:string};result:AudioView};
+  prepare_audio_signal:{args:{scope:string;id:string;kind:AudioSignal["kind"];sdp?:string};result:string};
+  publish_audio_signal:{args:{scope:string;handle:string};result:void};
+  open_audio_signal:{args:{scope:string;handle:string};result:AudioSignal};
+  retire_audio_call:{args:{scope:string;id:string};result:void};
+  process_audio_calls:{args:{};result:AudioReport};
+  process_direct_history:{args:{receive:boolean};result:CommandMap["process_direct_chat"]["result"]};
+  set_direct_history_pause:{args:{scope:string;id:string;revision:number;receive:boolean;paused:boolean;abandon:boolean};result:void};
+  direct_history_relay_step:{args:{scope:string;id:string;revision:number};result:{id:string;digest:number[];state:"staging"|"ready"|"permitted"|"received"|"cancelled"|"expired"|"ineligible";next:number}};
+  cancel_direct_history_relay:CommandMap["direct_history_relay_step"];
+  receive_direct_history_relay:{args:{scope:string};result:{id:string|null;downloaded:number;total:number;imported:boolean}};
   get_direct_chat:{args:{};result:DirectSnapshot};
+  get_direct_history_transfers:{args:{scope:string};result:{targets:{device:string;encryption_fingerprint:string;signing_fingerprint:string}[];transfers:HistoryTransfer[];relay_jobs:{id:string;revision:number;source_revision:number;paused:boolean;cancel_requested:boolean;state:CommandMap["direct_history_relay_step"]["result"]["state"];next:number;total:number}[];receiving:{id:string;revision:number;paused:boolean;abandoned:boolean;downloaded:number;total:number;expires_at:number}[]}};
+  prepare_direct_history_transfer:{args:{scope:string;id:string;account:string;target:string;selection:string[];createdAt:number;includeMedia:boolean};result:HistoryTransfer};
+  cancel_direct_history_transfer:{args:{scope:string;id:string;revision:number};result:HistoryTransfer};
+  export_direct_history_transfer:{args:{scope:string;id:string;revision:number};result:string|null};
+  import_direct_history_transfer:{args:{scope:string};result:HistoryTransfer|null};
+  get_transferred_history:{args:{scope:string;account?:string|null;before?:string|null};result:TransferredHistory};
+  hide_transferred_message:{args:{scope:string;id:string};result:void};
+  export_transferred_media:{args:{scope:string;id:string};result:string|null};
+  get_backup_transferred_history:{args:{id:string;account:string;before?:string|null};result:TransferredHistory};
+  export_backup_transferred_media:{args:{id:string;messageId:string};result:string|null};
+  prepare_direct_operation:{args:{scope:string;id:string;target:string;createdAt:number;action:"edit"|"retract";text?:string|null};result:DirectOperationPreparation};
+  direct_operation_step:{args:{scope:string;id:string;revision:number};result:DirectOperationProgress};
+  cancel_direct_operation:{args:{scope:string;id:string;revision:number};result:DirectOperationTask};
+  forget_direct_operation:{args:{scope:string;id:string;revision:number};result:void};
+  process_direct_operations:{args:{};result:CommandMap["process_direct_chat"]["result"]};
   get_direct_media_tasks:{args:{scope:string};result:DirectMediaTask[]};
   set_direct_media_transfer:{args:{scope:string;id:string;revision:number;paused:boolean};result:DirectMediaTask};
   get_direct_media_info:{args:{scope:string;id:string};result:DirectMediaInfo};
@@ -51,7 +81,7 @@ export interface CommandMap {
   cancel_direct_task:{args:{id:string};result:DirectTask};
   forget_direct_task:{args:{id:string};result:void};
   hide_direct_message:{args:{id:string};result:void};
-  process_direct_chat:{args:{};result:{changed:boolean;task:DirectProgress|null;media?:{task:DirectMediaTask;condition:DirectCondition;http_status:number|null}|null;errors?:string[];poll:{condition:DirectCondition;received:number;acknowledged:number;has_more:boolean;http_status:number|null}|null;notification_scope:string|null;notifications:{peer:string;id:string}[]}};
+  process_direct_chat:{args:{};result:{changed:boolean;operation?:DirectOperationProgress|null;operation_poll?:{condition:DirectCondition;received:number;has_more:boolean;http_status:number|null}|null;task:DirectProgress|null;media?:{task:DirectMediaTask;condition:DirectCondition;http_status:number|null}|null;errors?:string[];poll:{condition:DirectCondition;received:number;acknowledged:number;has_more:boolean;http_status:number|null}|null;notification_scope:string|null;notifications:{peer:string;id:string}[]}};
   process_direct_media:{args:{};result:CommandMap["process_direct_chat"]["result"]};
   get_normal_profile:{args:{};result:NormalProfileSnapshot};
   select_normal_profile:{args:{target:RefreshTarget;generation:number;scopeFingerprint:string};result:NormalProfileSnapshot};
@@ -124,8 +154,8 @@ export interface CommandMap {
   open_backup_archive: { args: { id: string }; result: BackupArchiveInfo };
   get_backup_archive_info: { args: { id: string }; result: BackupArchiveInfo };
   get_backup_conversations: { args: { id: string; after?: string }; result: { items: BackupConversation[]; next: string | null } };
-  get_backup_history: { args: { id: string; kind: "direct" | "group"; conversationId: string; beforeTime?: number; beforeId?: string; beforeGroup?: number }; result: BackupHistory };
-  export_backup_attachment: { args: { id: string; messageId: string; groupId?:string; preview?: boolean }; result: string | null };
+  get_backup_history: { args: { id: string; kind: "direct" | "direct_v3" | "group"; conversationId: string; beforeTime?: number; beforeId?: string; beforeGroup?: number; beforeDirect?: number }; result: BackupHistory };
+  export_backup_attachment: { args: { id: string; messageId: string; groupId?:string; directV3?:boolean; preview?: boolean }; result: string | null };
   close_backup_archive: { args: {}; result: void };
   get_group_collaboration: { args: { groupId: string; messageIds?: string[] }; result: GroupCollaboration };
   sync_group_collaboration: { args: { groupId: string }; result: boolean };
@@ -262,9 +292,9 @@ export interface DeviceControlSnapshot { root_fingerprint: string; supported: bo
 export interface DeviceProgress { task: DeviceTask; condition: "advanced" | "waiting" | "needs_password" | "needs_confirmation" | "syncing" | "retry" | "session_required" | "unsupported" | "conflict" | "terminal" | "unsigned_abandoned"; http_status: number | null }
 export interface BackupSummary { messages: number; groups: number; attachments: number; missing_attachments: number; skipped_attachments: number }
 export interface BackupJob { id: string; state: "running" | "completed" | "failed" | "cancelled"; completed: number; total: number; summary: BackupSummary | null; error: string | null; restorable: boolean }
-export interface BackupArchiveInfo { id: string; user_id: string; device_id: string; server_url: string; fingerprint: string; signing_fingerprint: string; summary: BackupSummary }
-export interface BackupConversation { id: string; kind: "direct" | "group"; name: string }
-export interface BackupHistory { messages: { id: string; sender: string; timestamp: number; text: string; status: string }[]; next?: { time: number; id: string } | null; next_group?: number | null; collaboration?: GroupCollaboration; extensions?:GroupExtensions; draft?: string; reactions?: { target_id: string; actor: string; emoji: string }[] }
+export interface BackupArchiveInfo { id: string; version?: number; user_id: string; device_id: string; server_url: string; fingerprint: string; signing_fingerprint: string; summary: BackupSummary }
+export interface BackupConversation { id: string; kind: "direct" | "direct_v3" | "group"; name: string }
+export interface BackupHistory { messages: { id: string; sender: string; timestamp: number; text: string; status: string; operation_revision?:number; retracted?:boolean; media?:{name:string;mime:string;size:number;duration_ms?:number;included:boolean}|null }[]; next?: { time: number; id: string } | null; next_group?: number | null; next_direct?:number|null; muted?:boolean; collaboration?: GroupCollaboration; extensions?:GroupExtensions; draft?: string; reactions?: { target_id: string; actor: string; emoji: string }[] }
 export interface GroupMember { user_id: string; device_id: string; name: string; fingerprint: string; joined_epoch: number }
 export interface GroupView { id: string; name: string; owner: string; epoch: number; closed: boolean; active: boolean; trusted: boolean; members: GroupMember[]; unread: number; pending: boolean; muted: boolean }
 export interface GroupMessage { id: string; sender_user_id: string; sender_device_id: string; sent_at: number; text: string; status: string }
@@ -283,28 +313,39 @@ export interface DirectTask{id:string;revision:number;state:"prepared"|"publishi
 export interface DirectProgress{task:DirectTask;condition:DirectCondition;http_status:number|null}
 export interface DirectPreparation{task:DirectTask|null;condition:DirectCondition;http_status:number|null}
 export interface DirectConversation{peer:string;revision:number;muted:boolean;unread:number;latest_id:string|null;latest_cursor:number|null;has_draft:boolean}
-export interface DirectSnapshot{notification_scope:string;identity:DirectPeer;device:string;peers:DirectPeer[];conversations:DirectConversation[];tasks:DirectTask[];can_network:boolean}
-export interface DirectHistory{messages:{cursor:number;id:string;sender:string;sender_device:string;peer:string;role:string;kind:string;outcome:string;sent_at:number;accepted_at:number;text:string|null;media?:DirectMediaInfo|null}[];next_cursor:number|null}
+export interface DirectOperationTask{id:string;target:string;peer:string;revision:number;operation_revision:number;action:"edit"|"retract";state:DirectTask["state"];digest:number[];cancel_requested:boolean}
+export interface DirectOperationProgress{task:DirectOperationTask;condition:DirectCondition;http_status:number|null}
+export interface DirectOperationPreparation{task:DirectOperationTask|null;condition:DirectCondition;http_status:number|null}
+export interface DirectSnapshot{notification_scope:string;identity:DirectPeer;device:string;peers:DirectPeer[];conversations:DirectConversation[];tasks:DirectTask[];operations:DirectOperationTask[];can_network:boolean}
+export interface DirectHistory{messages:{cursor:number;id:string;sender:string;sender_device:string;peer:string;role:string;kind:string;outcome:string;sent_at:number;accepted_at:number;text:string|null;media?:DirectMediaInfo|null;operation_revision?:number;retracted?:boolean;transferred_update?:boolean}[];next_cursor:number|null}
 export interface NormalProfileChoice{target:RefreshTarget;scope_fingerprint:string;origin:string;account:string;device:string;device_name:string;protocol:string;has_session:boolean;eligible:boolean;access_expired:boolean}
 export interface NormalProfileSnapshot{generation:number;explicit:boolean;selected:NormalProfileChoice|null;error:string|null;profiles:{target:RefreshTarget;profile:NormalProfileChoice|null;error:string|null}[]}
 export interface RefreshCurrent{generation:number;account:string;device:string;session:string;has_credentials:boolean;access_expired:boolean;eligible:boolean;access_expires_at:number;refresh_expires_at:number}
 export interface RefreshTask{id:string;revision:number;stage:"prepared"|"started"|"proving"|"conflict"|"complete"|"cancelled"|"ended";current:boolean;cancel_requested:boolean}
 export interface RefreshProgress{task:RefreshTask;condition:"complete"|"cancelled"|"ended"|"superseded"|"ineligible"|"retry"|"conflict"|"pending";http_status:number|null}
 export interface RefreshSnapshot{target:RefreshTarget;current:RefreshCurrent|null;tasks:RefreshTask[]}
+export interface AudioTarget {device:string;encryption_fingerprint:string;signing_fingerprint:string}
+export interface AudioView {id:string;peer:string;target:AudioTarget}
+export interface AudioSignal {id:string;kind:"offer"|"answer"|"restart"|"reject"|"hangup";sdp?:string}
+export interface AudioReport {scope:string|null;call:AudioView|null;handle:string|null;closed:string|null;unavailable?:boolean}
 export type DesktopApi = {
   // The mapped business API never exposes private attachment descriptors.
-  [K in Exclude<CommandName, "stage_direct_media" | "write_direct_media" | "suspend_device_control" | "resume_device_control" | "process_session_refreshes" | "process_direct_chat" | "process_direct_media">]: (args: CommandMap[K]["args"]) => Promise<CommandMap[K]["result"]>;
+  [K in Exclude<CommandName, "stage_direct_media" | "write_direct_media" | "suspend_device_control" | "resume_device_control" | "process_session_refreshes" | "process_direct_chat" | "process_direct_media" | "process_direct_operations" | "process_direct_history" | "process_audio_calls">]: (args: CommandMap[K]["args"]) => Promise<CommandMap[K]["result"]>;
 };
 export type GroupAnswer="yes"|"no"|"maybe";
 export interface GroupActivity { id:string;creator:string;title:string;start_at:number;timezone:string;location:string;description:string;responses:Record<string,GroupAnswer>;participants:string[];departed:string[];closed:boolean;cancelled:boolean;eligible:boolean;can_manage:boolean;revision:number }
 export interface GroupExtensions { attachments:{id:string;blob:string;name:string;size:number;mime:string;duration_ms:number|null}[];activities:GroupActivity[];pending:boolean;conflict:boolean;pending_root:string|null }
 export type GroupExtensionCommand={kind:"activity";title:string;start_at:number;timezone:string;location:string;description:string}|{kind:"respond";activity:string;answer:GroupAnswer;revision:number}|{kind:"close"|"cancel";activity:string;revision:number};
 export const commandNames = [
+  "get_audio_targets","begin_audio_call","prepare_audio_signal","publish_audio_signal","open_audio_signal","retire_audio_call",
   "get_direct_media_storage","clear_direct_media_cache","set_direct_media_transfer","get_direct_media_tasks","get_direct_media_info","select_direct_media","stage_direct_file","stage_direct_voice","stage_direct_clipboard","direct_media_step","prepare_direct_media","begin_direct_media_download","cancel_direct_media","clear_direct_media","export_direct_media","close_direct_media_preview",
   "get_direct_draft","save_direct_draft",
   "mark_direct_read","set_direct_muted",
   "set_direct_notification_context","take_direct_notification_target",
   "get_direct_chat","get_direct_history","inspect_direct_peer","confirm_direct_peer","prepare_direct_text","direct_task_step","cancel_direct_task","forget_direct_task","hide_direct_message",
+  "set_direct_history_pause",
+  "direct_history_relay_step","cancel_direct_history_relay","receive_direct_history_relay","get_direct_history_transfers","prepare_direct_history_transfer","cancel_direct_history_transfer","export_direct_history_transfer","import_direct_history_transfer","get_transferred_history","hide_transferred_message","export_transferred_media","get_backup_transferred_history","export_backup_transferred_media",
+  "prepare_direct_operation","direct_operation_step","cancel_direct_operation","forget_direct_operation",
   "get_normal_profile","select_normal_profile","clear_normal_profile",
   "get_session_refresh","prepare_session_refresh","session_refresh_step","cancel_session_refresh","forget_session_refresh",
   "get_root_messaging", "check_root_messaging", "prepare_root_messaging", "root_messaging_step", "cancel_root_messaging", "forget_root_messaging",

@@ -9,6 +9,9 @@ use liteseal_shared::{
 use reqwest::{Method, RequestBuilder};
 use serde::de::DeserializeOwned;
 use std::collections::HashSet;
+#[path = "history_api.rs"]
+mod history_api;
+pub use history_api::HistoryAction;
 #[derive(Debug)]
 pub struct ApiError {
     pub status: Option<u16>,
@@ -74,6 +77,22 @@ pub struct AuthenticatedOperations {
     pub(super) device: String,
     pub(super) after: i64,
 }
+pub struct AuthenticatedOperationResult {
+    pub(super) outcome: liteseal_shared::direct_operation::Outcome,
+    pub(super) origin: String,
+    pub(super) account: String,
+    pub(super) device: String,
+    pub(super) digest: [u8; 32],
+}
+impl AuthenticatedOperationResult {
+    pub fn state(&self) -> RemoteState {
+        match self.outcome {
+            liteseal_shared::direct_operation::Outcome::Unknown { .. } => RemoteState::Unknown,
+            liteseal_shared::direct_operation::Outcome::Cancelled { .. } => RemoteState::Cancelled,
+            liteseal_shared::direct_operation::Outcome::Accepted { .. } => RemoteState::Accepted,
+        }
+    }
+}
 impl AuthenticatedOperations {
     pub fn len(&self) -> usize {
         self.page.events.len()
@@ -99,6 +118,7 @@ impl AuthenticatedPage {
         self.page.has_more
     }
 }
+#[derive(Clone)]
 pub struct DirectApi {
     origin: String,
     client: reqwest::Client,
@@ -110,6 +130,155 @@ pub struct MediaObject<'a> {
     pub reference: &'a Reference,
 }
 impl DirectApi {
+    pub(super) async fn audio_reserve(&self, token: &str, admission: &liteseal_shared::voice_call::Admission)
+        -> Result<liteseal_shared::voice_call::Reservation, ApiError> {
+        let result: liteseal_shared::voice_call::Reservation = self.json(self.request(Method::POST,
+            "/audio/v1/admit", token)?.timeout(std::time::Duration::from_secs(5)).json(admission), 4096).await?;
+        if result.id != admission.header.id || result.ticket.len() != 64
+            || !result.ticket.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) { return Err(invalid()); }
+        Ok(result)
+    }
+    pub(super) async fn audio_signal(&self, token: &str, input: &liteseal_shared::voice_call::Submission)
+        -> Result<(), ApiError> {
+        let result: liteseal_shared::voice_call::Receipt = self.json(self.request(Method::POST,
+            "/audio/v1/signal", token)?.timeout(std::time::Duration::from_secs(5)).json(input), 4096).await?;
+        if result.id != input.envelope.header.id || result.sequence != input.envelope.header.sequence
+            || result.digest != input.envelope.digest().map_err(|_| invalid())? { return Err(invalid()); }
+        Ok(())
+    }
+    pub(super) async fn audio_pending(&self, token: &str, device: &str, active: Option<&str>)
+        -> Result<liteseal_shared::voice_call::Pending, ApiError> {
+        let mut request = self.request(Method::GET, "/audio/v1/pending", token)?
+            .timeout(std::time::Duration::from_secs(5)).query(&[("device", device)]);
+        if let Some(active) = active { request = request.query(&[("active", active)]); }
+        let result: liteseal_shared::voice_call::Pending = self.json(request, 1024 * 1024).await?;
+        if result.closed.as_deref().is_some_and(|id| Some(id) != active) { return Err(invalid()); }
+        if let Some(delivery) = &result.delivery {
+            if delivery.envelope.header.target.device.device_id != device || delivery.admission.header.origin != self.origin
+                || delivery.ticket.len() != 64 || !delivery.ticket.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+                return Err(invalid());
+            }
+        }
+        Ok(result)
+    }
+    pub(super) async fn audio_ack(&self, token: &str, input: &liteseal_shared::voice_call::Acknowledge)
+        -> Result<(), ApiError> {
+        let result: liteseal_shared::voice_call::Receipt = self.json(self.request(Method::POST,
+            "/audio/v1/ack", token)?.timeout(std::time::Duration::from_secs(5)).json(input), 4096).await?;
+        if result.id != input.receipt.id || result.sequence != input.receipt.sequence || result.digest != input.receipt.digest { return Err(invalid()); }
+        Ok(())
+    }
+    pub(super) async fn audio_stop(&self, token: &str, input: &liteseal_shared::voice_call::Stop)
+        -> Result<(), ApiError> {
+        let id: String = self.json(self.request(Method::POST, "/audio/v1/stop", token)?
+            .timeout(std::time::Duration::from_secs(5)).json(input), 4096).await?;
+        if id != input.admission.header.id { return Err(invalid()); }
+        Ok(())
+    }
+    fn bind_operation(
+        &self,
+        operation: &liteseal_shared::direct_operation::Operation,
+        outcome: liteseal_shared::direct_operation::Outcome,
+        allow_unknown: bool,
+    ) -> Result<AuthenticatedOperationResult, ApiError> {
+        use liteseal_shared::direct_operation::Outcome;
+        self.bound_batch(&operation.original)?;
+        id(&operation.header.id)?;
+        let digest = operation.digest().map_err(|_| invalid())?;
+        match &outcome {
+            Outcome::Unknown { id, digest: other }
+                if allow_unknown && *id == operation.header.id && *other == digest => {}
+            Outcome::Cancelled { id, digest: other }
+                if *id == operation.header.id && *other == digest => {}
+            Outcome::Accepted { receipt }
+                if receipt.id == operation.header.id
+                    && receipt.digest == digest
+                    && receipt.revision == operation.header.revision
+                    && receipt.order > 0
+                    && (1..=8_640_000_000_000_000).contains(&receipt.accepted_at) => {}
+            _ => return Err(invalid()),
+        }
+        Ok(AuthenticatedOperationResult {
+            outcome,
+            origin: self.origin.clone(),
+            account: operation.original.header.sender.clone(),
+            device: operation.original.header.sender_device.clone(),
+            digest,
+        })
+    }
+    pub async fn operation_lookup(
+        &self,
+        token: &str,
+        operation: &liteseal_shared::direct_operation::Operation,
+    ) -> Result<AuthenticatedOperationResult, ApiError> {
+        self.bound_batch(&operation.original)?;
+        id(&operation.header.id)?;
+        let result = self
+            .json(
+                self.request(
+                    Method::GET,
+                    &format!("/direct/v3/operations/{}/outcome", operation.header.id),
+                    token,
+                )?
+                .query(&[
+                    (
+                        "device_id",
+                        operation.original.header.sender_device.as_str(),
+                    ),
+                    (
+                        "digest",
+                        &hex::encode(operation.digest().map_err(|_| invalid())?),
+                    ),
+                ]),
+                4096,
+            )
+            .await?;
+        self.bind_operation(operation, result, true)
+    }
+    pub async fn operation_publish(
+        &self,
+        token: &str,
+        operation: &liteseal_shared::direct_operation::Operation,
+    ) -> Result<AuthenticatedOperationResult, ApiError> {
+        self.bound_batch(&operation.original)?;
+        id(&operation.header.id)?;
+        let wire = operation.to_wire().map_err(|_| invalid())?;
+        let receipt = self
+            .json(
+                self.request(Method::POST, "/direct/v3/operations", token)?
+                    .header("content-type", "application/json")
+                    .body(wire),
+                4096,
+            )
+            .await?;
+        self.bind_operation(
+            operation,
+            liteseal_shared::direct_operation::Outcome::Accepted { receipt },
+            false,
+        )
+    }
+    pub async fn operation_cancel(
+        &self,
+        token: &str,
+        operation: &liteseal_shared::direct_operation::Operation,
+    ) -> Result<AuthenticatedOperationResult, ApiError> {
+        self.bound_batch(&operation.original)?;
+        id(&operation.header.id)?;
+        let wire = operation.to_wire().map_err(|_| invalid())?;
+        let result = self
+            .json(
+                self.request(
+                    Method::POST,
+                    &format!("/direct/v3/operations/{}/cancel", operation.header.id),
+                    token,
+                )?
+                .header("content-type", "application/json")
+                .body(wire),
+                4096,
+            )
+            .await?;
+        self.bind_operation(operation, result, false)
+    }
     pub async fn operations(
         &self,
         token: &str,

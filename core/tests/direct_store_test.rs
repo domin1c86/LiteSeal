@@ -1,4 +1,10 @@
 #![cfg(windows)]
+#[path = "support/direct_archive_cases.rs"]
+mod archives;
+#[path = "support/direct_expiry_cases.rs"]
+mod expiry;
+#[path = "support/direct_history_cases.rs"]
+mod history_transfer;
 #[path = "support/direct_operation_cases.rs"]
 mod operations;
 use liteseal_core::{

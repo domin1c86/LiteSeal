@@ -85,6 +85,8 @@ fn migrations() -> &'static [(i64, &'static str)] {
         (21, crate::device_activation::refresh::MIGRATION),
         (22, crate::direct_messages::media::MIGRATION),
         (23, crate::direct_messages::operations::MIGRATION),
+        (24, crate::direct_messages::operations::CANCEL_MIGRATION),
+        (25, crate::direct_messages::history::MIGRATION),
     ]
 }
 

@@ -283,6 +283,15 @@ impl LitesealClient {
     }
 
     pub async fn poll_messages(&self) -> Result<PollMessagesResult, String> {
+        self.poll_messages_bounded(usize::MAX).await
+    }
+
+    /// A background worker drains a bounded batch and leaves the remainder for
+    /// the next wake-up. Persistence and ACK rules are identical to foreground.
+    pub async fn poll_messages_bounded(&self, limit: usize) -> Result<PollMessagesResult, String> {
+        if limit == 0 {
+            return Err("Poll batch must not be empty".into());
+        }
         let mut recv_guard = self.msg_receiver.lock().await;
         let rx = recv_guard.as_mut().ok_or("Not connected to relay server")?;
         if rx.is_closed() && rx.is_empty() {
@@ -297,7 +306,10 @@ impl LitesealClient {
         let mut messages = Vec::new();
         let mut events = Vec::new();
 
-        while let Ok(msg) = rx.try_recv() {
+        let mut processed = 0;
+        while processed < limit {
+            let Ok(msg) = rx.try_recv() else { break };
+            processed += 1;
             match msg {
                 ServerMessage::MessageV2 { envelope, .. } => {
                     let message_id = envelope.message_id.clone();

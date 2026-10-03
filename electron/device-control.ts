@@ -2,6 +2,9 @@ import type { CommandName } from "./contracts";
 import type { DesktopBridge } from "./bridge";
 
 export const deviceCommands = new Set<CommandName>([
+  "get_audio_targets","begin_audio_call","prepare_audio_signal","publish_audio_signal","open_audio_signal","retire_audio_call",
+  "set_direct_history_pause",
+  "direct_history_relay_step","cancel_direct_history_relay","receive_direct_history_relay","get_direct_history_transfers","prepare_direct_history_transfer","cancel_direct_history_transfer","export_direct_history_transfer","import_direct_history_transfer","get_transferred_history","hide_transferred_message","export_transferred_media",
   "get_direct_media_storage","clear_direct_media_cache","set_direct_media_transfer","get_direct_media_tasks","get_direct_media_info","select_direct_media","stage_direct_file","stage_direct_voice","stage_direct_clipboard","direct_media_step","prepare_direct_media","begin_direct_media_download","cancel_direct_media","clear_direct_media","export_direct_media","close_direct_media_preview",
   "get_direct_draft","save_direct_draft",
   "mark_direct_read","set_direct_muted",

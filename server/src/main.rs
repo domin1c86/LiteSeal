@@ -103,6 +103,8 @@ fn build_router(state: AppState, allowed_origin: HeaderValue) -> Router {
         .route("/attachments", post(attachments::create))
         .merge(direct_messages::media::router())
         .merge(direct_messages::operations::router())
+        .merge(direct_messages::history::router())
+        .merge(direct_messages::audio::router())
         .route(
             "/attachments/:id/:part",
             get(attachments::download).put(attachments::upload),

@@ -16,7 +16,7 @@ namespace jsi = facebook::jsi;
 extern "C" {
     typedef void
     (*UniffiRustFutureContinuationCallback)(
-    uint64_t data, 
+    uint64_t data,
     int8_t poll_result
     );
     typedef void
@@ -39,7 +39,7 @@ extern "C" {
     } UniffiForeignFutureResultU8;
     typedef void
     (*UniffiForeignFutureCompleteU8)(
-    uint64_t callback_data, 
+    uint64_t callback_data,
     UniffiForeignFutureResultU8 result
     );typedef struct UniffiForeignFutureResultI8 {
         int8_t return_value;
@@ -47,7 +47,7 @@ extern "C" {
     } UniffiForeignFutureResultI8;
     typedef void
     (*UniffiForeignFutureCompleteI8)(
-    uint64_t callback_data, 
+    uint64_t callback_data,
     UniffiForeignFutureResultI8 result
     );typedef struct UniffiForeignFutureResultU16 {
         uint16_t return_value;
@@ -55,7 +55,7 @@ extern "C" {
     } UniffiForeignFutureResultU16;
     typedef void
     (*UniffiForeignFutureCompleteU16)(
-    uint64_t callback_data, 
+    uint64_t callback_data,
     UniffiForeignFutureResultU16 result
     );typedef struct UniffiForeignFutureResultI16 {
         int16_t return_value;
@@ -63,7 +63,7 @@ extern "C" {
     } UniffiForeignFutureResultI16;
     typedef void
     (*UniffiForeignFutureCompleteI16)(
-    uint64_t callback_data, 
+    uint64_t callback_data,
     UniffiForeignFutureResultI16 result
     );typedef struct UniffiForeignFutureResultU32 {
         uint32_t return_value;
@@ -71,7 +71,7 @@ extern "C" {
     } UniffiForeignFutureResultU32;
     typedef void
     (*UniffiForeignFutureCompleteU32)(
-    uint64_t callback_data, 
+    uint64_t callback_data,
     UniffiForeignFutureResultU32 result
     );typedef struct UniffiForeignFutureResultI32 {
         int32_t return_value;
@@ -79,7 +79,7 @@ extern "C" {
     } UniffiForeignFutureResultI32;
     typedef void
     (*UniffiForeignFutureCompleteI32)(
-    uint64_t callback_data, 
+    uint64_t callback_data,
     UniffiForeignFutureResultI32 result
     );typedef struct UniffiForeignFutureResultU64 {
         uint64_t return_value;
@@ -87,7 +87,7 @@ extern "C" {
     } UniffiForeignFutureResultU64;
     typedef void
     (*UniffiForeignFutureCompleteU64)(
-    uint64_t callback_data, 
+    uint64_t callback_data,
     UniffiForeignFutureResultU64 result
     );typedef struct UniffiForeignFutureResultI64 {
         int64_t return_value;
@@ -95,7 +95,7 @@ extern "C" {
     } UniffiForeignFutureResultI64;
     typedef void
     (*UniffiForeignFutureCompleteI64)(
-    uint64_t callback_data, 
+    uint64_t callback_data,
     UniffiForeignFutureResultI64 result
     );typedef struct UniffiForeignFutureResultF32 {
         float return_value;
@@ -103,7 +103,7 @@ extern "C" {
     } UniffiForeignFutureResultF32;
     typedef void
     (*UniffiForeignFutureCompleteF32)(
-    uint64_t callback_data, 
+    uint64_t callback_data,
     UniffiForeignFutureResultF32 result
     );typedef struct UniffiForeignFutureResultF64 {
         double return_value;
@@ -111,7 +111,7 @@ extern "C" {
     } UniffiForeignFutureResultF64;
     typedef void
     (*UniffiForeignFutureCompleteF64)(
-    uint64_t callback_data, 
+    uint64_t callback_data,
     UniffiForeignFutureResultF64 result
     );typedef struct UniffiForeignFutureResultRustBuffer {
         RustBuffer return_value;
@@ -119,177 +119,141 @@ extern "C" {
     } UniffiForeignFutureResultRustBuffer;
     typedef void
     (*UniffiForeignFutureCompleteRustBuffer)(
-    uint64_t callback_data, 
+    uint64_t callback_data,
     UniffiForeignFutureResultRustBuffer result
     );typedef struct UniffiForeignFutureResultVoid {
         RustCallStatus call_status;
     } UniffiForeignFutureResultVoid;
     typedef void
     (*UniffiForeignFutureCompleteVoid)(
-    uint64_t callback_data, 
+    uint64_t callback_data,
     UniffiForeignFutureResultVoid result
     );
     /*handle*/ uint64_t uniffi_liteseal_core_fn_clone_litesealcore(
-        /*handle*/ uint64_t handle, 
+        /*handle*/ uint64_t handle,
         RustCallStatus *uniffi_out_err
     );
     void uniffi_liteseal_core_fn_free_litesealcore(
-        /*handle*/ uint64_t handle, 
+        /*handle*/ uint64_t handle,
         RustCallStatus *uniffi_out_err
     );
     /*handle*/ uint64_t uniffi_liteseal_core_fn_constructor_litesealcore_new(
-        RustBuffer db_path, 
+        RustBuffer db_path,
         RustCallStatus *uniffi_out_err
     );
     void uniffi_liteseal_core_fn_method_litesealcore_add_contact(
-        /*handle*/ uint64_t ptr, 
-        RustBuffer user_id, 
-        RustBuffer username, 
-        RustBuffer public_key, 
-        RustBuffer ed25519_pk, 
+        /*handle*/ uint64_t ptr,
+        RustBuffer user_id,
+        RustBuffer username,
+        RustBuffer public_key,
+        RustBuffer ed25519_pk,
         RustCallStatus *uniffi_out_err
     );
     uint64_t uniffi_liteseal_core_fn_method_litesealcore_clear_expired_messages(
-        /*handle*/ uint64_t ptr, 
+        /*handle*/ uint64_t ptr,
         RustCallStatus *uniffi_out_err
     );
     uint64_t uniffi_liteseal_core_fn_method_litesealcore_clear_unpinned_attachments(
-        /*handle*/ uint64_t ptr, 
+        /*handle*/ uint64_t ptr,
         RustCallStatus *uniffi_out_err
-    );
-    /*handle*/ uint64_t uniffi_liteseal_core_fn_method_litesealcore_connect_relay(
-        /*handle*/ uint64_t ptr, 
-        RustBuffer server_url, 
-        RustBuffer user_id, 
-        RustBuffer token, 
-        RustBuffer device_id
     );
     /*handle*/ uint64_t uniffi_liteseal_core_fn_method_litesealcore_disconnect(
         /*handle*/ uint64_t ptr
     );
     RustBuffer uniffi_liteseal_core_fn_method_litesealcore_get_contacts(
-        /*handle*/ uint64_t ptr, 
+        /*handle*/ uint64_t ptr,
         RustCallStatus *uniffi_out_err
     );
     RustBuffer uniffi_liteseal_core_fn_method_litesealcore_get_local_messages(
-        /*handle*/ uint64_t ptr, 
-        RustBuffer conversation_id, 
-        int64_t limit, 
-        int64_t offset, 
+        /*handle*/ uint64_t ptr,
+        RustBuffer conversation_id,
+        int64_t limit,
+        int64_t offset,
         RustCallStatus *uniffi_out_err
     );
     RustBuffer uniffi_liteseal_core_fn_method_litesealcore_get_storage_stats(
-        /*handle*/ uint64_t ptr, 
+        /*handle*/ uint64_t ptr,
         RustCallStatus *uniffi_out_err
+    );
+    /*handle*/ uint64_t uniffi_liteseal_core_fn_method_litesealcore_native_login(
+        /*handle*/ uint64_t ptr,
+        RustBuffer username,
+        RustBuffer password,
+        RustBuffer server_url
+    );
+    /*handle*/ uint64_t uniffi_liteseal_core_fn_method_litesealcore_native_register(
+        /*handle*/ uint64_t ptr,
+        RustBuffer invite_code,
+        RustBuffer username,
+        RustBuffer password,
+        RustBuffer server_url
+    );
+    /*handle*/ uint64_t uniffi_liteseal_core_fn_method_litesealcore_native_sign_out(
+        /*handle*/ uint64_t ptr
     );
     /*handle*/ uint64_t uniffi_liteseal_core_fn_method_litesealcore_poll_messages(
         /*handle*/ uint64_t ptr
     );
-    void uniffi_liteseal_core_fn_method_litesealcore_remove_contact(
-        /*handle*/ uint64_t ptr, 
-        RustBuffer user_id, 
+    RustBuffer uniffi_liteseal_core_fn_method_litesealcore_read_message(
+        /*handle*/ uint64_t ptr,
+        RustBuffer id,
         RustCallStatus *uniffi_out_err
     );
-    /*handle*/ uint64_t uniffi_liteseal_core_fn_method_litesealcore_send_message(
-        /*handle*/ uint64_t ptr, 
-        RustBuffer sender_id, 
-        RustBuffer ciphertext, 
-        RustBuffer signature, 
-        RustBuffer sender_device_id, 
-        RustBuffer payloads, 
-        RustBuffer signing_key
+    void uniffi_liteseal_core_fn_method_litesealcore_remove_contact(
+        /*handle*/ uint64_t ptr,
+        RustBuffer user_id,
+        RustCallStatus *uniffi_out_err
+    );
+    /*handle*/ uint64_t uniffi_liteseal_core_fn_method_litesealcore_restore_identity(
+        /*handle*/ uint64_t ptr
+    );
+    /*handle*/ uint64_t uniffi_liteseal_core_fn_method_litesealcore_resume_native(
+        /*handle*/ uint64_t ptr
+    );
+    /*handle*/ uint64_t uniffi_liteseal_core_fn_method_litesealcore_search_users(
+        /*handle*/ uint64_t ptr,
+        RustBuffer query
+    );
+    /*handle*/ uint64_t uniffi_liteseal_core_fn_method_litesealcore_send_text(
+        /*handle*/ uint64_t ptr,
+        RustBuffer peer,
+        RustBuffer text
     );
     void uniffi_liteseal_core_fn_method_litesealcore_set_contact_trust(
-        /*handle*/ uint64_t ptr, 
-        RustBuffer user_id, 
-        RustBuffer trust_state, 
+        /*handle*/ uint64_t ptr,
+        RustBuffer user_id,
+        RustBuffer trust_state,
         RustCallStatus *uniffi_out_err
     );
     RustBuffer uniffi_liteseal_core_fn_func_canonical_conversation_id(
-        RustBuffer a, 
-        RustBuffer b, 
+        RustBuffer a,
+        RustBuffer b,
         RustCallStatus *uniffi_out_err
-    );
-    RustBuffer uniffi_liteseal_core_fn_func_decrypt_message(
-        RustBuffer ciphertext, 
-        RustBuffer sender_public_key, 
-        RustBuffer recipient_secret_key, 
-        RustCallStatus *uniffi_out_err
-    );
-    RustBuffer uniffi_liteseal_core_fn_func_encrypt_message(
-        RustBuffer plaintext, 
-        RustBuffer recipient_public_key, 
-        RustBuffer sender_secret_key, 
-        RustCallStatus *uniffi_out_err
-    );
-    RustBuffer uniffi_liteseal_core_fn_func_generate_keypair(RustCallStatus *uniffi_out_err
-    );
-    /*handle*/ uint64_t uniffi_liteseal_core_fn_func_get_user_devices(
-        RustBuffer server_url, 
-        RustBuffer user_id, 
-        RustBuffer access_token
     );
     RustBuffer uniffi_liteseal_core_fn_func_key_fingerprint(
-        RustBuffer key, 
-        RustCallStatus *uniffi_out_err
-    );
-    /*handle*/ uint64_t uniffi_liteseal_core_fn_func_login(
-        RustBuffer username, 
-        RustBuffer password, 
-        RustBuffer server_url, 
-        RustBuffer device_name, 
-        RustBuffer public_key, 
-        RustBuffer ed25519_pk, 
-        RustBuffer device_id
-    );
-    /*handle*/ uint64_t uniffi_liteseal_core_fn_func_refresh_session(
-        RustBuffer server_url, 
-        RustBuffer refresh_token
-    );
-    /*handle*/ uint64_t uniffi_liteseal_core_fn_func_register(
-        RustBuffer username, 
-        RustBuffer password, 
-        RustBuffer server_url, 
-        RustBuffer device_name, 
-        RustBuffer public_key, 
-        RustBuffer ed25519_pk
-    );
-    /*handle*/ uint64_t uniffi_liteseal_core_fn_func_search_users(
-        RustBuffer server_url, 
-        RustBuffer query, 
-        RustBuffer access_token
-    );
-    RustBuffer uniffi_liteseal_core_fn_func_sign_message(
-        RustBuffer message, 
-        RustBuffer signing_key, 
-        RustCallStatus *uniffi_out_err
-    );
-    int8_t uniffi_liteseal_core_fn_func_verify_message(
-        RustBuffer message, 
-        RustBuffer signature, 
-        RustBuffer sender_public_key, 
+        RustBuffer key,
         RustCallStatus *uniffi_out_err
     );
     RustBuffer ffi_liteseal_core_rustbuffer_alloc(
-        uint64_t size, 
+        uint64_t size,
         RustCallStatus *uniffi_out_err
     );
     RustBuffer ffi_liteseal_core_rustbuffer_from_bytes(
-        ForeignBytes bytes, 
+        ForeignBytes bytes,
         RustCallStatus *uniffi_out_err
     );
     void ffi_liteseal_core_rustbuffer_free(
-        RustBuffer buf, 
+        RustBuffer buf,
         RustCallStatus *uniffi_out_err
     );
     RustBuffer ffi_liteseal_core_rustbuffer_reserve(
-        RustBuffer buf, 
-        uint64_t additional, 
+        RustBuffer buf,
+        uint64_t additional,
         RustCallStatus *uniffi_out_err
     );
     void ffi_liteseal_core_rust_future_poll_u8(
-        /*handle*/ uint64_t handle, 
-        UniffiRustFutureContinuationCallback callback, 
+        /*handle*/ uint64_t handle,
+        UniffiRustFutureContinuationCallback callback,
         /*handle*/ uint64_t callback_data
     );
     void ffi_liteseal_core_rust_future_cancel_u8(
@@ -299,12 +263,12 @@ extern "C" {
         /*handle*/ uint64_t handle
     );
     uint8_t ffi_liteseal_core_rust_future_complete_u8(
-        /*handle*/ uint64_t handle, 
+        /*handle*/ uint64_t handle,
         RustCallStatus *uniffi_out_err
     );
     void ffi_liteseal_core_rust_future_poll_i8(
-        /*handle*/ uint64_t handle, 
-        UniffiRustFutureContinuationCallback callback, 
+        /*handle*/ uint64_t handle,
+        UniffiRustFutureContinuationCallback callback,
         /*handle*/ uint64_t callback_data
     );
     void ffi_liteseal_core_rust_future_cancel_i8(
@@ -314,12 +278,12 @@ extern "C" {
         /*handle*/ uint64_t handle
     );
     int8_t ffi_liteseal_core_rust_future_complete_i8(
-        /*handle*/ uint64_t handle, 
+        /*handle*/ uint64_t handle,
         RustCallStatus *uniffi_out_err
     );
     void ffi_liteseal_core_rust_future_poll_u16(
-        /*handle*/ uint64_t handle, 
-        UniffiRustFutureContinuationCallback callback, 
+        /*handle*/ uint64_t handle,
+        UniffiRustFutureContinuationCallback callback,
         /*handle*/ uint64_t callback_data
     );
     void ffi_liteseal_core_rust_future_cancel_u16(
@@ -329,12 +293,12 @@ extern "C" {
         /*handle*/ uint64_t handle
     );
     uint16_t ffi_liteseal_core_rust_future_complete_u16(
-        /*handle*/ uint64_t handle, 
+        /*handle*/ uint64_t handle,
         RustCallStatus *uniffi_out_err
     );
     void ffi_liteseal_core_rust_future_poll_i16(
-        /*handle*/ uint64_t handle, 
-        UniffiRustFutureContinuationCallback callback, 
+        /*handle*/ uint64_t handle,
+        UniffiRustFutureContinuationCallback callback,
         /*handle*/ uint64_t callback_data
     );
     void ffi_liteseal_core_rust_future_cancel_i16(
@@ -344,12 +308,12 @@ extern "C" {
         /*handle*/ uint64_t handle
     );
     int16_t ffi_liteseal_core_rust_future_complete_i16(
-        /*handle*/ uint64_t handle, 
+        /*handle*/ uint64_t handle,
         RustCallStatus *uniffi_out_err
     );
     void ffi_liteseal_core_rust_future_poll_u32(
-        /*handle*/ uint64_t handle, 
-        UniffiRustFutureContinuationCallback callback, 
+        /*handle*/ uint64_t handle,
+        UniffiRustFutureContinuationCallback callback,
         /*handle*/ uint64_t callback_data
     );
     void ffi_liteseal_core_rust_future_cancel_u32(
@@ -359,12 +323,12 @@ extern "C" {
         /*handle*/ uint64_t handle
     );
     uint32_t ffi_liteseal_core_rust_future_complete_u32(
-        /*handle*/ uint64_t handle, 
+        /*handle*/ uint64_t handle,
         RustCallStatus *uniffi_out_err
     );
     void ffi_liteseal_core_rust_future_poll_i32(
-        /*handle*/ uint64_t handle, 
-        UniffiRustFutureContinuationCallback callback, 
+        /*handle*/ uint64_t handle,
+        UniffiRustFutureContinuationCallback callback,
         /*handle*/ uint64_t callback_data
     );
     void ffi_liteseal_core_rust_future_cancel_i32(
@@ -374,12 +338,12 @@ extern "C" {
         /*handle*/ uint64_t handle
     );
     int32_t ffi_liteseal_core_rust_future_complete_i32(
-        /*handle*/ uint64_t handle, 
+        /*handle*/ uint64_t handle,
         RustCallStatus *uniffi_out_err
     );
     void ffi_liteseal_core_rust_future_poll_u64(
-        /*handle*/ uint64_t handle, 
-        UniffiRustFutureContinuationCallback callback, 
+        /*handle*/ uint64_t handle,
+        UniffiRustFutureContinuationCallback callback,
         /*handle*/ uint64_t callback_data
     );
     void ffi_liteseal_core_rust_future_cancel_u64(
@@ -389,12 +353,12 @@ extern "C" {
         /*handle*/ uint64_t handle
     );
     uint64_t ffi_liteseal_core_rust_future_complete_u64(
-        /*handle*/ uint64_t handle, 
+        /*handle*/ uint64_t handle,
         RustCallStatus *uniffi_out_err
     );
     void ffi_liteseal_core_rust_future_poll_i64(
-        /*handle*/ uint64_t handle, 
-        UniffiRustFutureContinuationCallback callback, 
+        /*handle*/ uint64_t handle,
+        UniffiRustFutureContinuationCallback callback,
         /*handle*/ uint64_t callback_data
     );
     void ffi_liteseal_core_rust_future_cancel_i64(
@@ -404,12 +368,12 @@ extern "C" {
         /*handle*/ uint64_t handle
     );
     int64_t ffi_liteseal_core_rust_future_complete_i64(
-        /*handle*/ uint64_t handle, 
+        /*handle*/ uint64_t handle,
         RustCallStatus *uniffi_out_err
     );
     void ffi_liteseal_core_rust_future_poll_f32(
-        /*handle*/ uint64_t handle, 
-        UniffiRustFutureContinuationCallback callback, 
+        /*handle*/ uint64_t handle,
+        UniffiRustFutureContinuationCallback callback,
         /*handle*/ uint64_t callback_data
     );
     void ffi_liteseal_core_rust_future_cancel_f32(
@@ -419,12 +383,12 @@ extern "C" {
         /*handle*/ uint64_t handle
     );
     float ffi_liteseal_core_rust_future_complete_f32(
-        /*handle*/ uint64_t handle, 
+        /*handle*/ uint64_t handle,
         RustCallStatus *uniffi_out_err
     );
     void ffi_liteseal_core_rust_future_poll_f64(
-        /*handle*/ uint64_t handle, 
-        UniffiRustFutureContinuationCallback callback, 
+        /*handle*/ uint64_t handle,
+        UniffiRustFutureContinuationCallback callback,
         /*handle*/ uint64_t callback_data
     );
     void ffi_liteseal_core_rust_future_cancel_f64(
@@ -434,12 +398,12 @@ extern "C" {
         /*handle*/ uint64_t handle
     );
     double ffi_liteseal_core_rust_future_complete_f64(
-        /*handle*/ uint64_t handle, 
+        /*handle*/ uint64_t handle,
         RustCallStatus *uniffi_out_err
     );
     void ffi_liteseal_core_rust_future_poll_rust_buffer(
-        /*handle*/ uint64_t handle, 
-        UniffiRustFutureContinuationCallback callback, 
+        /*handle*/ uint64_t handle,
+        UniffiRustFutureContinuationCallback callback,
         /*handle*/ uint64_t callback_data
     );
     void ffi_liteseal_core_rust_future_cancel_rust_buffer(
@@ -449,12 +413,12 @@ extern "C" {
         /*handle*/ uint64_t handle
     );
     RustBuffer ffi_liteseal_core_rust_future_complete_rust_buffer(
-        /*handle*/ uint64_t handle, 
+        /*handle*/ uint64_t handle,
         RustCallStatus *uniffi_out_err
     );
     void ffi_liteseal_core_rust_future_poll_void(
-        /*handle*/ uint64_t handle, 
-        UniffiRustFutureContinuationCallback callback, 
+        /*handle*/ uint64_t handle,
+        UniffiRustFutureContinuationCallback callback,
         /*handle*/ uint64_t callback_data
     );
     void ffi_liteseal_core_rust_future_cancel_void(
@@ -464,40 +428,18 @@ extern "C" {
         /*handle*/ uint64_t handle
     );
     void ffi_liteseal_core_rust_future_complete_void(
-        /*handle*/ uint64_t handle, 
+        /*handle*/ uint64_t handle,
         RustCallStatus *uniffi_out_err
     );
     uint16_t uniffi_liteseal_core_checksum_func_canonical_conversation_id(
     );
-    uint16_t uniffi_liteseal_core_checksum_func_decrypt_message(
-    );
-    uint16_t uniffi_liteseal_core_checksum_func_encrypt_message(
-    );
-    uint16_t uniffi_liteseal_core_checksum_func_generate_keypair(
-    );
-    uint16_t uniffi_liteseal_core_checksum_func_get_user_devices(
-    );
     uint16_t uniffi_liteseal_core_checksum_func_key_fingerprint(
-    );
-    uint16_t uniffi_liteseal_core_checksum_func_login(
-    );
-    uint16_t uniffi_liteseal_core_checksum_func_refresh_session(
-    );
-    uint16_t uniffi_liteseal_core_checksum_func_register(
-    );
-    uint16_t uniffi_liteseal_core_checksum_func_search_users(
-    );
-    uint16_t uniffi_liteseal_core_checksum_func_sign_message(
-    );
-    uint16_t uniffi_liteseal_core_checksum_func_verify_message(
     );
     uint16_t uniffi_liteseal_core_checksum_method_litesealcore_add_contact(
     );
     uint16_t uniffi_liteseal_core_checksum_method_litesealcore_clear_expired_messages(
     );
     uint16_t uniffi_liteseal_core_checksum_method_litesealcore_clear_unpinned_attachments(
-    );
-    uint16_t uniffi_liteseal_core_checksum_method_litesealcore_connect_relay(
     );
     uint16_t uniffi_liteseal_core_checksum_method_litesealcore_disconnect(
     );
@@ -507,11 +449,25 @@ extern "C" {
     );
     uint16_t uniffi_liteseal_core_checksum_method_litesealcore_get_storage_stats(
     );
+    uint16_t uniffi_liteseal_core_checksum_method_litesealcore_native_login(
+    );
+    uint16_t uniffi_liteseal_core_checksum_method_litesealcore_native_register(
+    );
+    uint16_t uniffi_liteseal_core_checksum_method_litesealcore_native_sign_out(
+    );
     uint16_t uniffi_liteseal_core_checksum_method_litesealcore_poll_messages(
+    );
+    uint16_t uniffi_liteseal_core_checksum_method_litesealcore_read_message(
     );
     uint16_t uniffi_liteseal_core_checksum_method_litesealcore_remove_contact(
     );
-    uint16_t uniffi_liteseal_core_checksum_method_litesealcore_send_message(
+    uint16_t uniffi_liteseal_core_checksum_method_litesealcore_restore_identity(
+    );
+    uint16_t uniffi_liteseal_core_checksum_method_litesealcore_resume_native(
+    );
+    uint16_t uniffi_liteseal_core_checksum_method_litesealcore_search_users(
+    );
+    uint16_t uniffi_liteseal_core_checksum_method_litesealcore_send_text(
     );
     uint16_t uniffi_liteseal_core_checksum_method_litesealcore_set_contact_trust(
     );
@@ -800,9 +756,9 @@ namespace uniffi::liteseal_core::cb::rustfuturecontinuationcallback {
             auto uniffiResult = cb.call(rt, js_data, js_pollResult
             );
 
-            
 
-            
+
+
         } catch (const jsi::JSError &error) {
             std::cout << "Error in callback UniffiRustFutureContinuationCallback: "
                     << error.what() << std::endl;
@@ -827,7 +783,7 @@ namespace uniffi::liteseal_core::cb::rustfuturecontinuationcallback {
         // The runtime, the actual callback jsi::funtion, and the callInvoker
         // are all in the lambda.
         rsLambda(
-            rs_data, 
+            rs_data,
             rs_pollResult);
     }
 
@@ -864,7 +820,7 @@ namespace uniffi::liteseal_core::cb::rustfuturecontinuationcallback {
                 };
                 // We'll then call that lambda from the callInvoker which will
                 // look after calling it on the correct thread.
-                
+
                 callInvoker->invokeNonBlocking(rt, jsLambda);
         };
         return callback;
@@ -919,9 +875,9 @@ namespace uniffi::liteseal_core::cb::foreignfuturedroppedcallback {
             auto uniffiResult = cb.call(rt, js_handle
             );
 
-            
 
-            
+
+
         } catch (const jsi::JSError &error) {
             std::cout << "Error in callback UniffiForeignFutureDroppedCallback: "
                     << error.what() << std::endl;
@@ -980,7 +936,7 @@ namespace uniffi::liteseal_core::cb::foreignfuturedroppedcallback {
                 };
                 // We'll then call that lambda from the callInvoker which will
                 // look after calling it on the correct thread.
-                
+
                 callInvoker->invokeNonBlocking(rt, jsLambda);
         };
         return callback;
@@ -1099,7 +1055,7 @@ template <> struct Bridging<UniffiForeignFutureCompleteU8> {
         func(uniffi_jsi::Bridging<uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<UniffiForeignFutureResultU8>::fromJs(rt, callInvoker, args[1])
         );
 
-        
+
         return jsi::Value::undefined();
   }
 };
@@ -1173,7 +1129,7 @@ template <> struct Bridging<UniffiForeignFutureCompleteI8> {
         func(uniffi_jsi::Bridging<uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<UniffiForeignFutureResultI8>::fromJs(rt, callInvoker, args[1])
         );
 
-        
+
         return jsi::Value::undefined();
   }
 };
@@ -1247,7 +1203,7 @@ template <> struct Bridging<UniffiForeignFutureCompleteU16> {
         func(uniffi_jsi::Bridging<uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<UniffiForeignFutureResultU16>::fromJs(rt, callInvoker, args[1])
         );
 
-        
+
         return jsi::Value::undefined();
   }
 };
@@ -1321,7 +1277,7 @@ template <> struct Bridging<UniffiForeignFutureCompleteI16> {
         func(uniffi_jsi::Bridging<uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<UniffiForeignFutureResultI16>::fromJs(rt, callInvoker, args[1])
         );
 
-        
+
         return jsi::Value::undefined();
   }
 };
@@ -1395,7 +1351,7 @@ template <> struct Bridging<UniffiForeignFutureCompleteU32> {
         func(uniffi_jsi::Bridging<uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<UniffiForeignFutureResultU32>::fromJs(rt, callInvoker, args[1])
         );
 
-        
+
         return jsi::Value::undefined();
   }
 };
@@ -1469,7 +1425,7 @@ template <> struct Bridging<UniffiForeignFutureCompleteI32> {
         func(uniffi_jsi::Bridging<uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<UniffiForeignFutureResultI32>::fromJs(rt, callInvoker, args[1])
         );
 
-        
+
         return jsi::Value::undefined();
   }
 };
@@ -1543,7 +1499,7 @@ template <> struct Bridging<UniffiForeignFutureCompleteU64> {
         func(uniffi_jsi::Bridging<uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<UniffiForeignFutureResultU64>::fromJs(rt, callInvoker, args[1])
         );
 
-        
+
         return jsi::Value::undefined();
   }
 };
@@ -1617,7 +1573,7 @@ template <> struct Bridging<UniffiForeignFutureCompleteI64> {
         func(uniffi_jsi::Bridging<uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<UniffiForeignFutureResultI64>::fromJs(rt, callInvoker, args[1])
         );
 
-        
+
         return jsi::Value::undefined();
   }
 };
@@ -1691,7 +1647,7 @@ template <> struct Bridging<UniffiForeignFutureCompleteF32> {
         func(uniffi_jsi::Bridging<uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<UniffiForeignFutureResultF32>::fromJs(rt, callInvoker, args[1])
         );
 
-        
+
         return jsi::Value::undefined();
   }
 };
@@ -1765,7 +1721,7 @@ template <> struct Bridging<UniffiForeignFutureCompleteF64> {
         func(uniffi_jsi::Bridging<uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<UniffiForeignFutureResultF64>::fromJs(rt, callInvoker, args[1])
         );
 
-        
+
         return jsi::Value::undefined();
   }
 };
@@ -1839,7 +1795,7 @@ template <> struct Bridging<UniffiForeignFutureCompleteRustBuffer> {
         func(uniffi_jsi::Bridging<uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<UniffiForeignFutureResultRustBuffer>::fromJs(rt, callInvoker, args[1])
         );
 
-        
+
         return jsi::Value::undefined();
   }
 };
@@ -1909,7 +1865,7 @@ template <> struct Bridging<UniffiForeignFutureCompleteVoid> {
         func(uniffi_jsi::Bridging<uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<UniffiForeignFutureResultVoid>::fromJs(rt, callInvoker, args[1])
         );
 
-        
+
         return jsi::Value::undefined();
   }
 };
@@ -2025,14 +1981,6 @@ NativeLitesealCore::NativeLitesealCore(
             return this->cpp_uniffi_liteseal_core_fn_method_litesealcore_clear_unpinned_attachments(rt, thisVal, args, count);
         }
     );
-    props["ubrn_uniffi_liteseal_core_fn_method_litesealcore_connect_relay"] = jsi::Function::createFromHostFunction(
-        rt,
-        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_fn_method_litesealcore_connect_relay"),
-        5,
-        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
-            return this->cpp_uniffi_liteseal_core_fn_method_litesealcore_connect_relay(rt, thisVal, args, count);
-        }
-    );
     props["ubrn_uniffi_liteseal_core_fn_method_litesealcore_disconnect"] = jsi::Function::createFromHostFunction(
         rt,
         jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_fn_method_litesealcore_disconnect"),
@@ -2065,12 +2013,44 @@ NativeLitesealCore::NativeLitesealCore(
             return this->cpp_uniffi_liteseal_core_fn_method_litesealcore_get_storage_stats(rt, thisVal, args, count);
         }
     );
+    props["ubrn_uniffi_liteseal_core_fn_method_litesealcore_native_login"] = jsi::Function::createFromHostFunction(
+        rt,
+        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_fn_method_litesealcore_native_login"),
+        4,
+        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
+            return this->cpp_uniffi_liteseal_core_fn_method_litesealcore_native_login(rt, thisVal, args, count);
+        }
+    );
+    props["ubrn_uniffi_liteseal_core_fn_method_litesealcore_native_register"] = jsi::Function::createFromHostFunction(
+        rt,
+        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_fn_method_litesealcore_native_register"),
+        5,
+        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
+            return this->cpp_uniffi_liteseal_core_fn_method_litesealcore_native_register(rt, thisVal, args, count);
+        }
+    );
+    props["ubrn_uniffi_liteseal_core_fn_method_litesealcore_native_sign_out"] = jsi::Function::createFromHostFunction(
+        rt,
+        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_fn_method_litesealcore_native_sign_out"),
+        1,
+        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
+            return this->cpp_uniffi_liteseal_core_fn_method_litesealcore_native_sign_out(rt, thisVal, args, count);
+        }
+    );
     props["ubrn_uniffi_liteseal_core_fn_method_litesealcore_poll_messages"] = jsi::Function::createFromHostFunction(
         rt,
         jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_fn_method_litesealcore_poll_messages"),
         1,
         [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
             return this->cpp_uniffi_liteseal_core_fn_method_litesealcore_poll_messages(rt, thisVal, args, count);
+        }
+    );
+    props["ubrn_uniffi_liteseal_core_fn_method_litesealcore_read_message"] = jsi::Function::createFromHostFunction(
+        rt,
+        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_fn_method_litesealcore_read_message"),
+        2,
+        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
+            return this->cpp_uniffi_liteseal_core_fn_method_litesealcore_read_message(rt, thisVal, args, count);
         }
     );
     props["ubrn_uniffi_liteseal_core_fn_method_litesealcore_remove_contact"] = jsi::Function::createFromHostFunction(
@@ -2081,12 +2061,36 @@ NativeLitesealCore::NativeLitesealCore(
             return this->cpp_uniffi_liteseal_core_fn_method_litesealcore_remove_contact(rt, thisVal, args, count);
         }
     );
-    props["ubrn_uniffi_liteseal_core_fn_method_litesealcore_send_message"] = jsi::Function::createFromHostFunction(
+    props["ubrn_uniffi_liteseal_core_fn_method_litesealcore_restore_identity"] = jsi::Function::createFromHostFunction(
         rt,
-        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_fn_method_litesealcore_send_message"),
-        7,
+        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_fn_method_litesealcore_restore_identity"),
+        1,
         [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
-            return this->cpp_uniffi_liteseal_core_fn_method_litesealcore_send_message(rt, thisVal, args, count);
+            return this->cpp_uniffi_liteseal_core_fn_method_litesealcore_restore_identity(rt, thisVal, args, count);
+        }
+    );
+    props["ubrn_uniffi_liteseal_core_fn_method_litesealcore_resume_native"] = jsi::Function::createFromHostFunction(
+        rt,
+        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_fn_method_litesealcore_resume_native"),
+        1,
+        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
+            return this->cpp_uniffi_liteseal_core_fn_method_litesealcore_resume_native(rt, thisVal, args, count);
+        }
+    );
+    props["ubrn_uniffi_liteseal_core_fn_method_litesealcore_search_users"] = jsi::Function::createFromHostFunction(
+        rt,
+        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_fn_method_litesealcore_search_users"),
+        2,
+        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
+            return this->cpp_uniffi_liteseal_core_fn_method_litesealcore_search_users(rt, thisVal, args, count);
+        }
+    );
+    props["ubrn_uniffi_liteseal_core_fn_method_litesealcore_send_text"] = jsi::Function::createFromHostFunction(
+        rt,
+        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_fn_method_litesealcore_send_text"),
+        3,
+        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
+            return this->cpp_uniffi_liteseal_core_fn_method_litesealcore_send_text(rt, thisVal, args, count);
         }
     );
     props["ubrn_uniffi_liteseal_core_fn_method_litesealcore_set_contact_trust"] = jsi::Function::createFromHostFunction(
@@ -2105,92 +2109,12 @@ NativeLitesealCore::NativeLitesealCore(
             return this->cpp_uniffi_liteseal_core_fn_func_canonical_conversation_id(rt, thisVal, args, count);
         }
     );
-    props["ubrn_uniffi_liteseal_core_fn_func_decrypt_message"] = jsi::Function::createFromHostFunction(
-        rt,
-        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_fn_func_decrypt_message"),
-        3,
-        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
-            return this->cpp_uniffi_liteseal_core_fn_func_decrypt_message(rt, thisVal, args, count);
-        }
-    );
-    props["ubrn_uniffi_liteseal_core_fn_func_encrypt_message"] = jsi::Function::createFromHostFunction(
-        rt,
-        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_fn_func_encrypt_message"),
-        3,
-        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
-            return this->cpp_uniffi_liteseal_core_fn_func_encrypt_message(rt, thisVal, args, count);
-        }
-    );
-    props["ubrn_uniffi_liteseal_core_fn_func_generate_keypair"] = jsi::Function::createFromHostFunction(
-        rt,
-        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_fn_func_generate_keypair"),
-        0,
-        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
-            return this->cpp_uniffi_liteseal_core_fn_func_generate_keypair(rt, thisVal, args, count);
-        }
-    );
-    props["ubrn_uniffi_liteseal_core_fn_func_get_user_devices"] = jsi::Function::createFromHostFunction(
-        rt,
-        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_fn_func_get_user_devices"),
-        3,
-        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
-            return this->cpp_uniffi_liteseal_core_fn_func_get_user_devices(rt, thisVal, args, count);
-        }
-    );
     props["ubrn_uniffi_liteseal_core_fn_func_key_fingerprint"] = jsi::Function::createFromHostFunction(
         rt,
         jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_fn_func_key_fingerprint"),
         1,
         [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
             return this->cpp_uniffi_liteseal_core_fn_func_key_fingerprint(rt, thisVal, args, count);
-        }
-    );
-    props["ubrn_uniffi_liteseal_core_fn_func_login"] = jsi::Function::createFromHostFunction(
-        rt,
-        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_fn_func_login"),
-        7,
-        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
-            return this->cpp_uniffi_liteseal_core_fn_func_login(rt, thisVal, args, count);
-        }
-    );
-    props["ubrn_uniffi_liteseal_core_fn_func_refresh_session"] = jsi::Function::createFromHostFunction(
-        rt,
-        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_fn_func_refresh_session"),
-        2,
-        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
-            return this->cpp_uniffi_liteseal_core_fn_func_refresh_session(rt, thisVal, args, count);
-        }
-    );
-    props["ubrn_uniffi_liteseal_core_fn_func_register"] = jsi::Function::createFromHostFunction(
-        rt,
-        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_fn_func_register"),
-        6,
-        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
-            return this->cpp_uniffi_liteseal_core_fn_func_register(rt, thisVal, args, count);
-        }
-    );
-    props["ubrn_uniffi_liteseal_core_fn_func_search_users"] = jsi::Function::createFromHostFunction(
-        rt,
-        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_fn_func_search_users"),
-        3,
-        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
-            return this->cpp_uniffi_liteseal_core_fn_func_search_users(rt, thisVal, args, count);
-        }
-    );
-    props["ubrn_uniffi_liteseal_core_fn_func_sign_message"] = jsi::Function::createFromHostFunction(
-        rt,
-        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_fn_func_sign_message"),
-        2,
-        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
-            return this->cpp_uniffi_liteseal_core_fn_func_sign_message(rt, thisVal, args, count);
-        }
-    );
-    props["ubrn_uniffi_liteseal_core_fn_func_verify_message"] = jsi::Function::createFromHostFunction(
-        rt,
-        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_fn_func_verify_message"),
-        3,
-        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
-            return this->cpp_uniffi_liteseal_core_fn_func_verify_message(rt, thisVal, args, count);
         }
     );
     props["ubrn_ffi_liteseal_core_rust_future_poll_u8"] = jsi::Function::createFromHostFunction(
@@ -2585,92 +2509,12 @@ NativeLitesealCore::NativeLitesealCore(
             return this->cpp_uniffi_liteseal_core_checksum_func_canonical_conversation_id(rt, thisVal, args, count);
         }
     );
-    props["ubrn_uniffi_liteseal_core_checksum_func_decrypt_message"] = jsi::Function::createFromHostFunction(
-        rt,
-        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_checksum_func_decrypt_message"),
-        0,
-        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
-            return this->cpp_uniffi_liteseal_core_checksum_func_decrypt_message(rt, thisVal, args, count);
-        }
-    );
-    props["ubrn_uniffi_liteseal_core_checksum_func_encrypt_message"] = jsi::Function::createFromHostFunction(
-        rt,
-        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_checksum_func_encrypt_message"),
-        0,
-        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
-            return this->cpp_uniffi_liteseal_core_checksum_func_encrypt_message(rt, thisVal, args, count);
-        }
-    );
-    props["ubrn_uniffi_liteseal_core_checksum_func_generate_keypair"] = jsi::Function::createFromHostFunction(
-        rt,
-        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_checksum_func_generate_keypair"),
-        0,
-        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
-            return this->cpp_uniffi_liteseal_core_checksum_func_generate_keypair(rt, thisVal, args, count);
-        }
-    );
-    props["ubrn_uniffi_liteseal_core_checksum_func_get_user_devices"] = jsi::Function::createFromHostFunction(
-        rt,
-        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_checksum_func_get_user_devices"),
-        0,
-        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
-            return this->cpp_uniffi_liteseal_core_checksum_func_get_user_devices(rt, thisVal, args, count);
-        }
-    );
     props["ubrn_uniffi_liteseal_core_checksum_func_key_fingerprint"] = jsi::Function::createFromHostFunction(
         rt,
         jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_checksum_func_key_fingerprint"),
         0,
         [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
             return this->cpp_uniffi_liteseal_core_checksum_func_key_fingerprint(rt, thisVal, args, count);
-        }
-    );
-    props["ubrn_uniffi_liteseal_core_checksum_func_login"] = jsi::Function::createFromHostFunction(
-        rt,
-        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_checksum_func_login"),
-        0,
-        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
-            return this->cpp_uniffi_liteseal_core_checksum_func_login(rt, thisVal, args, count);
-        }
-    );
-    props["ubrn_uniffi_liteseal_core_checksum_func_refresh_session"] = jsi::Function::createFromHostFunction(
-        rt,
-        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_checksum_func_refresh_session"),
-        0,
-        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
-            return this->cpp_uniffi_liteseal_core_checksum_func_refresh_session(rt, thisVal, args, count);
-        }
-    );
-    props["ubrn_uniffi_liteseal_core_checksum_func_register"] = jsi::Function::createFromHostFunction(
-        rt,
-        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_checksum_func_register"),
-        0,
-        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
-            return this->cpp_uniffi_liteseal_core_checksum_func_register(rt, thisVal, args, count);
-        }
-    );
-    props["ubrn_uniffi_liteseal_core_checksum_func_search_users"] = jsi::Function::createFromHostFunction(
-        rt,
-        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_checksum_func_search_users"),
-        0,
-        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
-            return this->cpp_uniffi_liteseal_core_checksum_func_search_users(rt, thisVal, args, count);
-        }
-    );
-    props["ubrn_uniffi_liteseal_core_checksum_func_sign_message"] = jsi::Function::createFromHostFunction(
-        rt,
-        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_checksum_func_sign_message"),
-        0,
-        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
-            return this->cpp_uniffi_liteseal_core_checksum_func_sign_message(rt, thisVal, args, count);
-        }
-    );
-    props["ubrn_uniffi_liteseal_core_checksum_func_verify_message"] = jsi::Function::createFromHostFunction(
-        rt,
-        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_checksum_func_verify_message"),
-        0,
-        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
-            return this->cpp_uniffi_liteseal_core_checksum_func_verify_message(rt, thisVal, args, count);
         }
     );
     props["ubrn_uniffi_liteseal_core_checksum_method_litesealcore_add_contact"] = jsi::Function::createFromHostFunction(
@@ -2695,14 +2539,6 @@ NativeLitesealCore::NativeLitesealCore(
         0,
         [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
             return this->cpp_uniffi_liteseal_core_checksum_method_litesealcore_clear_unpinned_attachments(rt, thisVal, args, count);
-        }
-    );
-    props["ubrn_uniffi_liteseal_core_checksum_method_litesealcore_connect_relay"] = jsi::Function::createFromHostFunction(
-        rt,
-        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_checksum_method_litesealcore_connect_relay"),
-        0,
-        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
-            return this->cpp_uniffi_liteseal_core_checksum_method_litesealcore_connect_relay(rt, thisVal, args, count);
         }
     );
     props["ubrn_uniffi_liteseal_core_checksum_method_litesealcore_disconnect"] = jsi::Function::createFromHostFunction(
@@ -2737,12 +2573,44 @@ NativeLitesealCore::NativeLitesealCore(
             return this->cpp_uniffi_liteseal_core_checksum_method_litesealcore_get_storage_stats(rt, thisVal, args, count);
         }
     );
+    props["ubrn_uniffi_liteseal_core_checksum_method_litesealcore_native_login"] = jsi::Function::createFromHostFunction(
+        rt,
+        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_checksum_method_litesealcore_native_login"),
+        0,
+        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
+            return this->cpp_uniffi_liteseal_core_checksum_method_litesealcore_native_login(rt, thisVal, args, count);
+        }
+    );
+    props["ubrn_uniffi_liteseal_core_checksum_method_litesealcore_native_register"] = jsi::Function::createFromHostFunction(
+        rt,
+        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_checksum_method_litesealcore_native_register"),
+        0,
+        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
+            return this->cpp_uniffi_liteseal_core_checksum_method_litesealcore_native_register(rt, thisVal, args, count);
+        }
+    );
+    props["ubrn_uniffi_liteseal_core_checksum_method_litesealcore_native_sign_out"] = jsi::Function::createFromHostFunction(
+        rt,
+        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_checksum_method_litesealcore_native_sign_out"),
+        0,
+        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
+            return this->cpp_uniffi_liteseal_core_checksum_method_litesealcore_native_sign_out(rt, thisVal, args, count);
+        }
+    );
     props["ubrn_uniffi_liteseal_core_checksum_method_litesealcore_poll_messages"] = jsi::Function::createFromHostFunction(
         rt,
         jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_checksum_method_litesealcore_poll_messages"),
         0,
         [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
             return this->cpp_uniffi_liteseal_core_checksum_method_litesealcore_poll_messages(rt, thisVal, args, count);
+        }
+    );
+    props["ubrn_uniffi_liteseal_core_checksum_method_litesealcore_read_message"] = jsi::Function::createFromHostFunction(
+        rt,
+        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_checksum_method_litesealcore_read_message"),
+        0,
+        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
+            return this->cpp_uniffi_liteseal_core_checksum_method_litesealcore_read_message(rt, thisVal, args, count);
         }
     );
     props["ubrn_uniffi_liteseal_core_checksum_method_litesealcore_remove_contact"] = jsi::Function::createFromHostFunction(
@@ -2753,12 +2621,36 @@ NativeLitesealCore::NativeLitesealCore(
             return this->cpp_uniffi_liteseal_core_checksum_method_litesealcore_remove_contact(rt, thisVal, args, count);
         }
     );
-    props["ubrn_uniffi_liteseal_core_checksum_method_litesealcore_send_message"] = jsi::Function::createFromHostFunction(
+    props["ubrn_uniffi_liteseal_core_checksum_method_litesealcore_restore_identity"] = jsi::Function::createFromHostFunction(
         rt,
-        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_checksum_method_litesealcore_send_message"),
+        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_checksum_method_litesealcore_restore_identity"),
         0,
         [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
-            return this->cpp_uniffi_liteseal_core_checksum_method_litesealcore_send_message(rt, thisVal, args, count);
+            return this->cpp_uniffi_liteseal_core_checksum_method_litesealcore_restore_identity(rt, thisVal, args, count);
+        }
+    );
+    props["ubrn_uniffi_liteseal_core_checksum_method_litesealcore_resume_native"] = jsi::Function::createFromHostFunction(
+        rt,
+        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_checksum_method_litesealcore_resume_native"),
+        0,
+        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
+            return this->cpp_uniffi_liteseal_core_checksum_method_litesealcore_resume_native(rt, thisVal, args, count);
+        }
+    );
+    props["ubrn_uniffi_liteseal_core_checksum_method_litesealcore_search_users"] = jsi::Function::createFromHostFunction(
+        rt,
+        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_checksum_method_litesealcore_search_users"),
+        0,
+        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
+            return this->cpp_uniffi_liteseal_core_checksum_method_litesealcore_search_users(rt, thisVal, args, count);
+        }
+    );
+    props["ubrn_uniffi_liteseal_core_checksum_method_litesealcore_send_text"] = jsi::Function::createFromHostFunction(
+        rt,
+        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_liteseal_core_checksum_method_litesealcore_send_text"),
+        0,
+        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
+            return this->cpp_uniffi_liteseal_core_checksum_method_litesealcore_send_text(rt, thisVal, args, count);
         }
     );
     props["ubrn_uniffi_liteseal_core_checksum_method_litesealcore_set_contact_trust"] = jsi::Function::createFromHostFunction(
@@ -2944,797 +2836,730 @@ jsi::Value NativeLitesealCore::cpp_uniffi_internal_fn_func_ffi__read_string_from
 // Methods calling directly into the uniffi generated C API of the Rust crate.
 jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_clone_litesealcore(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         RustCallStatus status = uniffi::liteseal_core::Bridging<RustCallStatus>::rustSuccess(rt);
-        auto value = uniffi_liteseal_core_fn_clone_litesealcore(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), 
+        auto value = uniffi_liteseal_core_fn_clone_litesealcore(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]),
             &status
         );
         uniffi::liteseal_core::Bridging<RustCallStatus>::copyIntoJs(rt, callInvoker, status, args[count - 1]);
 
-        
+
         return uniffi_jsi::Bridging</*handle*/ uint64_t>::toJs(rt, callInvoker, value);
 }
 jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_free_litesealcore(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         RustCallStatus status = uniffi::liteseal_core::Bridging<RustCallStatus>::rustSuccess(rt);
-        uniffi_liteseal_core_fn_free_litesealcore(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), 
+        uniffi_liteseal_core_fn_free_litesealcore(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]),
             &status
         );
         uniffi::liteseal_core::Bridging<RustCallStatus>::copyIntoJs(rt, callInvoker, status, args[count - 1]);
 
-        
+
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_constructor_litesealcore_new(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         RustCallStatus status = uniffi::liteseal_core::Bridging<RustCallStatus>::rustSuccess(rt);
-        auto value = uniffi_liteseal_core_fn_constructor_litesealcore_new(uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[0]), 
+        auto value = uniffi_liteseal_core_fn_constructor_litesealcore_new(uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[0]),
             &status
         );
         uniffi::liteseal_core::Bridging<RustCallStatus>::copyIntoJs(rt, callInvoker, status, args[count - 1]);
 
-        
+
         return uniffi_jsi::Bridging</*handle*/ uint64_t>::toJs(rt, callInvoker, value);
 }
 jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_method_litesealcore_add_contact(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         RustCallStatus status = uniffi::liteseal_core::Bridging<RustCallStatus>::rustSuccess(rt);
-        uniffi_liteseal_core_fn_method_litesealcore_add_contact(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[1]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[2]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[3]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[4]), 
+        uniffi_liteseal_core_fn_method_litesealcore_add_contact(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[1]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[2]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[3]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[4]),
             &status
         );
         uniffi::liteseal_core::Bridging<RustCallStatus>::copyIntoJs(rt, callInvoker, status, args[count - 1]);
 
-        
+
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_method_litesealcore_clear_expired_messages(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         RustCallStatus status = uniffi::liteseal_core::Bridging<RustCallStatus>::rustSuccess(rt);
-        auto value = uniffi_liteseal_core_fn_method_litesealcore_clear_expired_messages(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), 
+        auto value = uniffi_liteseal_core_fn_method_litesealcore_clear_expired_messages(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]),
             &status
         );
         uniffi::liteseal_core::Bridging<RustCallStatus>::copyIntoJs(rt, callInvoker, status, args[count - 1]);
 
-        
+
         return uniffi_jsi::Bridging<uint64_t>::toJs(rt, callInvoker, value);
 }
 jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_method_litesealcore_clear_unpinned_attachments(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         RustCallStatus status = uniffi::liteseal_core::Bridging<RustCallStatus>::rustSuccess(rt);
-        auto value = uniffi_liteseal_core_fn_method_litesealcore_clear_unpinned_attachments(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), 
+        auto value = uniffi_liteseal_core_fn_method_litesealcore_clear_unpinned_attachments(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]),
             &status
         );
         uniffi::liteseal_core::Bridging<RustCallStatus>::copyIntoJs(rt, callInvoker, status, args[count - 1]);
 
-        
-        return uniffi_jsi::Bridging<uint64_t>::toJs(rt, callInvoker, value);
-}
-jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_method_litesealcore_connect_relay(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
-        auto value = uniffi_liteseal_core_fn_method_litesealcore_connect_relay(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[1]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[2]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[3]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[4])
-        );
 
-        
-        return uniffi_jsi::Bridging</*handle*/ uint64_t>::toJs(rt, callInvoker, value);
+        return uniffi_jsi::Bridging<uint64_t>::toJs(rt, callInvoker, value);
 }
 jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_method_litesealcore_disconnect(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         auto value = uniffi_liteseal_core_fn_method_litesealcore_disconnect(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0])
         );
 
-        
+
         return uniffi_jsi::Bridging</*handle*/ uint64_t>::toJs(rt, callInvoker, value);
 }
 jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_method_litesealcore_get_contacts(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         RustCallStatus status = uniffi::liteseal_core::Bridging<RustCallStatus>::rustSuccess(rt);
-        auto value = uniffi_liteseal_core_fn_method_litesealcore_get_contacts(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), 
+        auto value = uniffi_liteseal_core_fn_method_litesealcore_get_contacts(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]),
             &status
         );
         uniffi::liteseal_core::Bridging<RustCallStatus>::copyIntoJs(rt, callInvoker, status, args[count - 1]);
 
-        
+
         return uniffi::liteseal_core::Bridging<RustBuffer>::toJs(rt, callInvoker, value);
 }
 jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_method_litesealcore_get_local_messages(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         RustCallStatus status = uniffi::liteseal_core::Bridging<RustCallStatus>::rustSuccess(rt);
-        auto value = uniffi_liteseal_core_fn_method_litesealcore_get_local_messages(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[1]), uniffi_jsi::Bridging<int64_t>::fromJs(rt, callInvoker, args[2]), uniffi_jsi::Bridging<int64_t>::fromJs(rt, callInvoker, args[3]), 
+        auto value = uniffi_liteseal_core_fn_method_litesealcore_get_local_messages(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[1]), uniffi_jsi::Bridging<int64_t>::fromJs(rt, callInvoker, args[2]), uniffi_jsi::Bridging<int64_t>::fromJs(rt, callInvoker, args[3]),
             &status
         );
         uniffi::liteseal_core::Bridging<RustCallStatus>::copyIntoJs(rt, callInvoker, status, args[count - 1]);
 
-        
+
         return uniffi::liteseal_core::Bridging<RustBuffer>::toJs(rt, callInvoker, value);
 }
 jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_method_litesealcore_get_storage_stats(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         RustCallStatus status = uniffi::liteseal_core::Bridging<RustCallStatus>::rustSuccess(rt);
-        auto value = uniffi_liteseal_core_fn_method_litesealcore_get_storage_stats(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), 
+        auto value = uniffi_liteseal_core_fn_method_litesealcore_get_storage_stats(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]),
             &status
         );
         uniffi::liteseal_core::Bridging<RustCallStatus>::copyIntoJs(rt, callInvoker, status, args[count - 1]);
 
-        
+
         return uniffi::liteseal_core::Bridging<RustBuffer>::toJs(rt, callInvoker, value);
+}
+jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_method_litesealcore_native_login(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
+        auto value = uniffi_liteseal_core_fn_method_litesealcore_native_login(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[1]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[2]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[3])
+        );
+
+
+        return uniffi_jsi::Bridging</*handle*/ uint64_t>::toJs(rt, callInvoker, value);
+}
+jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_method_litesealcore_native_register(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
+        auto value = uniffi_liteseal_core_fn_method_litesealcore_native_register(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[1]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[2]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[3]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[4])
+        );
+
+
+        return uniffi_jsi::Bridging</*handle*/ uint64_t>::toJs(rt, callInvoker, value);
+}
+jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_method_litesealcore_native_sign_out(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
+        auto value = uniffi_liteseal_core_fn_method_litesealcore_native_sign_out(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0])
+        );
+
+
+        return uniffi_jsi::Bridging</*handle*/ uint64_t>::toJs(rt, callInvoker, value);
 }
 jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_method_litesealcore_poll_messages(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         auto value = uniffi_liteseal_core_fn_method_litesealcore_poll_messages(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0])
         );
 
-        
+
         return uniffi_jsi::Bridging</*handle*/ uint64_t>::toJs(rt, callInvoker, value);
 }
-jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_method_litesealcore_remove_contact(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
+jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_method_litesealcore_read_message(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         RustCallStatus status = uniffi::liteseal_core::Bridging<RustCallStatus>::rustSuccess(rt);
-        uniffi_liteseal_core_fn_method_litesealcore_remove_contact(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[1]), 
+        auto value = uniffi_liteseal_core_fn_method_litesealcore_read_message(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[1]),
             &status
         );
         uniffi::liteseal_core::Bridging<RustCallStatus>::copyIntoJs(rt, callInvoker, status, args[count - 1]);
 
-        
+
+        return uniffi::liteseal_core::Bridging<RustBuffer>::toJs(rt, callInvoker, value);
+}
+jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_method_litesealcore_remove_contact(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
+        RustCallStatus status = uniffi::liteseal_core::Bridging<RustCallStatus>::rustSuccess(rt);
+        uniffi_liteseal_core_fn_method_litesealcore_remove_contact(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[1]),
+            &status
+        );
+        uniffi::liteseal_core::Bridging<RustCallStatus>::copyIntoJs(rt, callInvoker, status, args[count - 1]);
+
+
         return jsi::Value::undefined();
 }
-jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_method_litesealcore_send_message(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
-        auto value = uniffi_liteseal_core_fn_method_litesealcore_send_message(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[1]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[2]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[3]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[4]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[5]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[6])
+jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_method_litesealcore_restore_identity(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
+        auto value = uniffi_liteseal_core_fn_method_litesealcore_restore_identity(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0])
         );
 
-        
+
+        return uniffi_jsi::Bridging</*handle*/ uint64_t>::toJs(rt, callInvoker, value);
+}
+jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_method_litesealcore_resume_native(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
+        auto value = uniffi_liteseal_core_fn_method_litesealcore_resume_native(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0])
+        );
+
+
+        return uniffi_jsi::Bridging</*handle*/ uint64_t>::toJs(rt, callInvoker, value);
+}
+jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_method_litesealcore_search_users(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
+        auto value = uniffi_liteseal_core_fn_method_litesealcore_search_users(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[1])
+        );
+
+
+        return uniffi_jsi::Bridging</*handle*/ uint64_t>::toJs(rt, callInvoker, value);
+}
+jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_method_litesealcore_send_text(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
+        auto value = uniffi_liteseal_core_fn_method_litesealcore_send_text(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[1]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[2])
+        );
+
+
         return uniffi_jsi::Bridging</*handle*/ uint64_t>::toJs(rt, callInvoker, value);
 }
 jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_method_litesealcore_set_contact_trust(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         RustCallStatus status = uniffi::liteseal_core::Bridging<RustCallStatus>::rustSuccess(rt);
-        uniffi_liteseal_core_fn_method_litesealcore_set_contact_trust(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[1]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[2]), 
+        uniffi_liteseal_core_fn_method_litesealcore_set_contact_trust(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[1]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[2]),
             &status
         );
         uniffi::liteseal_core::Bridging<RustCallStatus>::copyIntoJs(rt, callInvoker, status, args[count - 1]);
 
-        
+
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_func_canonical_conversation_id(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         RustCallStatus status = uniffi::liteseal_core::Bridging<RustCallStatus>::rustSuccess(rt);
-        auto value = uniffi_liteseal_core_fn_func_canonical_conversation_id(uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[1]), 
+        auto value = uniffi_liteseal_core_fn_func_canonical_conversation_id(uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[1]),
             &status
         );
         uniffi::liteseal_core::Bridging<RustCallStatus>::copyIntoJs(rt, callInvoker, status, args[count - 1]);
 
-        
-        return uniffi::liteseal_core::Bridging<RustBuffer>::toJs(rt, callInvoker, value);
-}
-jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_func_decrypt_message(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
-        RustCallStatus status = uniffi::liteseal_core::Bridging<RustCallStatus>::rustSuccess(rt);
-        auto value = uniffi_liteseal_core_fn_func_decrypt_message(uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[1]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[2]), 
-            &status
-        );
-        uniffi::liteseal_core::Bridging<RustCallStatus>::copyIntoJs(rt, callInvoker, status, args[count - 1]);
 
-        
         return uniffi::liteseal_core::Bridging<RustBuffer>::toJs(rt, callInvoker, value);
-}
-jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_func_encrypt_message(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
-        RustCallStatus status = uniffi::liteseal_core::Bridging<RustCallStatus>::rustSuccess(rt);
-        auto value = uniffi_liteseal_core_fn_func_encrypt_message(uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[1]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[2]), 
-            &status
-        );
-        uniffi::liteseal_core::Bridging<RustCallStatus>::copyIntoJs(rt, callInvoker, status, args[count - 1]);
-
-        
-        return uniffi::liteseal_core::Bridging<RustBuffer>::toJs(rt, callInvoker, value);
-}
-jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_func_generate_keypair(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
-        RustCallStatus status = uniffi::liteseal_core::Bridging<RustCallStatus>::rustSuccess(rt);
-        auto value = uniffi_liteseal_core_fn_func_generate_keypair(&status
-        );
-        uniffi::liteseal_core::Bridging<RustCallStatus>::copyIntoJs(rt, callInvoker, status, args[count - 1]);
-
-        
-        return uniffi::liteseal_core::Bridging<RustBuffer>::toJs(rt, callInvoker, value);
-}
-jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_func_get_user_devices(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
-        auto value = uniffi_liteseal_core_fn_func_get_user_devices(uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[1]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[2])
-        );
-
-        
-        return uniffi_jsi::Bridging</*handle*/ uint64_t>::toJs(rt, callInvoker, value);
 }
 jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_func_key_fingerprint(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         RustCallStatus status = uniffi::liteseal_core::Bridging<RustCallStatus>::rustSuccess(rt);
-        auto value = uniffi_liteseal_core_fn_func_key_fingerprint(uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[0]), 
+        auto value = uniffi_liteseal_core_fn_func_key_fingerprint(uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[0]),
             &status
         );
         uniffi::liteseal_core::Bridging<RustCallStatus>::copyIntoJs(rt, callInvoker, status, args[count - 1]);
 
-        
+
         return uniffi::liteseal_core::Bridging<RustBuffer>::toJs(rt, callInvoker, value);
-}
-jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_func_login(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
-        auto value = uniffi_liteseal_core_fn_func_login(uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[1]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[2]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[3]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[4]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[5]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[6])
-        );
-
-        
-        return uniffi_jsi::Bridging</*handle*/ uint64_t>::toJs(rt, callInvoker, value);
-}
-jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_func_refresh_session(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
-        auto value = uniffi_liteseal_core_fn_func_refresh_session(uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[1])
-        );
-
-        
-        return uniffi_jsi::Bridging</*handle*/ uint64_t>::toJs(rt, callInvoker, value);
-}
-jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_func_register(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
-        auto value = uniffi_liteseal_core_fn_func_register(uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[1]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[2]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[3]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[4]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[5])
-        );
-
-        
-        return uniffi_jsi::Bridging</*handle*/ uint64_t>::toJs(rt, callInvoker, value);
-}
-jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_func_search_users(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
-        auto value = uniffi_liteseal_core_fn_func_search_users(uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[1]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[2])
-        );
-
-        
-        return uniffi_jsi::Bridging</*handle*/ uint64_t>::toJs(rt, callInvoker, value);
-}
-jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_func_sign_message(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
-        RustCallStatus status = uniffi::liteseal_core::Bridging<RustCallStatus>::rustSuccess(rt);
-        auto value = uniffi_liteseal_core_fn_func_sign_message(uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[1]), 
-            &status
-        );
-        uniffi::liteseal_core::Bridging<RustCallStatus>::copyIntoJs(rt, callInvoker, status, args[count - 1]);
-
-        
-        return uniffi::liteseal_core::Bridging<RustBuffer>::toJs(rt, callInvoker, value);
-}
-jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_fn_func_verify_message(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
-        RustCallStatus status = uniffi::liteseal_core::Bridging<RustCallStatus>::rustSuccess(rt);
-        auto value = uniffi_liteseal_core_fn_func_verify_message(uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[1]), uniffi::liteseal_core::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[2]), 
-            &status
-        );
-        uniffi::liteseal_core::Bridging<RustCallStatus>::copyIntoJs(rt, callInvoker, status, args[count - 1]);
-
-        
-        return uniffi_jsi::Bridging<int8_t>::toJs(rt, callInvoker, value);
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_poll_u8(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         ffi_liteseal_core_rust_future_poll_u8(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<UniffiRustFutureContinuationCallback>::fromJs(rt, callInvoker, args[1]), uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[2])
         );
 
-        
+
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_cancel_u8(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         ffi_liteseal_core_rust_future_cancel_u8(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0])
         );
 
-        
+
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_free_u8(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         ffi_liteseal_core_rust_future_free_u8(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0])
         );
 
-        
+
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_complete_u8(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         RustCallStatus status = uniffi::liteseal_core::Bridging<RustCallStatus>::rustSuccess(rt);
-        auto value = ffi_liteseal_core_rust_future_complete_u8(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), 
+        auto value = ffi_liteseal_core_rust_future_complete_u8(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]),
             &status
         );
         uniffi::liteseal_core::Bridging<RustCallStatus>::copyIntoJs(rt, callInvoker, status, args[count - 1]);
 
-        
+
         return uniffi_jsi::Bridging<uint8_t>::toJs(rt, callInvoker, value);
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_poll_i8(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         ffi_liteseal_core_rust_future_poll_i8(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<UniffiRustFutureContinuationCallback>::fromJs(rt, callInvoker, args[1]), uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[2])
         );
 
-        
+
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_cancel_i8(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         ffi_liteseal_core_rust_future_cancel_i8(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0])
         );
 
-        
+
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_free_i8(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         ffi_liteseal_core_rust_future_free_i8(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0])
         );
 
-        
+
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_complete_i8(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         RustCallStatus status = uniffi::liteseal_core::Bridging<RustCallStatus>::rustSuccess(rt);
-        auto value = ffi_liteseal_core_rust_future_complete_i8(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), 
+        auto value = ffi_liteseal_core_rust_future_complete_i8(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]),
             &status
         );
         uniffi::liteseal_core::Bridging<RustCallStatus>::copyIntoJs(rt, callInvoker, status, args[count - 1]);
 
-        
+
         return uniffi_jsi::Bridging<int8_t>::toJs(rt, callInvoker, value);
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_poll_u16(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         ffi_liteseal_core_rust_future_poll_u16(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<UniffiRustFutureContinuationCallback>::fromJs(rt, callInvoker, args[1]), uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[2])
         );
 
-        
+
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_cancel_u16(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         ffi_liteseal_core_rust_future_cancel_u16(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0])
         );
 
-        
+
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_free_u16(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         ffi_liteseal_core_rust_future_free_u16(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0])
         );
 
-        
+
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_complete_u16(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         RustCallStatus status = uniffi::liteseal_core::Bridging<RustCallStatus>::rustSuccess(rt);
-        auto value = ffi_liteseal_core_rust_future_complete_u16(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), 
+        auto value = ffi_liteseal_core_rust_future_complete_u16(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]),
             &status
         );
         uniffi::liteseal_core::Bridging<RustCallStatus>::copyIntoJs(rt, callInvoker, status, args[count - 1]);
 
-        
+
         return uniffi_jsi::Bridging<uint16_t>::toJs(rt, callInvoker, value);
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_poll_i16(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         ffi_liteseal_core_rust_future_poll_i16(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<UniffiRustFutureContinuationCallback>::fromJs(rt, callInvoker, args[1]), uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[2])
         );
 
-        
+
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_cancel_i16(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         ffi_liteseal_core_rust_future_cancel_i16(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0])
         );
 
-        
+
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_free_i16(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         ffi_liteseal_core_rust_future_free_i16(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0])
         );
 
-        
+
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_complete_i16(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         RustCallStatus status = uniffi::liteseal_core::Bridging<RustCallStatus>::rustSuccess(rt);
-        auto value = ffi_liteseal_core_rust_future_complete_i16(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), 
+        auto value = ffi_liteseal_core_rust_future_complete_i16(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]),
             &status
         );
         uniffi::liteseal_core::Bridging<RustCallStatus>::copyIntoJs(rt, callInvoker, status, args[count - 1]);
 
-        
+
         return uniffi_jsi::Bridging<int16_t>::toJs(rt, callInvoker, value);
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_poll_u32(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         ffi_liteseal_core_rust_future_poll_u32(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<UniffiRustFutureContinuationCallback>::fromJs(rt, callInvoker, args[1]), uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[2])
         );
 
-        
+
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_cancel_u32(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         ffi_liteseal_core_rust_future_cancel_u32(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0])
         );
 
-        
+
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_free_u32(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         ffi_liteseal_core_rust_future_free_u32(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0])
         );
 
-        
+
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_complete_u32(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         RustCallStatus status = uniffi::liteseal_core::Bridging<RustCallStatus>::rustSuccess(rt);
-        auto value = ffi_liteseal_core_rust_future_complete_u32(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), 
+        auto value = ffi_liteseal_core_rust_future_complete_u32(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]),
             &status
         );
         uniffi::liteseal_core::Bridging<RustCallStatus>::copyIntoJs(rt, callInvoker, status, args[count - 1]);
 
-        
+
         return uniffi_jsi::Bridging<uint32_t>::toJs(rt, callInvoker, value);
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_poll_i32(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         ffi_liteseal_core_rust_future_poll_i32(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<UniffiRustFutureContinuationCallback>::fromJs(rt, callInvoker, args[1]), uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[2])
         );
 
-        
+
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_cancel_i32(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         ffi_liteseal_core_rust_future_cancel_i32(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0])
         );
 
-        
+
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_free_i32(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         ffi_liteseal_core_rust_future_free_i32(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0])
         );
 
-        
+
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_complete_i32(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         RustCallStatus status = uniffi::liteseal_core::Bridging<RustCallStatus>::rustSuccess(rt);
-        auto value = ffi_liteseal_core_rust_future_complete_i32(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), 
+        auto value = ffi_liteseal_core_rust_future_complete_i32(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]),
             &status
         );
         uniffi::liteseal_core::Bridging<RustCallStatus>::copyIntoJs(rt, callInvoker, status, args[count - 1]);
 
-        
+
         return uniffi_jsi::Bridging<int32_t>::toJs(rt, callInvoker, value);
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_poll_u64(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         ffi_liteseal_core_rust_future_poll_u64(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<UniffiRustFutureContinuationCallback>::fromJs(rt, callInvoker, args[1]), uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[2])
         );
 
-        
+
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_cancel_u64(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         ffi_liteseal_core_rust_future_cancel_u64(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0])
         );
 
-        
+
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_free_u64(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         ffi_liteseal_core_rust_future_free_u64(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0])
         );
 
-        
+
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_complete_u64(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         RustCallStatus status = uniffi::liteseal_core::Bridging<RustCallStatus>::rustSuccess(rt);
-        auto value = ffi_liteseal_core_rust_future_complete_u64(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), 
+        auto value = ffi_liteseal_core_rust_future_complete_u64(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]),
             &status
         );
         uniffi::liteseal_core::Bridging<RustCallStatus>::copyIntoJs(rt, callInvoker, status, args[count - 1]);
 
-        
+
         return uniffi_jsi::Bridging<uint64_t>::toJs(rt, callInvoker, value);
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_poll_i64(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         ffi_liteseal_core_rust_future_poll_i64(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<UniffiRustFutureContinuationCallback>::fromJs(rt, callInvoker, args[1]), uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[2])
         );
 
-        
+
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_cancel_i64(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         ffi_liteseal_core_rust_future_cancel_i64(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0])
         );
 
-        
+
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_free_i64(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         ffi_liteseal_core_rust_future_free_i64(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0])
         );
 
-        
+
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_complete_i64(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         RustCallStatus status = uniffi::liteseal_core::Bridging<RustCallStatus>::rustSuccess(rt);
-        auto value = ffi_liteseal_core_rust_future_complete_i64(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), 
+        auto value = ffi_liteseal_core_rust_future_complete_i64(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]),
             &status
         );
         uniffi::liteseal_core::Bridging<RustCallStatus>::copyIntoJs(rt, callInvoker, status, args[count - 1]);
 
-        
+
         return uniffi_jsi::Bridging<int64_t>::toJs(rt, callInvoker, value);
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_poll_f32(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         ffi_liteseal_core_rust_future_poll_f32(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<UniffiRustFutureContinuationCallback>::fromJs(rt, callInvoker, args[1]), uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[2])
         );
 
-        
+
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_cancel_f32(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         ffi_liteseal_core_rust_future_cancel_f32(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0])
         );
 
-        
+
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_free_f32(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         ffi_liteseal_core_rust_future_free_f32(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0])
         );
 
-        
+
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_complete_f32(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         RustCallStatus status = uniffi::liteseal_core::Bridging<RustCallStatus>::rustSuccess(rt);
-        auto value = ffi_liteseal_core_rust_future_complete_f32(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), 
+        auto value = ffi_liteseal_core_rust_future_complete_f32(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]),
             &status
         );
         uniffi::liteseal_core::Bridging<RustCallStatus>::copyIntoJs(rt, callInvoker, status, args[count - 1]);
 
-        
+
         return uniffi_jsi::Bridging<float>::toJs(rt, callInvoker, value);
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_poll_f64(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         ffi_liteseal_core_rust_future_poll_f64(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<UniffiRustFutureContinuationCallback>::fromJs(rt, callInvoker, args[1]), uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[2])
         );
 
-        
+
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_cancel_f64(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         ffi_liteseal_core_rust_future_cancel_f64(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0])
         );
 
-        
+
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_free_f64(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         ffi_liteseal_core_rust_future_free_f64(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0])
         );
 
-        
+
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_complete_f64(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         RustCallStatus status = uniffi::liteseal_core::Bridging<RustCallStatus>::rustSuccess(rt);
-        auto value = ffi_liteseal_core_rust_future_complete_f64(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), 
+        auto value = ffi_liteseal_core_rust_future_complete_f64(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]),
             &status
         );
         uniffi::liteseal_core::Bridging<RustCallStatus>::copyIntoJs(rt, callInvoker, status, args[count - 1]);
 
-        
+
         return uniffi_jsi::Bridging<double>::toJs(rt, callInvoker, value);
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_poll_rust_buffer(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         ffi_liteseal_core_rust_future_poll_rust_buffer(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<UniffiRustFutureContinuationCallback>::fromJs(rt, callInvoker, args[1]), uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[2])
         );
 
-        
+
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_cancel_rust_buffer(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         ffi_liteseal_core_rust_future_cancel_rust_buffer(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0])
         );
 
-        
+
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_free_rust_buffer(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         ffi_liteseal_core_rust_future_free_rust_buffer(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0])
         );
 
-        
+
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_complete_rust_buffer(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         RustCallStatus status = uniffi::liteseal_core::Bridging<RustCallStatus>::rustSuccess(rt);
-        auto value = ffi_liteseal_core_rust_future_complete_rust_buffer(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), 
+        auto value = ffi_liteseal_core_rust_future_complete_rust_buffer(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]),
             &status
         );
         uniffi::liteseal_core::Bridging<RustCallStatus>::copyIntoJs(rt, callInvoker, status, args[count - 1]);
 
-        
+
         return uniffi::liteseal_core::Bridging<RustBuffer>::toJs(rt, callInvoker, value);
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_poll_void(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         ffi_liteseal_core_rust_future_poll_void(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::liteseal_core::Bridging<UniffiRustFutureContinuationCallback>::fromJs(rt, callInvoker, args[1]), uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[2])
         );
 
-        
+
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_cancel_void(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         ffi_liteseal_core_rust_future_cancel_void(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0])
         );
 
-        
+
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_free_void(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         ffi_liteseal_core_rust_future_free_void(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0])
         );
 
-        
+
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_rust_future_complete_void(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         RustCallStatus status = uniffi::liteseal_core::Bridging<RustCallStatus>::rustSuccess(rt);
-        ffi_liteseal_core_rust_future_complete_void(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), 
+        ffi_liteseal_core_rust_future_complete_void(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]),
             &status
         );
         uniffi::liteseal_core::Bridging<RustCallStatus>::copyIntoJs(rt, callInvoker, status, args[count - 1]);
 
-        
+
         return jsi::Value::undefined();
 }
 jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_checksum_func_canonical_conversation_id(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         auto value = uniffi_liteseal_core_checksum_func_canonical_conversation_id(
         );
 
-        
-        return uniffi_jsi::Bridging<uint16_t>::toJs(rt, callInvoker, value);
-}
-jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_checksum_func_decrypt_message(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
-        auto value = uniffi_liteseal_core_checksum_func_decrypt_message(
-        );
 
-        
-        return uniffi_jsi::Bridging<uint16_t>::toJs(rt, callInvoker, value);
-}
-jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_checksum_func_encrypt_message(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
-        auto value = uniffi_liteseal_core_checksum_func_encrypt_message(
-        );
-
-        
-        return uniffi_jsi::Bridging<uint16_t>::toJs(rt, callInvoker, value);
-}
-jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_checksum_func_generate_keypair(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
-        auto value = uniffi_liteseal_core_checksum_func_generate_keypair(
-        );
-
-        
-        return uniffi_jsi::Bridging<uint16_t>::toJs(rt, callInvoker, value);
-}
-jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_checksum_func_get_user_devices(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
-        auto value = uniffi_liteseal_core_checksum_func_get_user_devices(
-        );
-
-        
         return uniffi_jsi::Bridging<uint16_t>::toJs(rt, callInvoker, value);
 }
 jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_checksum_func_key_fingerprint(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         auto value = uniffi_liteseal_core_checksum_func_key_fingerprint(
         );
 
-        
-        return uniffi_jsi::Bridging<uint16_t>::toJs(rt, callInvoker, value);
-}
-jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_checksum_func_login(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
-        auto value = uniffi_liteseal_core_checksum_func_login(
-        );
 
-        
-        return uniffi_jsi::Bridging<uint16_t>::toJs(rt, callInvoker, value);
-}
-jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_checksum_func_refresh_session(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
-        auto value = uniffi_liteseal_core_checksum_func_refresh_session(
-        );
-
-        
-        return uniffi_jsi::Bridging<uint16_t>::toJs(rt, callInvoker, value);
-}
-jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_checksum_func_register(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
-        auto value = uniffi_liteseal_core_checksum_func_register(
-        );
-
-        
-        return uniffi_jsi::Bridging<uint16_t>::toJs(rt, callInvoker, value);
-}
-jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_checksum_func_search_users(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
-        auto value = uniffi_liteseal_core_checksum_func_search_users(
-        );
-
-        
-        return uniffi_jsi::Bridging<uint16_t>::toJs(rt, callInvoker, value);
-}
-jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_checksum_func_sign_message(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
-        auto value = uniffi_liteseal_core_checksum_func_sign_message(
-        );
-
-        
-        return uniffi_jsi::Bridging<uint16_t>::toJs(rt, callInvoker, value);
-}
-jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_checksum_func_verify_message(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
-        auto value = uniffi_liteseal_core_checksum_func_verify_message(
-        );
-
-        
         return uniffi_jsi::Bridging<uint16_t>::toJs(rt, callInvoker, value);
 }
 jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_checksum_method_litesealcore_add_contact(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         auto value = uniffi_liteseal_core_checksum_method_litesealcore_add_contact(
         );
 
-        
+
         return uniffi_jsi::Bridging<uint16_t>::toJs(rt, callInvoker, value);
 }
 jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_checksum_method_litesealcore_clear_expired_messages(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         auto value = uniffi_liteseal_core_checksum_method_litesealcore_clear_expired_messages(
         );
 
-        
+
         return uniffi_jsi::Bridging<uint16_t>::toJs(rt, callInvoker, value);
 }
 jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_checksum_method_litesealcore_clear_unpinned_attachments(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         auto value = uniffi_liteseal_core_checksum_method_litesealcore_clear_unpinned_attachments(
         );
 
-        
-        return uniffi_jsi::Bridging<uint16_t>::toJs(rt, callInvoker, value);
-}
-jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_checksum_method_litesealcore_connect_relay(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
-        auto value = uniffi_liteseal_core_checksum_method_litesealcore_connect_relay(
-        );
 
-        
         return uniffi_jsi::Bridging<uint16_t>::toJs(rt, callInvoker, value);
 }
 jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_checksum_method_litesealcore_disconnect(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         auto value = uniffi_liteseal_core_checksum_method_litesealcore_disconnect(
         );
 
-        
+
         return uniffi_jsi::Bridging<uint16_t>::toJs(rt, callInvoker, value);
 }
 jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_checksum_method_litesealcore_get_contacts(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         auto value = uniffi_liteseal_core_checksum_method_litesealcore_get_contacts(
         );
 
-        
+
         return uniffi_jsi::Bridging<uint16_t>::toJs(rt, callInvoker, value);
 }
 jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_checksum_method_litesealcore_get_local_messages(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         auto value = uniffi_liteseal_core_checksum_method_litesealcore_get_local_messages(
         );
 
-        
+
         return uniffi_jsi::Bridging<uint16_t>::toJs(rt, callInvoker, value);
 }
 jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_checksum_method_litesealcore_get_storage_stats(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         auto value = uniffi_liteseal_core_checksum_method_litesealcore_get_storage_stats(
         );
 
-        
+
+        return uniffi_jsi::Bridging<uint16_t>::toJs(rt, callInvoker, value);
+}
+jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_checksum_method_litesealcore_native_login(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
+        auto value = uniffi_liteseal_core_checksum_method_litesealcore_native_login(
+        );
+
+
+        return uniffi_jsi::Bridging<uint16_t>::toJs(rt, callInvoker, value);
+}
+jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_checksum_method_litesealcore_native_register(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
+        auto value = uniffi_liteseal_core_checksum_method_litesealcore_native_register(
+        );
+
+
+        return uniffi_jsi::Bridging<uint16_t>::toJs(rt, callInvoker, value);
+}
+jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_checksum_method_litesealcore_native_sign_out(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
+        auto value = uniffi_liteseal_core_checksum_method_litesealcore_native_sign_out(
+        );
+
+
         return uniffi_jsi::Bridging<uint16_t>::toJs(rt, callInvoker, value);
 }
 jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_checksum_method_litesealcore_poll_messages(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         auto value = uniffi_liteseal_core_checksum_method_litesealcore_poll_messages(
         );
 
-        
+
+        return uniffi_jsi::Bridging<uint16_t>::toJs(rt, callInvoker, value);
+}
+jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_checksum_method_litesealcore_read_message(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
+        auto value = uniffi_liteseal_core_checksum_method_litesealcore_read_message(
+        );
+
+
         return uniffi_jsi::Bridging<uint16_t>::toJs(rt, callInvoker, value);
 }
 jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_checksum_method_litesealcore_remove_contact(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         auto value = uniffi_liteseal_core_checksum_method_litesealcore_remove_contact(
         );
 
-        
+
         return uniffi_jsi::Bridging<uint16_t>::toJs(rt, callInvoker, value);
 }
-jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_checksum_method_litesealcore_send_message(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
-        auto value = uniffi_liteseal_core_checksum_method_litesealcore_send_message(
+jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_checksum_method_litesealcore_restore_identity(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
+        auto value = uniffi_liteseal_core_checksum_method_litesealcore_restore_identity(
         );
 
-        
+
+        return uniffi_jsi::Bridging<uint16_t>::toJs(rt, callInvoker, value);
+}
+jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_checksum_method_litesealcore_resume_native(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
+        auto value = uniffi_liteseal_core_checksum_method_litesealcore_resume_native(
+        );
+
+
+        return uniffi_jsi::Bridging<uint16_t>::toJs(rt, callInvoker, value);
+}
+jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_checksum_method_litesealcore_search_users(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
+        auto value = uniffi_liteseal_core_checksum_method_litesealcore_search_users(
+        );
+
+
+        return uniffi_jsi::Bridging<uint16_t>::toJs(rt, callInvoker, value);
+}
+jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_checksum_method_litesealcore_send_text(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
+        auto value = uniffi_liteseal_core_checksum_method_litesealcore_send_text(
+        );
+
+
         return uniffi_jsi::Bridging<uint16_t>::toJs(rt, callInvoker, value);
 }
 jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_checksum_method_litesealcore_set_contact_trust(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         auto value = uniffi_liteseal_core_checksum_method_litesealcore_set_contact_trust(
         );
 
-        
+
         return uniffi_jsi::Bridging<uint16_t>::toJs(rt, callInvoker, value);
 }
 jsi::Value NativeLitesealCore::cpp_uniffi_liteseal_core_checksum_constructor_litesealcore_new(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         auto value = uniffi_liteseal_core_checksum_constructor_litesealcore_new(
         );
 
-        
+
         return uniffi_jsi::Bridging<uint16_t>::toJs(rt, callInvoker, value);
 }
 jsi::Value NativeLitesealCore::cpp_ffi_liteseal_core_uniffi_contract_version(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         auto value = ffi_liteseal_core_uniffi_contract_version(
         );
 
-        
+
         return uniffi_jsi::Bridging<uint32_t>::toJs(rt, callInvoker, value);
 }

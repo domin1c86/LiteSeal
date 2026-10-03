@@ -3,6 +3,10 @@
 //! chain, relay connection, server REST calls, keystore model) lives here;
 //! platform shells only adapt it to their IPC mechanism.
 
+#[cfg(all(target_os = "android", feature = "ffi"))]
+mod android_background;
+#[cfg(target_os = "android")]
+pub mod android_secret_store;
 pub mod api;
 pub mod attachment_cache;
 pub mod backup;
@@ -16,6 +20,14 @@ pub mod ffi;
 pub mod groups;
 pub mod integrity;
 pub mod keystore;
+#[cfg(feature = "ffi")]
+pub mod mobile_identity;
+#[cfg(feature = "ffi")]
+pub(crate) mod mobile_messages;
+#[cfg(feature = "ffi")]
+pub(crate) mod mobile_operations;
+#[cfg(feature = "ffi")]
+pub(crate) mod mobile_runtime;
 pub mod network;
 pub mod secret_store;
 pub mod trusted_devices;

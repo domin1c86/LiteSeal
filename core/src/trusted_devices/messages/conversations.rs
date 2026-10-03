@@ -9,15 +9,15 @@ const KIND: &str = "direct_v3_conversation";
 const DOMAIN: &str = "LiteSeal/direct-conversation/v1";
 #[derive(Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct State {
+pub(super) struct State {
     domain: String,
     scope: String,
     peer: String,
     revision: u64,
-    read_through: i64,
+    pub(super) read_through: i64,
     #[serde(default)]
     notified_through: i64,
-    muted: bool,
+    pub(super) muted: bool,
 }
 #[derive(Debug, Serialize)]
 pub struct View {
@@ -37,7 +37,12 @@ pub struct Notification {
 fn scope(owner: &Owner) -> String {
     format!("conversation:{}", owner.scope())
 }
-fn load(conn: &Connection, owner: &Owner, peer: &str, keys: &KeyPair) -> Result<State, String> {
+pub(super) fn load(
+    conn: &Connection,
+    owner: &Owner,
+    peer: &str,
+    keys: &KeyPair,
+) -> Result<State, String> {
     let scope = scope(owner);
     let row = conn
         .query_row(
@@ -120,6 +125,7 @@ impl Store {
         self.trust.write_checked(|conn| {
             let mut result = Vec::new();
             super::ordering::check(conn, &owner.scope())?;
+            let transfers=super::history_transfer::updates(conn,&owner,keys)?;
             for anchor in peers.iter().filter(|a| a.account != owner.account) {
                 let peer = &anchor.account;
                 let mut state = load(conn, &owner, peer, keys)?;
@@ -129,8 +135,11 @@ impl Store {
                 if !state.muted {
                     let id: Option<String> = conn.query_row(&format!("SELECT id FROM direct_v3_records r WHERE {routing} AND rowid>?4 AND role='incoming' AND outcome='processed' AND NOT EXISTS(SELECT 1 FROM direct_v3_hidden h WHERE h.scope=r.scope AND h.id=r.id) ORDER BY rowid DESC LIMIT 1"), params![owner.scope(),owner.account,peer,state.read_through.max(state.notified_through)], |r| r.get(0)).optional().map_err(db)?;
                     if let Some(id) = id {
-                        checked_record(conn, &owner, &record(conn, &owner.scope(), &id)?.ok_or_else(invalid)?, keys)?;
-                        result.push(Notification {peer: peer.clone(), id});
+                        let (batch, _) = checked_record(conn, &owner, &record(conn, &owner.scope(), &id)?.ok_or_else(invalid)?, keys)?;
+                        let (revision,action,_)=super::operations::projection(conn,&owner,&batch,keys)?;
+                        if action!=Some(liteseal_shared::direct_operation::Action::Retract)&&!transfers.get(&id).is_some_and(|(copy_revision,retracted)|*copy_revision>revision&&*retracted) {
+                            result.push(Notification {peer: peer.clone(), id});
+                        }
                     }
                 }
                 state.notified_through = latest;

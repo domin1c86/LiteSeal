@@ -13,6 +13,9 @@ for(const theme of ['dark','light'])for(const [size,width,height]of [['wide',128
   await window.webContents.executeJavaScript('document.querySelector(\'[aria-label="v3 加密媒体发送"]\').scrollIntoView({block:"start"})');
   await new Promise(r=>setTimeout(r,100));
   await fs.writeFile(path.join(directory,name+'-media.png'),(await window.webContents.capturePage()).toPNG());
+  await window.webContents.executeJavaScript('window.showDirectOperations()');
+  if(await window.webContents.executeJavaScript('document.documentElement.scrollWidth>innerWidth'))throw new Error('operation editor horizontal overflow');
+  await fs.writeFile(path.join(directory,name+'-operations.png'),(await window.webContents.capturePage()).toPNG());
   await window.webContents.executeJavaScript('window.showDirectStorage()');
   if(await window.webContents.executeJavaScript('document.documentElement.scrollWidth>innerWidth'))throw new Error('storage horizontal overflow');
   await fs.writeFile(path.join(directory,name+'-storage.png'),(await window.webContents.capturePage()).toPNG());

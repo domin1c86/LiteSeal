@@ -24,6 +24,7 @@ pub enum SendOutcome {
 
 #[derive(Clone)]
 pub struct AppState {
+    pub(crate) audio: Arc<tokio::sync::Mutex<crate::direct_messages::audio::Hub>>,
     connections: Arc<DashMap<String, Connection>>,
     next_generation: Arc<AtomicU64>,
     pub db: Db,
@@ -35,6 +36,7 @@ pub struct AppState {
 impl AppState {
     pub fn new(db: Db) -> Self {
         Self {
+            audio: Arc::new(tokio::sync::Mutex::new(crate::direct_messages::audio::Hub::default())),
             connections: Arc::new(DashMap::new()),
             next_generation: Arc::new(AtomicU64::new(1)),
             db,

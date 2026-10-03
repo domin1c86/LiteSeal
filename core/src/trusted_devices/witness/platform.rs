@@ -58,7 +58,17 @@ impl Protection {
             };
             Ok(Witness::new(database, store))
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "android")]
+        {
+            Ok(Witness::new(
+                database,
+                Arc::new(super::android::AndroidStore::open(
+                    database,
+                    self.0.namespace,
+                )?),
+            ))
+        }
+        #[cfg(not(any(windows, target_os = "android")))]
         {
             let _ = database;
             Err("此平台不支持设备外部安全存储".into())

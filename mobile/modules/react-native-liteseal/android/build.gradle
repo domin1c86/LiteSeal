@@ -66,6 +66,8 @@ android {
   defaultConfig {
     minSdkVersion getExtOrIntegerDefault("minSdkVersion")
     targetSdkVersion getExtOrIntegerDefault("targetSdkVersion")
+    testApplicationId "com.liteseal.nativeisolatedtests"
+    testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     buildConfigField "boolean", "IS_NEW_ARCHITECTURE_ENABLED", isNewArchitectureEnabled().toString()
     consumerProguardFiles 'proguard-rules.pro'
 
@@ -98,6 +100,11 @@ android {
       minifyEnabled false
     }
   }
+  // Match React Native's application packaging policy for the isolated test
+  // APK too: AGP gives the module-built STL priority over dependency copies.
+  packagingOptions {
+    jniLibs { pickFirsts += ["**/libc++_shared.so", "**/libfbjni.so", "**/libreactnative.so", "**/libjsi.so"] }
+  }
 
   lintOptions {
     disable "GradleCompatible"
@@ -128,6 +135,10 @@ repositories {
 def kotlin_version = getExtOrDefault("kotlinVersion")
 
 dependencies {
+  androidTestImplementation "androidx.test:runner:1.7.0"
+  androidTestImplementation "androidx.test.ext:junit:1.3.0"
+  implementation "androidx.work:work-runtime:2.12.0"
+  implementation project(":react-native-keychain")
   // For < 0.71, this will be from the local maven repo
   // For > 0.71, this will be replaced by `com.facebook.react:react-android:$version` by react gradle plugin
   //noinspection GradleDynamicVersion

@@ -31,11 +31,12 @@ export default function SettingsScreen() {
 
   async function handleLogout() {
     try {
-      await getCore().disconnect();
-    } catch {}
-    try {
       await clearKeystore();
-    } catch {}
+    } catch {
+      setConnected(false);
+      setNotice('退出未能持久保存；身份已保留，请重试。');
+      return;
+    }
     setConnected(false);
     setSession(null);
   }

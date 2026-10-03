@@ -6,6 +6,8 @@ use liteseal_shared::direct_operation::{self as op, Action, Event, Operation, Pa
 const KIND: &str = "direct_v3_operation";
 const CHUNK: usize = 32 * 1024;
 const LIMIT: i64 = 32 * 1024 * 1024;
+mod tasks;
+pub use tasks::{PrepareOperation, TaskView as OperationTaskView};
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Meta {
@@ -231,6 +233,146 @@ pub(super) fn retracted(
     };
     Ok(open(conn, owner, &m, keys)?.0.header.action == Action::Retract)
 }
+pub(super) fn archive_events(
+    conn: &Connection,
+    owner: &Owner,
+    keys: &KeyPair,
+) -> Result<Vec<Event>, String> {
+    let mut query = conn
+        .prepare("SELECT id FROM device_control_tasks WHERE scope=?1 AND id!='cursor' ORDER BY id")
+        .map_err(db)?;
+    let ids = query
+        .query_map([scope(owner)], |r| r.get::<_, String>(0))
+        .map_err(db)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(db)?;
+    if ids.len() > op::MAX_EVENTS as usize {
+        return Err(invalid());
+    }
+    let mut events = Vec::with_capacity(ids.len());
+    for id in ids {
+        let m = meta(conn, owner, &id, keys)?.ok_or_else(invalid)?;
+        let (operation, _) = open(conn, owner, &m, keys)?;
+        events.push(Event {
+            order: m.order,
+            accepted_at: m.accepted_at,
+            operation,
+        });
+    }
+    events.sort_by_key(|e| e.order);
+    if events.windows(2).any(|p| p[0].order >= p[1].order) {
+        return Err(invalid());
+    }
+    Ok(events)
+}
+pub(super) fn persist_event(
+    conn: &Connection,
+    owner: &Owner,
+    event: &Event,
+    authority: [u8; 32],
+    keys: &KeyPair,
+) -> Result<(), String> {
+    let Event {
+        order,
+        accepted_at,
+        operation,
+    } = event;
+    uuid(&operation.header.id)?;
+    uuid(&operation.original.header.id)?;
+    if *order <= 0 || !(1..=8_640_000_000_000_000).contains(accepted_at) {
+        return Err(invalid());
+    }
+    let (sender, peer) = evidence(conn, &operation.original)?;
+    let original = if operation.original.header.sender == owner.account {
+        &sender
+    } else {
+        &peer
+    };
+    if owner.member(original)? != authority {
+        return Err(invalid());
+    }
+    let text = Zeroizing::new(
+        operation
+            .open(
+                &sender,
+                &peer,
+                &owner.account,
+                &owner.device.device_id,
+                authority,
+                keys,
+            )
+            .map_err(|_| invalid())?,
+    );
+    drop(text);
+    let wire = operation.to_wire().map_err(|_| invalid())?;
+    let target = &operation.original.header.id;
+    let row_id = id(target, operation.header.revision);
+    let digest = operation.digest().map_err(|_| invalid())?;
+    if let Some(m) = meta(conn, owner, &row_id, keys)? {
+        let (saved, _) = open(conn, owner, &m, keys)?;
+        if m.order != *order
+            || m.accepted_at != *accepted_at
+            || m.digest != digest
+            || saved.to_wire().map_err(|_| invalid())? != wire
+        {
+            return Err(invalid());
+        }
+        return Ok(());
+    }
+    if let Some(m) = latest(conn, owner, target, keys)? {
+        let (saved, _) = open(conn, owner, &m, keys)?;
+        if m.revision != operation.header.base
+            || saved.header.action == Action::Retract
+            || saved.original.digest().map_err(|_| invalid())? != operation.header.original
+        {
+            return Err(invalid());
+        }
+    } else if operation.header.base != 0 {
+        return Err("操作历史存在缺口，游标没有推进".into());
+    }
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM device_control_tasks WHERE scope=?1 AND id!='cursor'",
+            [scope(owner)],
+            |r| r.get(0),
+        )
+        .map_err(db)?;
+    let bytes: i64 = conn
+        .query_row(
+            "SELECT COALESCE(SUM(length(body)),0) FROM device_control_tasks WHERE scope=?1",
+            [wires(owner)],
+            |r| r.get(0),
+        )
+        .map_err(db)?;
+    if count >= op::MAX_EVENTS || bytes + wire.len() as i64 > LIMIT {
+        return Err("本机操作日志达到 10000 项或 32 MiB 上限".into());
+    }
+    let hashes = wire
+        .chunks(CHUNK)
+        .map(|bytes| Sha256::digest(bytes).into())
+        .collect();
+    for (part, body) in wire.chunks(CHUNK).enumerate() {
+        conn.execute("INSERT INTO device_control_tasks(scope,id,revision,kind,terminal,body) VALUES(?1,?2,?3,?4,1,?5)",params![wires(owner),format!("{}:{part:02}",operation.header.id),operation.header.revision,KIND,body]).map_err(db)?;
+    }
+    let m = Meta {
+        domain: "LiteSeal/direct-operation-log/v1".into(),
+        scope: scope(owner),
+        id: row_id.clone(),
+        event: operation.header.id.clone(),
+        target: target.clone(),
+        revision: operation.header.revision,
+        order: *order,
+        accepted_at: *accepted_at,
+        digest,
+        size: wire.len(),
+        hashes,
+    };
+    put(conn, &scope(owner), &row_id, m.revision, &m, keys)?;
+    if operation.header.action == Action::Retract {
+        media::hidden(conn, owner, target, keys)?;
+    }
+    Ok(())
+}
 impl Store {
     pub fn import_authenticated_operations(
         &mut self,
@@ -271,51 +413,42 @@ impl Store {
             return Err(invalid());
         }
         let owner = self.owner.clone();
-        self.trust.write_checked(|conn|{
-            let mut cursor=cursor(conn,&owner,keys)?;
-            if cursor.through!=expected{return Err("操作补收游标已变化，请重新查询".into());}
-            let authority=cursor.authority;
-            let mut previous=expected;
-            for event in &page.events {
-                let Event{order,accepted_at,operation}=event;
-                uuid(&operation.header.id)?;uuid(&operation.original.header.id)?;
-                if *order<=previous||!(1..=8_640_000_000_000_000).contains(accepted_at){return Err(invalid());}
-                previous= *order;
-                let (sender,peer)=evidence(conn,&operation.original)?;
-                let original=if operation.original.header.sender==owner.account{&sender}else{&peer};
-                if owner.member(original)?!=authority{return Err(invalid());}
-                let text=Zeroizing::new(operation.open(&sender,&peer,&owner.account,&owner.device.device_id,authority,keys).map_err(|_|invalid())?);
-                drop(text);
-                let wire=operation.to_wire().map_err(|_|invalid())?;
-                let target=&operation.original.header.id;
-                let row_id=id(target,operation.header.revision);
-                let digest=operation.digest().map_err(|_|invalid())?;
-                if let Some(m)=meta(conn,&owner,&row_id,keys)? {
-                    let (saved,_)=open(conn,&owner,&m,keys)?;
-                    if m.order!=*order||m.accepted_at!=*accepted_at||m.digest!=digest||saved.to_wire().map_err(|_|invalid())?!=wire{return Err(invalid());}
-                    continue;
-                }
-                if let Some(m)=latest(conn,&owner,target,keys)? {
-                    let (saved,_)=open(conn,&owner,&m,keys)?;
-                    if m.revision!=operation.header.base||saved.header.action==Action::Retract||saved.original.digest().map_err(|_|invalid())?!=operation.header.original{return Err(invalid());}
-                }else if operation.header.base!=0{return Err("操作历史存在缺口，游标没有推进".into());}
-                let count:i64=conn.query_row("SELECT COUNT(*) FROM device_control_tasks WHERE scope=?1 AND id!='cursor'",[scope(&owner)],|r|r.get(0)).map_err(db)?;
-                let bytes:i64=conn.query_row("SELECT COALESCE(SUM(length(body)),0) FROM device_control_tasks WHERE scope=?1",[wires(&owner)],|r|r.get(0)).map_err(db)?;
-                if count>=op::MAX_EVENTS||bytes+wire.len() as i64>LIMIT{return Err("本机操作日志达到 10000 项或 32 MiB 上限".into());}
-                let hashes=wire.chunks(CHUNK).map(|bytes|Sha256::digest(bytes).into()).collect();
-                for (part,body) in wire.chunks(CHUNK).enumerate(){
-                    // Plain INSERT preserves the global event-id fence as well
-                    // as the target/revision fence, including moved-ID forgeries.
-                    conn.execute("INSERT INTO device_control_tasks(scope,id,revision,kind,terminal,body) VALUES(?1,?2,?3,?4,1,?5)",params![wires(&owner),format!("{}:{part:02}",operation.header.id),operation.header.revision,KIND,body]).map_err(db)?;
-                }
-                let m=Meta{domain:"LiteSeal/direct-operation-log/v1".into(),scope:scope(&owner),id:row_id.clone(),event:operation.header.id.clone(),target:target.clone(),revision:operation.header.revision,order:*order,accepted_at:*accepted_at,digest,size:wire.len(),hashes};
-                put(conn,&scope(&owner),&row_id,m.revision,&m,keys)?;
-                if operation.header.action==Action::Retract{media::hidden(conn,&owner,target,keys)?;}
+        self.trust.write_checked(|conn| {
+            let mut cursor = cursor(conn, &owner, keys)?;
+            if cursor.through != expected {
+                return Err("操作补收游标已变化，请重新查询".into());
             }
-            if !page.events.is_empty(){
-                cursor.through=page.through;
-                cursor.revision=cursor.revision.checked_add(1).filter(|r|*r<=i64::MAX as u64).ok_or_else(invalid)?;
-                put(conn,&scope(&owner),"cursor",cursor.revision,&cursor,keys)?;
+            let authority = cursor.authority;
+            let mut previous = expected;
+            for event in &page.events {
+                let Event {
+                    order,
+                    accepted_at,
+                    operation,
+                } = event;
+                uuid(&operation.header.id)?;
+                uuid(&operation.original.header.id)?;
+                if *order <= previous || !(1..=8_640_000_000_000_000).contains(accepted_at) {
+                    return Err(invalid());
+                }
+                previous = *order;
+                persist_event(conn, &owner, event, authority, keys)?;
+            }
+            if !page.events.is_empty() {
+                cursor.through = page.through;
+                cursor.revision = cursor
+                    .revision
+                    .checked_add(1)
+                    .filter(|r| *r <= i64::MAX as u64)
+                    .ok_or_else(invalid)?;
+                put(
+                    conn,
+                    &scope(&owner),
+                    "cursor",
+                    cursor.revision,
+                    &cursor,
+                    keys,
+                )?;
             }
             Ok(cursor.through)
         })

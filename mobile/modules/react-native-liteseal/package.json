@@ -47,6 +47,6 @@
     "android": {
       "javaPackageName": "com.liteseal"
     },
-    "includesGeneratedCode": true
+    "includesGeneratedCode": false
   }
 }

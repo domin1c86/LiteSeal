@@ -36,6 +36,7 @@ export default function BackupPanel({ onClose, canExport = true }: { onClose: ()
   return <PanelDialog label="备份与隔离恢复" wide busy={busy || !!running} onClose={onClose}>
     <p>使用独立口令保护身份密钥、联系人、历史和本机设置。忘记备份口令无法恢复。</p>
     <p>不包含登录令牌、待发送任务或定时任务。恢复只打开离线档案，不替换当前数据，也不接管原设备。</p>
+    {canExport && <p>导出当前选中档案的已确认历史、草稿和偏好；待发与传输任务不会恢复。已导入的授权历史包整体保留，其中原设备包含的媒体也随包保存。</p>}
     <div className="backup-fields">
       <label>独立备份口令（至少 12 字节）<input type="password" autoComplete="off" aria-label="独立备份口令" value={password} disabled={busy || running} onChange={e => setPassword(e.target.value)} /></label>
       {canExport && <><label>确认备份口令<input type="password" autoComplete="off" aria-label="确认备份口令" value={confirmation} disabled={busy || running} onChange={e => setConfirmation(e.target.value)} /></label>

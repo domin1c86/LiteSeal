@@ -2,9 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useNavigation } from '@react-navigation/native';
-import { decryptMessage } from 'react-native-liteseal';
 import Avatar from '../components/Avatar';
-import { bytesToBuffer, utf8Decode } from '../lib/bytes';
+import {decodeContent} from '../../../ui/src/lib/messageContent';
 import { conversationIdFor, useApp } from '../lib/AppContext';
 import { getCore } from '../lib/core';
 import { fonts, useTheme } from '../theme';
@@ -19,13 +18,14 @@ export default function ChatsScreen() {
   const { colors } = useTheme();
   const navigation =
     useNavigation<NativeStackNavigationProp<RootStackParamList>>();
-  const { session, contacts, unread, relayBatch, connected } = useApp();
+  const { session, contacts, unread, relayBatch, connected, foreground } = useApp();
   const [previews, setPreviews] = useState<Record<string, Preview>>({});
 
   // Rebuild previews from the local store; re-runs when new messages arrive
   // via the app-level poll loop.
   useEffect(() => {
-    if (!session) {
+    if (!session || !foreground) {
+      setPreviews({});
       return;
     }
     const next: Record<string, Preview> = {};
@@ -39,12 +39,7 @@ export default function ChatsScreen() {
         }
         let text = '[encrypted]';
         try {
-          const plaintext = decryptMessage(
-            last.ciphertext,
-            contact.publicKey,
-            bytesToBuffer(session.secretKey),
-          );
-          text = utf8Decode(plaintext);
+          text = decodeContent(getCore().readMessage(last.id)).text;
         } catch {
           // key mismatch or integrity-failed placeholder; keep [encrypted]
         }
@@ -54,7 +49,7 @@ export default function ChatsScreen() {
       }
     }
     setPreviews(next);
-  }, [session, contacts, relayBatch]);
+  }, [session, contacts, relayBatch, foreground]);
 
   if (!session) {
     return null;

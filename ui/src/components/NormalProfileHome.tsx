@@ -17,7 +17,7 @@ export default function NormalProfileHome({view,onLegacy}:{view:NormalProfileSna
     <button onClick={()=>void open("join")}>管理加入档案</button><button onClick={()=>void open("archive")}>打开离线恢复档案</button>{onLegacy&&<><button onClick={()=>void legacy()}>原设备旧历史与群聊</button><button onClick={()=>void open("rootSession")}>恢复原设备正式会话</button></>}</div>
     {view.selected?.protocol==="v3"&&<DirectChat key={view.selected.scope_fingerprint} obscured={panel!==null} onFlushReady={work=>{flush.current=work;}}/>}
     {error&&<p role="alert">{error}</p>}{panel==="choice"&&<NormalProfilePanel onClose={()=>setPanel(null)}/>}{panel==="refresh"&&view.selected&&<SessionRefreshPanel target={view.selected.target} onClose={()=>setPanel(null)}/>}
-    {panel==="join"&&<DeviceJoinPanel onClose={()=>setPanel(null)}/>}{panel==="archive"&&<BackupPanel canExport={false} onClose={()=>setPanel(null)}/>}
+    {panel==="join"&&<DeviceJoinPanel onClose={()=>setPanel(null)}/>}{panel==="archive"&&<BackupPanel canExport={!!view.selected} onClose={()=>setPanel(null)}/>}
     {panel==="rootSession"&&<RootSessionPanel onClose={()=>setPanel(null)}/>}
   </section></main>;
 }

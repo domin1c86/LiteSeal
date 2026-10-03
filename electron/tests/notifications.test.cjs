@@ -32,6 +32,10 @@ test('v3 notifications use only claimed IDs, scoped click targets and foreground
   notices.directContext('scope-b',null);notices.receiveDirect(report('frank','m6'),epoch);assert.equal(shown.length,2);
   notices.receiveDirect(report('frank','m7','scope-b'),notices.directGeneration());assert.equal(shown.length,3);shown[2].emit('click');assert.equal(notices.takeDirect('scope-a'),null);
   shown[2].emit('click');assert.equal(notices.takeDirect('scope-b').peer,'frank');
+  const operationEpoch=notices.directGeneration();notices.retireDirectOperations();
+  assert.ok(shown[2].closed);shown[2].emit('click');assert.equal(notices.takeDirect('scope-b'),null);
+  notices.receiveDirect(report('greg','stale','scope-b'),operationEpoch);assert.equal(shown.length,3);
+  now+=31000;notices.receiveDirect(report('greg','fresh','scope-b'),notices.directGeneration());assert.equal(shown.length,4);
 });
 
 test('group notifications hide content, deduplicate, throttle and invalidate routing across locks and identities', () => {

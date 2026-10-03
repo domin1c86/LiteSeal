@@ -5,13 +5,16 @@ pub mod direct_media;
 pub mod direct_message;
 pub mod direct_operation;
 pub mod direct_transport;
+pub mod disappearing_message;
 pub mod group;
 pub mod group_extension;
+pub mod history_transfer;
 pub mod protocol;
 pub mod reaction;
 pub mod read_receipt;
 pub mod trusted_device;
 pub mod types;
+pub mod voice_call;
 
 pub mod message_operation;
 

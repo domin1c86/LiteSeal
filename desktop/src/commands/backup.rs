@@ -33,6 +33,7 @@ struct Job {
 struct Archive {
     app: AppState,
     restored: Restored,
+    direct: Option<Mutex<liteseal_core::trusted_devices::messages::archive::Reader>>,
 }
 #[derive(Default)]
 pub struct Runtime {
@@ -134,8 +135,14 @@ pub fn start_export(
     include_attachments: bool,
 ) -> Result<String> {
     let _identity_gate = state.backup_commit.lock().map_err(|_| "备份提交锁不可用")?;
-    let identity = Zeroizing::new(state.identity()?);
-    let db = state.db_path.clone();
+    let selected = super::normal_profile::capture(state)?.ok_or("请先选择要备份的正常档案")?;
+    let db = selected.database.clone();
+    let witness = if selected.protocol == "v3" {
+        Some(state.device_witness(&db)?)
+    } else {
+        None
+    };
+    let identity = Zeroizing::new(selected.identity);
     let password = Zeroizing::new(password);
     let (id, cancel) = create(state)?;
     let runtime = state.backup_runtime.clone();
@@ -143,16 +150,43 @@ pub fn start_export(
     let task_id = id.clone();
     tokio::task::spawn_blocking(move || {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            backup::export_guarded(
-                &db,
-                (*identity).clone(),
-                password.as_bytes(),
-                include_attachments,
-                &PathBuf::from(path),
-                &cancel,
-                &gate,
-                |n, total| progress(&runtime, &task_id, n, total),
-            )
+            let progress = |n, total| progress(&runtime, &task_id, n, total);
+            if let Some(witness) = witness {
+                let keys = backup::identity_keys(&identity)?;
+                let origin =
+                    liteseal_shared::trusted_device::canonical_origin(&identity.server_url)
+                        .map_err(|_| "备份身份来源无效")?;
+                let owner = liteseal_core::trusted_devices::messages::Owner::new(
+                    &origin,
+                    &identity.user_id,
+                    &identity.device_id,
+                    &keys,
+                )?;
+                let mut store =
+                    liteseal_core::trusted_devices::messages::Store::open(&db, owner, witness)?;
+                backup::export_direct_guarded(
+                    &db,
+                    (*identity).clone(),
+                    &mut store,
+                    password.as_bytes(),
+                    include_attachments,
+                    &PathBuf::from(path),
+                    &cancel,
+                    &gate,
+                    progress,
+                )
+            } else {
+                backup::export_guarded(
+                    &db,
+                    (*identity).clone(),
+                    password.as_bytes(),
+                    include_attachments,
+                    &PathBuf::from(path),
+                    &cancel,
+                    &gate,
+                    progress,
+                )
+            }
         }))
         .unwrap_or_else(|_| Err("备份任务异常终止".into()))
         .map(|summary| (summary, None));
@@ -189,7 +223,21 @@ pub fn start_restore(
                 Some(restored.directory.0.join("identity.bin")),
             )?;
             let summary = restored.summary.clone();
-            let archive = Arc::new(Archive { app, restored });
+            let direct = if restored.version == 3 {
+                Some(Mutex::new(
+                    liteseal_core::trusted_devices::messages::archive::Reader::open(
+                        &restored.directory.0.join("history.db"),
+                        &restored.identity,
+                    )?,
+                ))
+            } else {
+                None
+            };
+            let archive = Arc::new(Archive {
+                app,
+                restored,
+                direct,
+            });
             validate_archive(&archive, &cancel)?;
             Ok((summary, Some(archive)))
         }))
@@ -261,7 +309,7 @@ pub fn info(state: &AppState, id: &str) -> Result<Value> {
     let archive = archive(state, id)?;
     let saved = &archive.restored.identity;
     Ok(
-        json!({"id":id,"user_id":saved.user_id,"device_id":saved.device_id,"server_url":saved.server_url,"fingerprint":liteseal_core::contacts::fingerprint(&saved.public_key),"signing_fingerprint":liteseal_core::contacts::fingerprint(&saved.ed25519_pk),"summary":archive.restored.summary}),
+        json!({"id":id,"version":archive.restored.version,"user_id":saved.user_id,"device_id":saved.device_id,"server_url":saved.server_url,"fingerprint":liteseal_core::contacts::fingerprint(&saved.public_key),"signing_fingerprint":liteseal_core::contacts::fingerprint(&saved.ed25519_pk),"summary":archive.restored.summary}),
     )
 }
 fn connection(archive: &Archive) -> Result<rusqlite::Connection> {
@@ -295,10 +343,25 @@ fn conversations_inner(archive: &Archive, after: Option<&str>) -> Result<Value> 
             Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
         })
         .map_err(|_| "恢复会话不可读")?;
+    let mut entries = rows
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|_| "恢复会话不可读")?;
+    if let Some(direct) = &archive.direct {
+        let keys = backup::identity_keys(identity)?;
+        entries.extend(
+            direct
+                .lock()
+                .map_err(|_| "恢复历史锁不可用")?
+                .conversations(&keys)?
+                .into_iter()
+                .map(|c| (format!("v3:{}", c.peer), "direct_v3".into())),
+        );
+    }
+    entries.sort();
+    entries.dedup();
     let mut items = Vec::new();
     let mut next = None;
-    for row in rows {
-        let (id, kind) = row.map_err(|_| "恢复会话不可读")?;
+    for (id, kind) in entries {
         if after.is_some_and(|a| id.as_str() <= a) {
             continue;
         }
@@ -308,7 +371,9 @@ fn conversations_inner(archive: &Archive, after: Option<&str>) -> Result<Value> 
                 .and_then(|v: &Value| v["id"].as_str().map(str::to_owned));
             break;
         }
-        let name = if kind == "group" {
+        let name = if kind == "direct_v3" {
+            id.strip_prefix("v3:").ok_or("恢复会话无效")?.to_owned()
+        } else if kind == "group" {
             groups.state(&id)?.name().to_string()
         } else {
             let peer = id
@@ -341,9 +406,67 @@ fn page_inner(
     before_time: Option<i64>,
     before_id: Option<&str>,
     before_group: Option<i64>,
+    before_direct: Option<i64>,
 ) -> Result<Value> {
     let saved = &archive.restored.identity;
     let keys = backup::identity_keys(saved)?;
+    if kind == "direct_v3" {
+        if before_time.is_some()
+            || before_id.is_some()
+            || before_group.is_some()
+            || before_direct.is_some_and(|v| v <= 0)
+        {
+            return Err("恢复历史分页范围无效".into());
+        }
+        let peer = conversation.strip_prefix("v3:").ok_or("恢复会话无效")?;
+        let mut direct = archive
+            .direct
+            .as_ref()
+            .ok_or("此格式没有单聊 v3 历史")?
+            .lock()
+            .map_err(|_| "恢复历史锁不可用")?;
+        let preferences = direct
+            .conversations(&keys)?
+            .into_iter()
+            .find(|c| c.peer == peer)
+            .ok_or("恢复会话不属于当前身份")?;
+        let rows = direct.history(peer, before_direct, 51, &keys)?;
+        let next = if rows.len() == 51 {
+            Some(rows[49].cursor)
+        } else {
+            None
+        };
+        let mut messages = Vec::new();
+        for row in rows.into_iter().take(50).rev() {
+            let mut media = None;
+            let text = if row.retracted {
+                "[已撤回]".to_owned()
+            } else if row.transferred_update {
+                "[后续变更来自原设备授权，请查看授权副本]".to_owned()
+            } else if row.outcome != "processed" {
+                "[消息完整性异常]".to_owned()
+            } else {
+                let body = Zeroizing::new(direct.body(&row.id, &keys)?);
+                if row.kind == liteseal_shared::direct_message::Kind::Text {
+                    String::from_utf8(body.to_vec()).map_err(|_| "恢复消息编码无效")?
+                } else {
+                    let descriptor: liteseal_shared::direct_media::Descriptor =
+                        serde_json::from_slice(&body).map_err(|_| "恢复媒体描述无效")?;
+                    media = Some(
+                        json!({"name":descriptor.name,"mime":descriptor.mime,"size":descriptor.size,"duration_ms":descriptor.duration_ms,"included":direct.has_media(&row.id)?}),
+                    );
+                    "[附件]".to_owned()
+                }
+            };
+            messages.push(json!({"id":row.id,"sender":row.sender,"timestamp":row.sent_at,"text":text,"status":row.outcome,"operation_revision":row.operation_revision,"retracted":row.retracted,"media":media}));
+        }
+        return Ok(
+            json!({"messages":messages,"next_direct":next,"draft":preferences.draft,"muted":preferences.muted,"read_through":preferences.read_through}),
+        );
+    }
+    if before_direct.is_some() {
+        return Err("此历史不使用单聊 v3 游标".into());
+    }
     if kind == "group" {
         let groups = store(archive)?;
         groups.state(conversation)?;
@@ -450,6 +573,7 @@ fn crypto_plain(bytes: &[u8], pk: &[u8; 32], sk: &[u8; 32]) -> Result<String> {
     String::from_utf8(liteseal_shared::crypto::decrypt(bytes, pk, sk).map_err(|_| "历史解密失败")?)
         .map_err(|_| "消息编码无效".into())
 }
+#[allow(clippy::too_many_arguments)]
 pub fn page(
     state: &AppState,
     id: &str,
@@ -458,6 +582,7 @@ pub fn page(
     before_time: Option<i64>,
     before_id: Option<&str>,
     before_group: Option<i64>,
+    before_direct: Option<i64>,
 ) -> Result<Value> {
     let archive = archive(state, id)?;
     page_inner(
@@ -467,6 +592,7 @@ pub fn page(
         before_time,
         before_id,
         before_group,
+        before_direct,
     )
 }
 fn validate_archive(archive: &Archive, cancel: &AtomicBool) -> Result<()> {
@@ -537,6 +663,82 @@ pub fn export_attachment(state: &AppState, id: &str, message: &str, path: &str) 
         .and_then(|_| file.sync_all())
         .map_err(|_| "附件保存失败")?;
     Ok(descriptor.mime)
+}
+pub fn export_direct_attachment(
+    state: &AppState,
+    id: &str,
+    message: &str,
+    path: &str,
+) -> Result<String> {
+    let archive = archive(state, id)?;
+    let keys = backup::identity_keys(&archive.restored.identity)?;
+    let (descriptor, bytes) = archive
+        .direct
+        .as_ref()
+        .ok_or("此档案没有单聊 v3 媒体")?
+        .lock()
+        .map_err(|_| "恢复历史锁不可用")?
+        .media(message, &keys)?;
+    let bytes = Zeroizing::new(bytes);
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(path)
+        .map_err(|_| "附件目标已存在或不可写")?;
+    file.write_all(&bytes)
+        .and_then(|_| file.sync_all())
+        .map_err(|_| "附件保存失败")?;
+    Ok(descriptor.mime.clone())
+}
+pub fn transferred_history(
+    state: &AppState,
+    id: &str,
+    account: &str,
+    before: Option<String>,
+) -> Result<super::direct::history_transfer::Page> {
+    let archive = archive(state, id)?;
+    let keys = backup::identity_keys(&archive.restored.identity)?;
+    let rows = archive
+        .direct
+        .as_ref()
+        .ok_or("此格式没有单聊 v3 历史")?
+        .lock()
+        .map_err(|_| "恢复历史锁不可用")?
+        .transferred_history(account, &keys)?;
+    super::direct::history_transfer::page_records(rows, before)
+}
+pub fn export_transferred_media(
+    state: &AppState,
+    id: &str,
+    message: &str,
+    path: &str,
+) -> Result<String> {
+    let archive = archive(state, id)?;
+    let keys = backup::identity_keys(&archive.restored.identity)?;
+    let bytes = archive
+        .direct
+        .as_ref()
+        .ok_or("此格式没有单聊 v3 历史")?
+        .lock()
+        .map_err(|_| "恢复历史锁不可用")?
+        .transferred_media(message, &keys)?;
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|_| "目标已存在或不可写，请选择新文件")?;
+    if file
+        .write_all(&bytes)
+        .and_then(|_| file.sync_all())
+        .is_err()
+    {
+        drop(file);
+        let _ = std::fs::remove_file(path);
+        return Err("迁移附件写入或同步失败".into());
+    }
+    Ok("已保存认证后的迁移附件".into())
 }
 pub fn export_group_attachment(
     state: &AppState,

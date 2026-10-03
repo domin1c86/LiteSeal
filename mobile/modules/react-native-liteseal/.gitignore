@@ -79,7 +79,8 @@ android/keystores/debug.keystore
 lib/
 
 # React Native Codegen
-# ios/generated and android/generated are committed: codegenConfig.includesGeneratedCode is true
+# Android codegen is produced by Gradle; native libraries are local build outputs.
+android/src/main/jniLibs/
 
 
 # React Native Nitro Modules

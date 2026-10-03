@@ -32,6 +32,8 @@ struct Fixture {
     seen: Arc<Notify>,
     release: Arc<Notify>,
     server: tokio::task::JoinHandle<()>,
+    own: Anchor,
+    protection: Protection,
     _work: WorkDirectory,
 }
 impl Drop for Fixture {
@@ -40,10 +42,42 @@ impl Drop for Fixture {
     }
 }
 impl Fixture {
+    async fn prepared_edit(&self) -> String {
+        use liteseal_core::trusted_devices::messages::operations::PrepareOperation;
+        let original = self
+            .actor
+            .prepare_text(&self.peer, "original 🦭", &self.keys)
+            .await
+            .unwrap()
+            .task
+            .unwrap();
+        self.actor.step(&original.id, &self.keys).await.unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        self.actor
+            .prepare_operation(
+                PrepareOperation {
+                    id: &id,
+                    target: &original.id,
+                    created_at: chrono::Utc::now().timestamp_millis(),
+                    action: liteseal_shared::direct_operation::Action::Edit,
+                    text: Some("edited 中文 🦭"),
+                },
+                &self.keys,
+            )
+            .await
+            .unwrap();
+        id
+    }
     async fn new() -> Self {
         Self::new_mode(false).await
     }
     async fn new_mode(restore: bool) -> Self {
+        Self::configured(restore, None).await
+    }
+    async fn operations(mode: u8) -> Self {
+        Self::configured(false, Some(mode)).await
+    }
+    async fn configured(restore: bool, operation_mode: Option<u8>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let keys = Arc::new(crypto::generate_keypair().unwrap());
@@ -62,7 +96,7 @@ impl Fixture {
                 &work.0.join("messages.db"),
                 Owner::new(&url, &root.account, &root.root.device_id, &keys).unwrap(),
                 &keys,
-                protection,
+                protection.clone(),
             )
             .unwrap(),
         );
@@ -74,12 +108,16 @@ impl Fixture {
         actor.renew_session("synthetic-first".into()).unwrap();
         let seen = Arc::new(Notify::new());
         let release = Arc::new(Notify::new());
-        let roots = [root, peer.clone()];
+        let roots = [root.clone(), peer.clone()];
         let seen_ = seen.clone();
         let release_ = release.clone();
         let first = AtomicBool::new(true);
         let server = tokio::spawn(async move {
             let mut expired = false;
+            let mut events = Vec::<liteseal_shared::direct_operation::Event>::new();
+            let mut cancels = std::collections::HashSet::new();
+            let mut first_operation = true;
+            let mut first_page = true;
             loop {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let mut bytes = vec![];
@@ -120,6 +158,99 @@ impl Fixture {
                         more: false,
                     })
                     .unwrap()
+                } else if path == "/direct/v3/operations" && body.is_empty() {
+                    let after: i64 = parsed
+                        .query_pairs()
+                        .find(|(k, _)| k == "after")
+                        .unwrap()
+                        .1
+                        .parse()
+                        .unwrap();
+                    let mut rows: Vec<_> =
+                        events.iter().filter(|e| e.order > after).cloned().collect();
+                    if first_page && operation_mode == Some(5) {
+                        first_page = false;
+                        seen_.notify_one();
+                        release_.notified().await;
+                    }
+                    if first_page && operation_mode == Some(6) {
+                        first_page = false;
+                        rows[0].operation.signature[0] ^= 1;
+                    }
+                    serde_json::to_vec(&liteseal_shared::direct_operation::Page {
+                        through: rows.last().map_or(after, |e| e.order),
+                        events: rows,
+                        has_more: false,
+                    })
+                    .unwrap()
+                } else if path.starts_with("/direct/v3/operations/") && path.ends_with("/outcome") {
+                    let id = path.split('/').nth(4).unwrap().to_string();
+                    let digest: [u8; 32] = hex::decode(
+                        parsed
+                            .query_pairs()
+                            .find(|(k, _)| k == "digest")
+                            .unwrap()
+                            .1
+                            .as_ref(),
+                    )
+                    .unwrap()
+                    .try_into()
+                    .unwrap();
+                    let result =
+                        if let Some(event) = events.iter().find(|e| e.operation.header.id == id) {
+                            liteseal_shared::direct_operation::Outcome::Accepted {
+                                receipt: liteseal_shared::direct_operation::Receipt {
+                                    id,
+                                    digest,
+                                    revision: event.operation.header.revision,
+                                    order: event.order,
+                                    accepted_at: event.accepted_at,
+                                },
+                            }
+                        } else if cancels.contains(&id) {
+                            liteseal_shared::direct_operation::Outcome::Cancelled { id, digest }
+                        } else {
+                            liteseal_shared::direct_operation::Outcome::Unknown { id, digest }
+                        };
+                    serde_json::to_vec(&result).unwrap()
+                } else if path.starts_with("/direct/v3/operations") {
+                    let operation =
+                        liteseal_shared::direct_operation::Operation::from_wire(&body).unwrap();
+                    if path.ends_with("/cancel") {
+                        cancels.insert(operation.header.id.clone());
+                        serde_json::to_vec(&liteseal_shared::direct_operation::Outcome::Cancelled {
+                            id: operation.header.id.clone(),
+                            digest: operation.digest().unwrap(),
+                        })
+                        .unwrap()
+                    } else {
+                        let receipt = liteseal_shared::direct_operation::Receipt {
+                            id: operation.header.id.clone(),
+                            digest: operation.digest().unwrap(),
+                            revision: operation.header.revision,
+                            order: events.len() as i64 + 1,
+                            accepted_at: chrono::Utc::now().timestamp_millis(),
+                        };
+                        if operation_mode != Some(4) {
+                            events.push(liteseal_shared::direct_operation::Event {
+                                order: receipt.order,
+                                accepted_at: receipt.accepted_at,
+                                operation,
+                            });
+                        }
+                        if first_operation {
+                            first_operation = false;
+                            match operation_mode {
+                                Some(0 | 4) => lose_response = true,
+                                Some(1..=3) => {
+                                    seen_.notify_one();
+                                    release_.notified().await;
+                                }
+                                _ => {}
+                            }
+                        }
+                        serde_json::to_vec(&receipt).unwrap()
+                    }
                 } else if path.starts_with("/direct/v3/batches/") {
                     let id = path.rsplit('/').next().unwrap().to_string();
                     let digest: [u8; 32] = hex::decode(
@@ -133,14 +264,17 @@ impl Fixture {
                     .unwrap()
                     .try_into()
                     .unwrap();
-                    let outcome = if !restore && first.swap(false, Ordering::SeqCst) {
+                    let outcome = if operation_mode.is_none()
+                        && !restore
+                        && first.swap(false, Ordering::SeqCst)
+                    {
                         seen_.notify_one();
                         release_.notified().await;
                         Outcome::Accepted {
                             receipt: Receipt {
                                 id,
                                 digest,
-                                accepted_at: 123,
+                                accepted_at: chrono::Utc::now().timestamp_millis(),
                             },
                             acknowledgements: vec![],
                         }
@@ -178,7 +312,7 @@ impl Fixture {
                             receipt: Receipt {
                                 id: batch.header.id.clone(),
                                 digest: batch.digest().unwrap(),
-                                accepted_at: 123,
+                                accepted_at: chrono::Utc::now().timestamp_millis(),
                             },
                             acknowledgements: vec![],
                         }
@@ -209,6 +343,8 @@ impl Fixture {
             seen,
             release,
             server,
+            own: root,
+            protection,
             _work: work,
         }
     }
@@ -564,5 +700,134 @@ async fn prepared_restore_releases_text_lock_and_fences_late_cancel_rotation_and
                 Condition::Accepted
             );
         }
+    }
+}
+
+#[tokio::test]
+async fn operation_lost_publish_response_reopens_exact_task_and_queries_original_acceptance() {
+    let mut f = Fixture::operations(0).await;
+    let id = f.prepared_edit().await;
+    let first = f.actor.operation_step(&id, &f.keys).await.unwrap();
+    assert_eq!(first.condition, Condition::Retry);
+    assert_eq!(first.task.state, TaskState::Publishing);
+    assert!(f
+        .actor
+        .clear_operation_task(&id, first.task.revision, &f.keys)
+        .is_err());
+    f.actor.invalidate().unwrap();
+    f.actor = Arc::new(
+        MessageCoordinator::open_with_protection(
+            &f._work.0.join("messages.db"),
+            Owner::new(
+                &f.own.origin,
+                &f.own.account,
+                &f.own.root.device_id,
+                &f.keys,
+            )
+            .unwrap(),
+            &f.keys,
+            f.protection.clone(),
+        )
+        .unwrap(),
+    );
+    f.actor.renew_session("synthetic-reopened".into()).unwrap();
+    let result = f.actor.operation_step(&id, &f.keys).await.unwrap();
+    assert_eq!(result.condition, Condition::Accepted);
+    assert_eq!(result.task.id, id);
+    assert_eq!(
+        f.actor.text(&result.task.target, &f.keys).unwrap(),
+        "edited 中文 🦭"
+    );
+    assert_eq!(f.actor.poll_operations(&f.keys).await.unwrap().received, 1);
+    assert_eq!(f.actor.poll_operations(&f.keys).await.unwrap().received, 0);
+    f.actor
+        .clear_operation_task(&id, result.task.revision, &f.keys)
+        .unwrap();
+    assert!(f.actor.operation_tasks(&f.keys).unwrap().is_empty());
+}
+#[tokio::test]
+async fn operation_cancel_revision_session_rotation_and_lock_reject_late_publish_result() {
+    for mode in 1..=3 {
+        let f = Fixture::operations(mode).await;
+        let id = f.prepared_edit().await;
+        let actor = f.actor.clone();
+        let keys = f.keys.clone();
+        let copy = id.clone();
+        let job = tokio::spawn(async move { actor.operation_step(&copy, &keys).await });
+        tokio::time::timeout(std::time::Duration::from_secs(3), f.seen.notified())
+            .await
+            .unwrap();
+        let task = f.actor.operation_tasks(&f.keys).unwrap().pop().unwrap();
+        match mode {
+            1 => {
+                f.actor.cancel_operation(&id, 0, &f.keys).unwrap();
+            }
+            2 => f.actor.renew_session("synthetic-rotated".into()).unwrap(),
+            _ => {
+                f.actor.invalidate().unwrap();
+                f.actor.resume().unwrap();
+                f.actor.renew_session("synthetic-unlocked".into()).unwrap();
+            }
+        }
+        f.release.notify_one();
+        assert!(job.await.unwrap().is_err());
+        assert_eq!(f.actor.text(&task.target, &f.keys).unwrap(), "original 🦭");
+        // The accepted result wins even when cancellation was requested; it is
+        // learned through a new lease/revision instead of the late response.
+        let result = f.actor.operation_step(&id, &f.keys).await.unwrap();
+        assert_eq!(result.condition, Condition::Accepted);
+        assert_eq!(
+            f.actor.text(&task.target, &f.keys).unwrap(),
+            "edited 中文 🦭"
+        );
+    }
+}
+#[tokio::test]
+async fn operation_unknown_publish_can_be_fenced_without_republishing_or_changing_body() {
+    let f = Fixture::operations(4).await;
+    let id = f.prepared_edit().await;
+    let first = f.actor.operation_step(&id, &f.keys).await.unwrap();
+    assert_eq!(first.condition, Condition::Retry);
+    let cancel = f
+        .actor
+        .cancel_operation(&id, first.task.revision, &f.keys)
+        .unwrap();
+    assert!(cancel.cancel_requested);
+    let result = f.actor.drive_operations(&f.keys).await.unwrap().unwrap();
+    assert_eq!(result.condition, Condition::Cancelled);
+    assert_eq!(
+        f.actor.text(&result.task.target, &f.keys).unwrap(),
+        "original 🦭"
+    );
+    assert!(f.actor.drive_operations(&f.keys).await.unwrap().is_none());
+    assert_eq!(f.actor.poll_operations(&f.keys).await.unwrap().received, 0);
+}
+#[tokio::test]
+async fn operation_log_bad_page_or_retired_lease_never_advances_cursor_or_revives_content() {
+    for mode in [5, 6] {
+        let f = Fixture::operations(mode).await;
+        let id = f.prepared_edit().await;
+        let task = f.actor.operation_step(&id, &f.keys).await.unwrap().task;
+        if mode == 5 {
+            let actor = f.actor.clone();
+            let keys = f.keys.clone();
+            let job = tokio::spawn(async move { actor.poll_operations(&keys).await });
+            tokio::time::timeout(std::time::Duration::from_secs(3), f.seen.notified())
+                .await
+                .unwrap();
+            f.actor.invalidate().unwrap();
+            f.actor.resume().unwrap();
+            f.actor.renew_session("synthetic-recovered".into()).unwrap();
+            f.release.notify_one();
+            assert!(job.await.unwrap().is_err());
+        } else {
+            assert!(f.actor.poll_operations(&f.keys).await.is_err());
+        }
+        f.actor.hide(&task.target, &f.keys).unwrap();
+        assert_eq!(f.actor.poll_operations(&f.keys).await.unwrap().received, 1);
+        assert_eq!(f.actor.poll_operations(&f.keys).await.unwrap().received, 0);
+        assert!(f.actor.text(&task.target, &f.keys).is_err());
+        assert!(f.actor.history(None, 6, &f.keys).unwrap().is_empty());
+        assert!(f.actor.claim_notifications(&f.keys).unwrap().is_empty());
     }
 }

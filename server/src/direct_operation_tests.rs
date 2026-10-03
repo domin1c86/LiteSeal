@@ -1,5 +1,217 @@
 //! Isolated HTTP/PostgreSQL identities, including body release and old phases.
 use super::*;
+#[tokio::test]
+#[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]
+async fn coordinator_edit_retract_cancel_and_expiry_use_real_http_and_isolated_native_stores() {
+    use liteseal_core::{
+        backup::WorkDirectory,
+        trusted_devices::{
+            messages::{
+                coordinator::MessageCoordinator, operations::PrepareOperation, Owner, TaskState,
+            },
+            tasks::anchor_fingerprint,
+            witness::platform::Protection,
+        },
+    };
+    let f = Fixture::start(true).await;
+    let a = f.account().await;
+    let b = f.account().await;
+    accepted(&f, &a, &b).await;
+    let sender = directory(&f, &a);
+    let peer = directory(&f, &b);
+    let work = WorkDirectory::create(&std::env::temp_dir()).unwrap();
+    let protection = Protection::isolated_test();
+    let open = |account: &Account, name: &str| {
+        let actor = MessageCoordinator::open_with_protection(
+            &work.0.join(name),
+            Owner::new(&f.url, &account.id, &account.device, &account.keys).unwrap(),
+            &account.keys,
+            protection.clone(),
+        )
+        .unwrap();
+        for anchor in [sender.anchor(), peer.anchor()] {
+            actor
+                .confirm_root(anchor, &anchor_fingerprint(anchor), &account.keys)
+                .unwrap();
+        }
+        actor.renew_session(account.token.clone()).unwrap();
+        actor
+    };
+    let a_actor = open(&a, "author.db");
+    let b_actor = open(&b, "recipient.db");
+    let task = a_actor
+        .prepare_text(&b.id, "原文字 🦭", &a.keys)
+        .await
+        .unwrap()
+        .task
+        .unwrap();
+    assert_eq!(
+        a_actor.step(&task.id, &a.keys).await.unwrap().task.state,
+        TaskState::Accepted
+    );
+    assert_eq!(b_actor.poll(&b.keys).await.unwrap().received, 1);
+    assert_eq!(b_actor.text(&task.id, &b.keys).unwrap(), "原文字 🦭");
+    assert_eq!(b_actor.claim_notifications(&b.keys).unwrap().len(), 1);
+    let id = uuid::Uuid::new_v4().to_string();
+    let time = now();
+    let prepare = || PrepareOperation {
+        id: &id,
+        target: &task.id,
+        created_at: time,
+        action: Action::Edit,
+        text: Some("编辑 中文 🦭"),
+    };
+    let edit = a_actor
+        .prepare_operation(prepare(), &a.keys)
+        .await
+        .unwrap()
+        .task
+        .unwrap();
+    assert_eq!(edit.state, TaskState::Prepared);
+    assert_eq!(
+        a_actor
+            .operation_step(&id, &a.keys)
+            .await
+            .unwrap()
+            .task
+            .state,
+        TaskState::Accepted
+    );
+    assert_eq!(b_actor.poll_operations(&b.keys).await.unwrap().received, 1);
+    assert_eq!(b_actor.text(&task.id, &b.keys).unwrap(), "编辑 中文 🦭");
+    assert_eq!(b_actor.conversations(&b.keys).unwrap()[0].unread, 1);
+    assert!(b_actor.claim_notifications(&b.keys).unwrap().is_empty());
+    assert_eq!(b_actor.poll_operations(&b.keys).await.unwrap().received, 0);
+    // Reopening keeps the original id and authenticated accepted state.
+    drop(a_actor);
+    let a_actor = open(&a, "author.db");
+    assert_eq!(
+        a_actor
+            .prepare_operation(prepare(), &a.keys)
+            .await
+            .unwrap()
+            .task
+            .unwrap()
+            .state,
+        TaskState::Accepted
+    );
+    let terminal = a_actor.operation_tasks(&a.keys).unwrap().pop().unwrap();
+    a_actor
+        .clear_operation_task(&id, terminal.revision, &a.keys)
+        .unwrap();
+    assert!(a_actor.prepare_operation(prepare(), &a.keys).await.is_err());
+    let cancelled_id = uuid::Uuid::new_v4().to_string();
+    let cancelled = a_actor
+        .prepare_operation(
+            PrepareOperation {
+                id: &cancelled_id,
+                target: &task.id,
+                created_at: now(),
+                action: Action::Edit,
+                text: Some("不能发布"),
+            },
+            &a.keys,
+        )
+        .await
+        .unwrap()
+        .task
+        .unwrap();
+    assert_eq!(
+        a_actor
+            .cancel_operation(&cancelled_id, cancelled.revision, &a.keys)
+            .unwrap()
+            .state,
+        TaskState::Cancelled
+    );
+    assert!(a_actor.drive_operations(&a.keys).await.unwrap().is_none());
+    let retract_id = uuid::Uuid::new_v4().to_string();
+    a_actor
+        .prepare_operation(
+            PrepareOperation {
+                id: &retract_id,
+                target: &task.id,
+                created_at: now(),
+                action: Action::Retract,
+                text: None,
+            },
+            &a.keys,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        a_actor
+            .drive_operations(&a.keys)
+            .await
+            .unwrap()
+            .unwrap()
+            .task
+            .state,
+        TaskState::Accepted
+    );
+    b_actor.poll_operations(&b.keys).await.unwrap();
+    assert!(b_actor.text(&task.id, &b.keys).is_err());
+    assert!(b_actor.history(None, 6, &b.keys).unwrap()[0].retracted);
+    assert!(b_actor.claim_notifications(&b.keys).unwrap().is_empty());
+    // A fresh server expiry blocks new edits but retains exact accepted retries
+    // and cancellation fences. Only synthetic fixture metadata is changed.
+    let second = a_actor
+        .prepare_text(&b.id, "期限测试", &a.keys)
+        .await
+        .unwrap()
+        .task
+        .unwrap();
+    a_actor.step(&second.id, &a.keys).await.unwrap();
+    let expiry_id = uuid::Uuid::new_v4().to_string();
+    a_actor
+        .prepare_operation(
+            PrepareOperation {
+                id: &expiry_id,
+                target: &second.id,
+                created_at: now(),
+                action: Action::Edit,
+                text: Some("超过期限"),
+            },
+            &a.keys,
+        )
+        .await
+        .unwrap();
+    sqlx::query("UPDATE direct_v3_batches SET accepted_at=$2 WHERE id=$1")
+        .bind(&second.id)
+        .bind(now() - 48 * 60 * 60 * 1000 - 1000)
+        .execute(f.db.pool())
+        .await
+        .unwrap();
+    let expiry = a_actor.operation_step(&expiry_id, &a.keys).await.unwrap();
+    assert_eq!(expiry.http_status, Some(410));
+    assert_eq!(a_actor.text(&second.id, &a.keys).unwrap(), "期限测试");
+    a_actor
+        .cancel_operation(&expiry_id, expiry.task.revision, &a.keys)
+        .unwrap();
+    assert_eq!(
+        a_actor
+            .operation_step(&expiry_id, &a.keys)
+            .await
+            .unwrap()
+            .task
+            .state,
+        TaskState::Cancelled
+    );
+    sqlx::query("UPDATE direct_v3_batches SET accepted_at=$2 WHERE id=$1")
+        .bind(&task.id)
+        .bind(now() - 48 * 60 * 60 * 1000 - 1000)
+        .execute(f.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(
+        a_actor
+            .operation_step(&retract_id, &a.keys)
+            .await
+            .unwrap()
+            .task
+            .state,
+        TaskState::Accepted
+    );
+}
 use liteseal_shared::direct_operation::{self as op, Action, Operation, Page};
 #[tokio::test]
 #[ignore = "requires dedicated Postgres: LITESEAL_TEST_DATABASE_URL"]

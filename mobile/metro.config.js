@@ -6,6 +6,11 @@ const { getDefaultConfig, mergeConfig } = require('@react-native/metro-config');
  *
  * @type {import('@react-native/metro-config').MetroConfig}
  */
-const config = {};
+const path = require('node:path');
+const config = {
+  // The body codec is pure TypeScript and shared with Windows. Keep React and
+  // React Native resolved from the mobile dependency tree.
+  watchFolders: [path.resolve(__dirname, '../ui/src/lib')],
+};
 
 module.exports = mergeConfig(getDefaultConfig(__dirname), config);

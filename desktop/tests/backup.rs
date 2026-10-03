@@ -20,9 +20,10 @@ async fn complete(state: &AppState, id: &str) -> backup::JobView {
 #[tokio::test]
 async fn jobs_restore_token_free_paginated_offline_history_and_invalidated_handles() {
     let root = WorkDirectory::create(&std::env::temp_dir()).unwrap();
-    let state = AppState::with_keystore(
+    let state = AppState::with_device_protection(
         root.0.join("source.db").to_str().unwrap(),
         Some(root.0.join("source.bin")),
+        liteseal_core::trusted_devices::witness::platform::Protection::isolated_test(),
     )
     .unwrap();
     let keys = crypto::generate_keypair().unwrap();
@@ -109,6 +110,7 @@ async fn jobs_restore_token_free_paginated_offline_history_and_invalidated_handl
         None,
         None,
         None,
+        None,
     )
     .unwrap();
     assert_eq!(page["messages"].as_array().unwrap().len(), 50);
@@ -125,6 +127,7 @@ async fn jobs_restore_token_free_paginated_offline_history_and_invalidated_handl
         page["next"]["time"].as_i64(),
         page["next"]["id"].as_str(),
         None,
+        None,
     )
     .unwrap();
     assert_eq!(earlier["messages"].as_array().unwrap().len(), 9);
@@ -138,6 +141,7 @@ async fn jobs_restore_token_free_paginated_offline_history_and_invalidated_handl
         &restored,
         "direct",
         "dm:bob:mallory",
+        None,
         None,
         None,
         None

@@ -1,5 +1,112 @@
 # P0/P1 验收记录（待执行）
 
+## 2026-10-03 01:50 UTC 最终受影响验证增量
+
+前述全量基线之后补了历史已提交收件重发确认的 CAS 检查、移动本机业务原生身份门禁、组件迟到展示拒绝及语音播放/输出。按受影响范围验证，不将此前全量回归或 APK 结果冒称覆盖尚未构建的增量。
+
+| 实际执行 | 结果与 `target/test-results/` 证据 |
+| --- | --- |
+| 历史确认 CAS 的真实 HTTP/数据库重跑 | 3/3，`history-relay-2026-10-03T01-30-40-285Z.json`、`history-receipt-fence-real-http-final.log`，本次库/角色删除 |
+| FFI core 单元集 | 59/59，其中移动专项 11 项，`android-native-eleven-tests-final.log`；新增无已确认身份的联系人/整理调用全部拒绝且不创建身份。首次私有 helper 放入 UniFFI export 块造成编译失败，移到普通 impl 后通过，原失败日志保留 |
+| 移动实际组件迟到回包 | Jest 9/9，新增 5 项：后台/恢复、联系人 pin、会话、设备变化及过期/当前失败信息。`android-ui-lifecycle-jest-verified.log`；类型检查 `android-ui-lifecycle-types-final.log`。早期测试选择器和重复调用计数失败保留，修正夹具后运行通过 |
+| 最终原生链接/JNI | x86_64 7.54 秒、arm64 1 分 33 秒，`android-local-boundary-linked-x86_64.log` / `android-local-boundary-linked-arm64.log`；arm64 libsodium 102 个 ELF 全为 AArch64；JNI 有界清零严格检查 `android-native-jni-bounded-wipe-final.log` |
+| 自包含隔离应用 APK | 最终 x86_64 44 秒、arm64 1 分 41 秒成功，结果 `android-isolated-x86_64-20261003T014308857Z.json` / `android-isolated-arm64-v8a-20261003T014653512Z.json`；测试签名、包名独立、内置 JS/Hermes，不安装/发布。留存 `android-isolated-x86_64.apk` / `android-isolated-arm64-v8a.apk` |
+| APK 实际结构/对齐 | `android-isolated-apk-validation.json`：两包各 14 个实际原生库、内置 bundle、SHA256；16 KiB ZIP 和全部 ELF LOAD 段检查通过。`android-isolated-apk-metadata.log` / `android-isolated-test-apk-metadata.log` 核对应用/测试包名；不代表 Android OS 运行 |
+| T24 新增播放/输出 | 实际静音 Chromium 12/12、0 renderer 错误，`voice-call-trial-cgEduO/result.json`、`voice-playback-chromium-final.log`，原生合成身份和假音频，无实际麦克风/扬声器或外网 |
+| 最新静态/构建 | FFI all-target Clippy：`android-local-boundary-clippy.log`；工作区：`current-receipt-fence-clippy.log`；UI 生产：`voice-playback-ui-production.log`；Windows Release：`current-desktop-receipt-fence-release.log`，3 分 31 秒通过，保留已有链接警告；格式及 `git diff --check` 通过 |
+
+新增自包含变体初次缺 Manifest 的明文网络占位参数，补齐为拒绝明文网络后成功，失败日志保留；没有接受 SDK 新许可、修改系统安全配置或安装到真实设备。Android 的 3 项 instrumentation 仍只编译，原 T00–T26 未执行系统/双机/独立审查场景保持未勾选。持续转发最长 7 天仍是未确认假设，固定原选集合/目标，不对真实数据启用。
+
+## 2026-10-03 历史后台、Android APK 与完整回归（UTC）
+
+保持 `dev` / `a1de0814bbee71adbb0e3ba003b6c8d0e1e72645`，保留已有修改；未提交、推送、发布、部署或合并。仅用合成身份、隔离数据库/角色及自有测试缓存，没有读取真实密钥或聊天，没有终止未知 Node 进程。
+
+| 实际执行范围 | 结果及证据（均在 `target/test-results/`） |
+| --- | --- |
+| 最终完整 `npm test`，单构建任务 | 30 Node/Electron + 400 普通 Rust，0 失败，88 PostgreSQL 默认 ignored。`current-complete-regression.log`、`current-regression-summary.json`；移动 FFI 单独运行 |
+| 全部隔离 PostgreSQL 16.14 | 88/88，0 失败/跳过；`database-2026-10-03T00-29-03-571Z.json`、`current-database-regression-final.log`，本轮数据库/角色 finally 删除 |
+| 历史后台真实 HTTP/数据库 | 本阶段受影响 3/3 再跑通过；`history-relay-2026-10-03T01-01-20-893Z.json`、`history-background-real-http.log`。明确开始后自动续传、暂停/原编号恢复、放弃暂存后不自动重下、独立签名确认及原任务取消 |
+| 历史原生与 Chromium | 新增 2 项原生意图/放弃/重开/迟到修订用例包含在 400 项中；首轮夹具把既有原作者任务误判为空，修正为数量不增加，定向及全量通过。`history-background-native-tests.log`、`history-background-native-retry.log`。实际 Chromium 44 项、8 张截图：`history-transfer-ui-8tvtTx/result.json`，0 renderer 错误 |
+| 移动 FFI 原生 | 10/10，`android-native-ten-tests.log`：含真实回环 HTTP 的落库后 ACK/坏签名无 ACK，及旧身份清除失败后重开只重试清除、保留原密钥。不是 Android 系统执行 |
+| Android 原生与 JNI | NDK libsodium 全部 x86_64 ELF；最新实际 Android Rust 静态库链接 19 秒通过，`android-native-current-linked-final.log`；7 个私有 JNI 方法严格 NDK 语法检查，`android-native-jni-seven-methods.log` |
+| Android APK | `android-apk-current-final.log`、`android-apk-current-final-result.json`：45 秒，应用 Debug APK 与隔离 instrumentation APK 构建成功，exit 0；`current-built-artifacts.json` 保存大小/SHA256。3 项系统测试已编译但未安装/运行；Debug APK 依赖 Metro，尚无 arm64 或发布包证据 |
+| 移动 TypeScript/Metro | `android-mobile-types-native-final.log`、`android-mobile-bundle-final.log` 通过；真实生产 bundle 不等于 Debug APK 已嵌入 bundle |
+| 静态检查与桌面构建 | 工作区 all-target Clippy `-D warnings`：`current-workspace-clippy.log`；FFI all-target：`android-current-ffi-clippy.log`；UI 生产：`current-ui-production.log`；Electron/类型检查：`history-background-electron-final.log`、`history-background-ui-types.log`。Windows Release：`current-desktop-release.log`，3 分 25 秒通过，保留原有 libsodium LNK4098/LNK4099 警告 |
+| T24/T26 可运行试验 | T24 共享 3 项、真实同机合成音频 9 项，`voice-call-trial-GlLizr/result.json`；T26 原生统一期限门禁 3 项，`disappearing-native-trial-final.log`，并包含在完整回归中。具体生产边界见各专项文档 |
+
+Android 早期失败与修复保留：只处置确认属于本轮构建的卡住 CMake 子进程；修正 Rust archive 的 CMake 目录、过期 autolink/codegen 声明、受 package exports 限制的头目录查找及 React Native 官方重复动态库打包规则，随后实际构建通过。没有修改安全配置、真实 SDK 数据/AVD 或用忽略测试掩盖失败。当前缺完整可用的隔离 Android 系统镜像和 SDK 命令行管理器，系统 Keystore/后台/进程终止测试未运行；已有 SDK 许可与新镜像条款是否匹配尚未核实，没有接受新条款。
+
+T23 未来变更授权，T24 正式入口/信令/真实音频/NAT/TURN，T25 手机 v3/推送/arm64 与系统范围，T26 生产能力/中继/期限设置/便携及前台退役仍未全部完成；双 Windows、系统和独立审查不勾选。“持续转发默认关闭、最长 7 天”仅为待产品确认的可更改假设，不是用户确认要求，也未对真实数据启用。
+
+
+## 2026-10-02 接续：T24 原生信令与实际同机音频链路（UTC）
+
+只使用临时 Electron 档案、Rust 内部合成密钥和 Chromium 假音频，未访问真实麦克风、扬声器、用户身份或外部 STUN/TURN。`cargo test --locked -p liteseal-shared --test voice_call_test` 3/3 通过，验完整 SDP/指纹、加密/签名/范围/过期、重放/缺口/终态，`voice-call-shared.log`。shared all-target Clippy `-D warnings` 通过，`voice-call-clippy-final.log`。
+
+`node scripts/test-voice-call-trial.mjs` 最终 9 项通过，报告 `target/test-results/voice-call-trial-GlLizr/result.json`、日志 `voice-call-chromium-final-2.log`。真实两端 PC 双向 DTLS-SRTP/Opus，各收到 78 包 / 2915 RTP payload 字节，DTLS connected、host 候选、短测丢包 0；还验证输入选择、签名 ICE restart 后新凭据及恢复收包、拒接/挂断释放、认证失败不采集、权限/无设备失败、接听方权限失败终止呼叫方和锁定迟到采集。合成短测数字不代表真实音质、不同 NAT 或 TURN 带宽/成本。
+
+初轮 ICE restart 状态错误保留 `voice-call-trial-LOhED3/result.json`，核对既有 connected PC 后修复；测试 TS 窄化及原生示例大枚举已修正，没有跳过失败。详见 [通话设计/运行与边界](VOICE_CALL_TRIAL.md)。生产信令权限、正式界面/输出设备、两台 Windows、真实音频/不同 NAT/断线/TURN 和独立审查未跑，T24 保持未验收，不提交/推送/部署。
+
+## 2026-10-02 接续：选定历史授权、独立中继和最终回归（UTC）
+
+保留 `dev` / `a1de0814bbee71adbb0e3ba003b6c8d0e1e72645` 及此前未提交修改，没有提交、推送、发布、部署或合并。仅合成身份、随机临时原生库/身份路径及临时 PostgreSQL 角色/专用库；不读取真实密码、密钥、联系人或业务数据库。测试脚本 finally 删除本轮数据库和临时角色，不保留凭据；未知 Node 进程未终止。
+
+| 实际执行范围 | 结果及证据 |
+| --- | --- |
+| 最终完整 `npm test`，进程内 `CARGO_BUILD_JOBS=1` | 30 项 Node/Electron、392 项普通 Rust，0 失败；88 项 PostgreSQL 默认 ignored，不能计为通过。`target/test-results/history-final-workspace.log` |
+| 实际 PostgreSQL 16.14 / HTTP | 新增历史中继 3/3 通过，0 skipped：核心原设备到加入设备的旧历史授权、分块/许可/独立签名确认与取消、当前撤销拒绝及原结果保留。`target/test-results/history-relay-2026-10-02T22-39-49-464Z.json`；执行 `powershell -NoProfile -File scripts/test-history-relay.ps1`，脚本确认本轮专用库/角色删除 |
+| 共享授权协议 | 最终 4/4 通过，原证据、完整操作链、目标独立密钥、期限/目录/签名/媒体损坏拒绝。`history-shared-final.log` |
+| 原生收件、修订及重叠历史 | 完整回归内 4 项核心授权用例通过；独立收件不插原投递/ACK/未读/任务；编辑/撤回、原日志追平、回退/篡改拒绝、隐藏重导入和便携恢复 |
+| 完整媒体、暂存重开和损坏恢复 | 最终专项 1/1 通过（26.14 秒）：超过一块的原密文，暂存后 drop/reopen 续收、损坏块拒绝、清除本测试暂存后同包重下、同修订缺缓存不替换完整媒体、签名包不可拆媒体备份、后续撤回阻止正文/媒体。`history-media-resume.log`；这是模拟重开，不是 OS 强杀 |
+| 加入档案实际桌面业务分发 | 完整回归包含 `device_activation` 集成：原身份文件不存在、实际类型化文件导入、当前自身/联系人目录 HTTP 核对、错范围拒绝、源身份不改、独立离线备份读取 |
+| 历史授权 Chromium | 亮/暗、宽/窄共 36 项通过，无 renderer 错误；明确集合/指纹/期限、原编号中继继续/取消、分块收件、离线副本、迟到范围拒绝。`target/test-results/history-transfer-ui-LLP1gO/result.json`，8 张截图；宽窄均检查横向溢出，最终亮窄与暗宽副本截图直接核对 |
+| 已有界面回归 | 单聊 124 项通过，`direct-ui-XEj0yY/result.json`；备份 20 项通过，`backup-ui-uDMhyR/result.json`，均无 renderer 错误。这里为真实 Chromium + 合成业务接口，不代替系统/双机验收 |
+| 静态与生产 UI | UI 类型/生产构建通过，`history-ui-production.log`；共享/核心/桌面/服务端 all-target Clippy（`-D warnings`）通过，`history-relay-clippy.log`。最终测试夹具解包修正后再由完整回归编译和执行 |
+| Windows release / FFI | 最终桌面 release 构建和 `cargo check --locked -p liteseal-core --features ffi` 通过，`history-release-final.log` / `history-ffi-final.log`；保留既有 libsodium `LNK4098` 警告。这两项完成后才接通 T24 共享模块，不能作为 T24 的完成证据 |
+
+失败与修复保留：首轮完整回归 Node 30 项通过后，MSVC 并行链接报 `LNK1102` 内存不足（`history-full-regression.log`）；改用本次进程单构建任务后，既有 `http_tests::group_upload_has_its_own_bounded_limit_above_single_chat_frames` 曾报 Windows 回环连接 `10053 ConnectionAborted`（`history-full-regression-serial.log`），同项原样定向复跑和最终全量均通过，没有改低限额或忽略测试。历史真实库初轮夹具把 `Outcome::Accepted { receipt }` 误当裸 Receipt，修正夹具后 3/3 通过；早期失败报告保留。单聊回归发现新增历史组件与媒体/存储组件的 React key 重复，导致清理提示丢失；为各业务组件加前缀，最终 124 项通过，失败证据 `direct-ui-L03kI5/result.json` 保留。
+
+文件和显式中继路径已交付。自动后台中继及未来编辑/撤回自动转发尚未接入；现有授权绑定明确快照修订和期限，后续变化需原设备再次明确选择。损坏暂存已有核心清除能力，桌面专门放弃暂存入口仍待接。签名收件后已有副本不能远程擦除，停止本机导出不代替中继取消。实际两台 Windows、磁盘满/断电/强杀、系统通知/锁屏/休眠/音频与独立审查未执行，T23 不勾选。T24 已开始独立源码与可运行验证，T25/T26 继续推进。
+
+## 2026-10-02 接续：v3 备份与独立离线档案短测（UTC）
+
+继续保留 `dev` / `a1de0814bbee71adbb0e3ba003b6c8d0e1e72645` 和此前所有未提交工作，无提交、推送、部署或合并。只使用合成密钥/会话、随机临时数据库/身份路径、内存或显式隔离原生测试见证，不读取真实密码、密钥或业务库。未运行本批新的 PostgreSQL 场景或长期测试；备份/Reader 没有服务端协议变更。此前三个未知 Node（24232/30620/34760）只读识别为 Codex 平台进程，未终止。
+
+| 实际执行范围 | 结果及证据 |
+| --- | --- |
+| 完整 `npm test` | 27 项 Node/Electron、383 项普通 Rust，0 失败；85 项 PostgreSQL 默认 ignored，不计为通过。`target/test-results/direct-backup-workspace-regression-2026-10-02.txt` |
+| 最终核心便携短测 | 三项集成全部通过（53.23 秒）：61 条原设备/加入身份历史、独立分页、隐藏/编辑/撤回、操作先到、草稿/静音/已读范围、排除在线表/凭据、错钥匙、原生篡改、取消、已有目标无覆盖和便携视图拒绝。`direct-backup-core-final-2026-10-02.txt` |
+| 最终完整媒体短测 | 1/1 通过（10.32 秒），包含/不包含选项、确认上传完整缓存、未提交暂存排除、损坏缓存记未包含、隐藏/撤回保留完整缓存但输出拒绝；篡改便携媒体读取拒绝。`direct-backup-media-final-2026-10-02.txt` |
+| 原设备实际业务分发 | 完整回归中的 `direct_chat` 两项通过，文字场景新增实际 JSON `start_backup_export`/`get_backup_history`、版本 3 恢复、独立游标及撤回占位，服务端发送/ACK/操作计数不因离线读取改变；源身份文件字节保持 |
+| 最终加入桌面范围 | 1/1 通过（11.61 秒）：已选加入档案且原身份文件不存在的 AppState，通过实际分发导出自己的数据库/设备/账号，认证收到的文字与草稿可离线读取，源身份不被替换。`direct-backup-joined-desktop-final-2026-10-02.txt` |
+| Chromium 模拟接口 | 宽/窄各 10 项，共 20 项通过，无 renderer 错误；新版投影/草稿偏好、独立游标、仅完整缓存提供输出、原协议范围和旧群/单聊回归。`target/test-results/backup-ui-DAD6W4/result.json`，该目录四张截图；宽/窄均无横向溢出，窄屏 v3 截图已直接核对 |
+| 编译/静态检查 | UI 生产构建、Electron 构建、核心/桌面 all-target Clippy（-D warnings）、格式及 FFI 编译通过；最终 Windows release 构建通过（67 秒），`direct-backup-release-final-2026-10-02.txt`。保留既有 libsodium LNK4098/LNK4099 |
+
+完整回归编译后新增严格便携结构核对/视图拒绝与无原身份文件的加入范围场景，以最终四项核心及一项桌面定向验证覆盖；没有再次重复全量回归或声称旧完整日志对应所有后续增量。媒体测试初次遗漏原发布意图，`confirm_accepted` 按保护规则拒绝；补齐夹具的 `begin_publish` 后通过。新增加入桌面夹具初编译误取 Session 不存在的 origin，改用已核对目录 origin 后通过；生产权限规则未放宽。
+
+新增便携目录/载荷全部在任务拥有的随机临时目录清理，恢复 Reader 只在内存建立投影，不创建生产原生记录或在线能力。当前 v3 备份/离线源码已交付，选定历史授权仍继续实施。跨 Windows 用户/机器、真实麦克风/音频、通知/锁屏/休眠、磁盘满/断电/强杀、安装升级、双 Windows 与独立审查未执行，T22/T23 和完整清单不勾选。
+
+## 2026-10-02 接续：T23 原操作协调、桌面和取消短测（UTC）
+
+基线 `dev` / `a1de0814bbee71adbb0e3ba003b6c8d0e1e72645`，已有七个修改和未跟踪工作保留；未提交、推送、发布或部署。测试只使用合成账号、临时 SQLite/密钥路径、独立原生测试目标和随机标记 PostgreSQL 库，原密码/密钥/业务库未读取。已有三个未知 Node 进程保留；仅确认命令行后结束本轮失败且未退出的两个主进程测试进程。
+
+| 实际执行范围 | 结果及证据 |
+| --- | --- |
+| 完整 `npm test` | 27 项 Node/Electron、379 项普通 Rust，0 失败；85 项 PostgreSQL 默认 ignored，未计入通过。`target/test-results/direct-operations-workspace-regression-2026-10-02.txt` |
+| 最终核心定向回归 | 11 项协调器 + 23 项存储，全部通过；包括丢发布响应/重开原结果、取消竞争/旧界面修订、会话轮换/锁定拒绝迟到、坏页/隐藏不复活、48 小时边界/终态整理原编号栅栏。`direct-operations-core-final-2026-10-02.txt` |
+| 最终真实 HTTP/PostgreSQL | PostgreSQL 16.14，5/5 实际通过、0 失败/跳过；实际加密编辑/撤回往返、原生重开、完整接收/通知边界、原作者/原受众权限、篡改、日志配额、过期拒绝及到期后原结果/取消确认。`direct-operations-2026-10-02T20-51-35-576Z.json` |
+| Rust 桌面实际业务分发 | 2/2 通过（62.16 秒）；既有文字/媒体回归加当前选中正式身份的 JSON 命令准备、签名 HTTP 操作、编辑/撤回投影、后台、取消/整理、错误范围和密钥注入拒绝，原身份文件字节保持。`direct-operations-desktop-final-2026-10-02.txt` |
+| Chromium 模拟接口 | 深/浅 × 宽/窄各 31 组，124 组通过、无 renderer 错误；含发布中取消、准备响应丢失原编号、原作者与过期入口、编辑版本/撤回占位、暂停清明文及迟到拒绝。`target/test-results/direct-ui-oDiUd3/result.json`；该目录 16 张截图含四张操作编辑/任务截图，宽窄操作界面无横向溢出，窄浅色截图已直接核对 |
+| 工程检查/构建 | UI 生产构建、Electron 构建、格式、全 workspace/all-targets Clippy（-D warnings）、核心 FFI 编译通过。最终 Windows release sidecar 构建通过，报告 `direct-operations-release-final-2026-10-02.txt`；保留既有 LNK4098/LNK4099 |
+
+完整工程回归之后只追加“后台修订变动时取消同一不可变任务”的局部行为与桌面分发测试；以最终核心、真实数据库、桌面及 UI 定向验证和再构建覆盖，未把此前完整回归写成最终增量后的再次全量执行。
+
+失败与修复记录：最初四项新增协调器测试因夹具旧接收时间 123 与新 48 小时规则冲突全部失败，改为一致测试时间后通过。沙箱内 Node/esbuild 子进程出现 EPERM，受控执行后通过。主进程两项回归发现内部桥接缺少后台操作命令白名单，修复后两项通过。沙箱内局部存储测试曾 13 通过/10 高水位校验失败，多项为既有测试；后续完整和最终受控回归均 23/23 通过，该环境差异的具体原因未确认，没有重置高水位或放宽保护。
+
+新增 `scripts/test-direct-operations.ps1` 在 finally 精确删除每轮随机测试数据库及临时登录角色，凭据仅在执行进程环境；两轮实际结束均确认清理，没有创建持久登录凭据。五项原交接源码（messages/api/operations、server/db、shared/direct_operation）哈希仍与接续基线相同；对既有 tasks 文件及测试只作明确增量。
+
+尚未执行：实际双 Windows、真实系统通知/锁屏/休眠/托盘、麦克风/声卡、强杀/磁盘故障、安装/升级/另一用户恢复与独立协议审查。未启动长期测试。v3 备份/离线展示和选定历史授权仍待实现；T23 和完整清单不勾选。
+
 ## 2026-10-03 T23 客户端操作日志与投影短测
 
 基线 `209633a` 加本轮工作树；合成账号、临时 SQLite/文件、隔离原生保护及已有标记专用 PostgreSQL，不操作真实资料、不启动新长期、不推送。当前完成日志/HTTP 读取和投影，持久发送操作任务、后台协调与桌面入口尚未接通。

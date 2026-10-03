@@ -3,17 +3,22 @@ cmake_minimum_required(VERSION 3.9.0)
 project(Liteseal)
 
 set (CMAKE_VERBOSE_MAKEFILE ON)
-set (CMAKE_CXX_STANDARD 17)
+set (CMAKE_CXX_STANDARD 20)
 
 # Resolve the path to the uniffi-bindgen-react-native package
 execute_process(
-    COMMAND node -p "require.resolve('uniffi-bindgen-react-native/package.json')"
+    COMMAND node -p "const p=require('path'),f=require('fs');let d=p.dirname(require.resolve('uniffi-bindgen-react-native'));for(let i=0;i<8&&!f.existsSync(p.join(d,'cpp/includes/UniffiCallInvoker.h'));i++)d=p.dirname(d);d"
+    WORKING_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/.."
     OUTPUT_VARIABLE UNIFFI_BINDGEN_PATH
     OUTPUT_STRIP_TRAILING_WHITESPACE
+    RESULT_VARIABLE UNIFFI_BINDGEN_RESULT
 )
+if (NOT UNIFFI_BINDGEN_RESULT EQUAL 0 OR NOT EXISTS "${UNIFFI_BINDGEN_PATH}/cpp/includes/UniffiCallInvoker.h")
+    message(FATAL_ERROR "Cannot resolve the module's installed UniFFI C++ headers")
+endif()
 # Get the directory; get_filename_component and cmake_path will normalize
 # paths with Windows path separators.
-get_filename_component(UNIFFI_BINDGEN_PATH "${UNIFFI_BINDGEN_PATH}" DIRECTORY)
+file(TO_CMAKE_PATH "${UNIFFI_BINDGEN_PATH}" UNIFFI_BINDGEN_PATH)
 
 # Specifies a path to native header files.
 include_directories(
@@ -42,7 +47,7 @@ set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-z,max-page-size
 
 cmake_path(
   SET MY_RUST_LIB
-  ${CMAKE_SOURCE_DIR}/src/main/jniLibs/${ANDROID_ABI}/libliteseal_core.a
+  ${CMAKE_CURRENT_LIST_DIR}/src/main/jniLibs/${ANDROID_ABI}/libliteseal_core.a
   NORMALIZE
 )
 add_library(my_rust_lib STATIC IMPORTED)

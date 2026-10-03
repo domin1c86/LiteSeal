@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   FlatList,
   Pressable,
@@ -10,16 +10,11 @@ import {
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import {
   FfiRelayEvent_Tags,
-  encryptMessage,
-  getUserDevices,
-  signMessage,
-  decryptMessage,
-  type FfiEncryptedPayload,
   type FfiIncomingMessage,
 } from 'react-native-liteseal';
 import Avatar from '../components/Avatar';
 import TrustLabel from '../components/TrustLabel';
-import { bytesToBuffer, utf8Decode, utf8Encode } from '../lib/bytes';
+import {decodeContent,encodeContent} from '../../../ui/src/lib/messageContent';
 import { conversationIdFor, useApp } from '../lib/AppContext';
 import { getCore } from '../lib/core';
 import { fonts, radius, useTheme } from '../theme';
@@ -38,7 +33,7 @@ type Props = NativeStackScreenProps<RootStackParamList, 'Chat'>;
 export default function ChatScreen({ route, navigation }: Props) {
   const { peerId } = route.params;
   const { colors } = useTheme();
-  const { session, contacts, relayBatch, clearUnread } = useApp();
+  const { session, contacts, relayBatch, clearUnread, foreground } = useApp();
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
@@ -46,16 +41,31 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   const contact = contacts.find(c => c.userId === peerId);
   const convId = session ? conversationIdFor(session, peerId) : '';
+  const displayScope = JSON.stringify([
+    session?.serverUrl, session?.userId, session?.deviceId,
+    session?.publicKey, session?.ed25519Pk, peerId,
+    contact?.fingerprint, contact?.keyChanged, contact?.trustState,
+    contact ? Array.from(new Uint8Array(contact.publicKey)) : null,
+    contact?.ed25519Pk ? Array.from(new Uint8Array(contact.ed25519Pk)) : null,
+    foreground,
+  ]);
+  const displayEpoch = useRef(0);
+  useLayoutEffect(() => {
+    ++displayEpoch.current;
+    setMessages([]);
+    setInput('');
+    setSendError(null);
+    setSending(false);
+    return () => { ++displayEpoch.current; };
+  }, [displayScope]);
 
   const decryptWithPeer = useCallback(
-    (ciphertext: ArrayBuffer): string => {
+    (id: string): string => {
       if (!session || !contact) {
         return '[encrypted]';
       }
       try {
-        return utf8Decode(
-          decryptMessage(ciphertext, contact.publicKey, bytesToBuffer(session.secretKey)),
-        );
+        return decodeContent(getCore().readMessage(id)).text;
       } catch {
         return '[encrypted]';
       }
@@ -65,7 +75,8 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   // Initial history from the local store.
   useEffect(() => {
-    if (!session || !convId) {
+    if (!session || !convId || !foreground) {
+      setMessages([]);
       return;
     }
     clearUnread(convId);
@@ -78,7 +89,7 @@ export default function ChatScreen({ route, navigation }: Props) {
           text:
             m.localState === 'integrity_failed'
               ? '[message withheld]'
-              : decryptWithPeer(m.ciphertext),
+              : decryptWithPeer(m.id),
           timestamp: Number(m.timestamp),
           state: m.localState,
         })),
@@ -87,11 +98,11 @@ export default function ChatScreen({ route, navigation }: Props) {
       console.error('Failed to load messages:', err);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session, convId, contact?.userId]);
+  }, [session, convId, displayScope, foreground, relayBatch?.result.operationsChanged ? relayBatch.seq : 0]);
 
   // Live batches from the app-level poll loop.
   useEffect(() => {
-    if (!relayBatch || !session) {
+    if (!relayBatch || !session || !foreground) {
       return;
     }
     clearUnread(convId);
@@ -148,14 +159,15 @@ export default function ChatScreen({ route, navigation }: Props) {
       return { ...base, text: '[sender not in contacts]' };
     }
     // The Rust core verified the signed envelope before storing it.
-    return { ...base, text: decryptWithPeer(m.ciphertext) };
+    return { ...base, text: decryptWithPeer(m.messageId) };
   }
 
   async function handleSend() {
     const text = input.trim();
-    if (!text || !session || sending) {
+    if (!text || !session || sending || !foreground || !contact || contact.keyChanged) {
       return;
     }
+    const lease = displayEpoch.current;
     setInput('');
     setSendError(null);
     setSending(true);
@@ -163,40 +175,8 @@ export default function ChatScreen({ route, navigation }: Props) {
       if (!contact) {
         throw new Error('Recipient not found in contacts');
       }
-      const devices = (await getUserDevices(session.serverUrl, peerId, session.token)).filter(
-        d => !d.revoked && d.publicKey.byteLength === 32,
-      );
-      if (devices.length === 0) {
-        throw new Error('Recipient has no active devices');
-      }
-
-      const plaintext = utf8Encode(text);
-      const secretKey = bytesToBuffer(session.secretKey);
-      const signingKey = bytesToBuffer(session.ed25519Sk);
-
-      // Local copy encrypted to the contact's stored key so history stays
-      // readable; per-device copies for the relay fan-out.
-      const ciphertext = encryptMessage(plaintext, contact.publicKey, secretKey);
-      const signature = signMessage(ciphertext, signingKey);
-
-      const payloads: FfiEncryptedPayload[] = devices.map(device => {
-        const deviceCiphertext = encryptMessage(plaintext, device.publicKey, secretKey);
-        return {
-          recipientUserId: peerId,
-          recipientDeviceId: device.id,
-          ciphertext: deviceCiphertext,
-          signature: signMessage(deviceCiphertext, signingKey),
-        };
-      });
-
-      const messageId = await getCore().sendMessage(
-        session.userId,
-        ciphertext,
-        signature,
-        session.deviceId,
-        payloads,
-        signingKey,
-      );
+      const messageId = await getCore().sendText(peerId,encodeContent({text}));
+      if (lease !== displayEpoch.current) return;
 
       setMessages(prev => [
         ...prev,
@@ -209,9 +189,11 @@ export default function ChatScreen({ route, navigation }: Props) {
         },
       ]);
     } catch (err) {
-      setSendError(String(err));
+      if (lease === displayEpoch.current) {
+        setSendError('发送未确认；请在原会话核对状态后重试。');
+      }
     } finally {
-      setSending(false);
+      if (lease === displayEpoch.current) setSending(false);
     }
   }
 
@@ -249,7 +231,7 @@ export default function ChatScreen({ route, navigation }: Props) {
 
       <FlatList
         inverted
-        data={inverted}
+        data={foreground ? inverted : []}
         keyExtractor={m => m.id}
         contentContainerStyle={styles.messages}
         renderItem={({ item }) => {
@@ -342,6 +324,8 @@ export default function ChatScreen({ route, navigation }: Props) {
           />
           <Pressable
             onPress={handleSend}
+            accessibilityRole="button"
+            accessibilityLabel="发送消息"
             disabled={sending || !input.trim()}
             style={[
               styles.sendBtn,

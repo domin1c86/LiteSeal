@@ -14,7 +14,9 @@ const groupPage = { messages: [{ id: "poll-1", sender: "synthetic-alice", timest
 const activity={id:"activity-1",creator:"synthetic-alice",title:"恢复活动 🎉",start_at:1800000000000,timezone:"Asia/Singapore",location:"会议室",description:"固定内容",responses:{bob:"maybe" as const},participants:["synthetic-alice","bob"],departed:["bob"],closed:true,cancelled:true,eligible:false,can_manage:false,revision:3};
 const extensions={activities:[activity],attachments:[{id:"file-1",blob:"blob-1",name:"恢复群图片.png",size:128,mime:"image/png",duration_ms:null}],pending:false,conflict:false,pending_root:null};
 const extendedPage={...groupPage,messages:[...groupPage.messages,{id:"activity-1",sender:"synthetic-alice",timestamp:2,text:"[群附件或活动，请升级客户端查看]",status:"seen"},{id:"file-1",sender:"synthetic-alice",timestamp:3,text:"[群附件或活动，请升级客户端查看]",status:"seen"}],extensions};
+const directPage={messages:[{id:"v3-edited",sender:"synthetic-bob",timestamp:1800000000000,text:"认证编辑后的离线文字 🦭",status:"processed",operation_revision:2},{id:"v3-retracted",sender:"synthetic-bob",timestamp:1800000000001,text:"[已撤回]",status:"retracted",operation_revision:1,retracted:true},{id:"v3-media",sender:"synthetic-bob",timestamp:1800000000002,text:"[附件]",status:"processed",media:{name:"完整离线图片.png",mime:"image/png",size:1024,included:true}},{id:"v3-missing",sender:"synthetic-bob",timestamp:1800000000003,text:"[附件]",status:"processed",media:{name:"部分下载未包含.txt",mime:"text/plain",size:2048,included:false}}],next_direct:1,draft:"v3 备份草稿 中文 🦭",muted:true};
 const api: Record<string, any> = {
+  get_backup_transferred_history:async()=>({messages:[],next_cursor:null}),
   export_backup_attachment:async(args:any)=>{calls.push({name:"group-export",args});return "saved";},
   start_backup_export: async (args: any) => { calls.push({ name: "export", args }); return newJob(); },
   start_backup_restore: async (args: any) => { calls.push({ name: "restore", args }); return newJob(); },
@@ -22,9 +24,10 @@ const api: Record<string, any> = {
   cancel_backup_job: async ({ id }: { id: string }) => { calls.push({ name: "cancel" }); jobStates.set(id, "cancelled"); },
   open_backup_archive: async () => { calls.push({ name: "open" }); return info; },
   get_backup_archive_info: async () => info,
-  get_backup_conversations: async () => ({ items: [{ id: "dm:alice:bob", kind: "direct", name: "联系人 Bob" }, { id: "group-1", kind: "group", name: "恢复群组" }], next: null }),
+  get_backup_conversations: async () => ({ items: [{ id: "dm:alice:bob", kind: "direct", name: "联系人 Bob" }, { id: "group-1", kind: "group", name: "恢复群组" },{id:"v3:synthetic-bob",kind:"direct_v3",name:"v3 Bob"}], next: null }),
   get_backup_history: async (args: any) => {
-    calls.push({ name: "history" });
+    calls.push({ name: "history", args });
+    if(args.kind==="direct_v3")return args.beforeDirect?{...directPage,messages:[{id:"v3-earlier",sender:"synthetic-bob",timestamp:1,text:"v3 更早历史",status:"processed"}],next_direct:null}:directPage;
     if (args.kind === "group") return extendedPage;
     if (delayHistory) return new Promise(resolve => { deferred = resolve; });
     return { messages: [{ id: args.beforeId ? "older" : "recent", sender: "bob", timestamp: 1, text: args.beforeId ? "更早中文历史" : "最新中文 🦭", status: "received" }], next: args.beforeId ? null : { id: "recent", time: 1 } };
@@ -55,6 +58,14 @@ const viewer = () => { root.render(<BackupArchive key={++generation} id="archive
   delayHistory = true; await click("联系人 Bob"); await click("群 · 恢复群组"); deferred!({ messages: [{ id: "late", text: "late forbidden result" }], next: null }); await sleep(); check(!document.body.textContent!.includes("late forbidden result"), "late page replaced active conversation"); check(document.body.textContent!.includes("离线投票"), "poll absent"); check(!button("投票") && !button("发送"), "archive offers mutations"); results.push("read-only polls and stale conversation result rejection");
   check(document.body.textContent!.includes("恢复活动 🎉")&&document.body.textContent!.includes("活动已取消"),"offline activity state missing");check(button("待定 (1)")!.disabled&&!button("取消活动"),"offline activity allows mutation");await click("保存已包含群附件");check(calls.find(c=>c.name==='group-export')?.args.groupId==='group-1',"offline group file scope absent");results.push("offline activity and group attachment remain read-only and scoped");
   await click("联系人 Bob"); root.render(<div>closed</div>); await sleep(); deferred!({ messages: [{ id: "late", text: "late forbidden result" }], next: null }); await sleep(); check(document.body.textContent === "closed", "closed viewer accepted late data"); results.push("closed archive ignores late decrypted results");
-  delayHistory = false; return results;
+  delayHistory = false; viewer(); await sleep(); await sleep(); await click("v3 Bob");
+  check(document.body.textContent!.includes("认证编辑后的离线文字 🦭")&&document.body.textContent!.includes("已编辑 · 版本 2")&&document.body.textContent!.includes("[已撤回]"),"v3 operation projection missing");
+  check(document.body.textContent!.includes("v3 备份草稿 中文 🦭")&&document.body.textContent!.includes("备份时已静音"),"v3 settings missing");
+  check(!button("发送")&&!button("编辑")&&!button("撤回")&&!button("继续原操作"),"v3 archive exposes mutation");
+  await click("加载更早历史");check(document.body.textContent!.includes("v3 更早历史"),"v3 history paging missing");check(calls.find(c=>c.name==="history"&&c.args.beforeDirect===1)?.args.kind==="direct_v3","v3 cursor confused with legacy history");results.push("offline v3 edit/retract projection, drafts/preferences and independent cursor");
+  viewer();await sleep();await sleep();await click("v3 Bob");check([...document.querySelectorAll("button")].filter(b=>b.textContent?.trim()==="保存已包含附件").length===1,"missing cache offers output");
+  await click("保存已包含附件");check(calls.find(c=>c.name==="group-export"&&c.args.messageId==="v3-media")?.args.directV3===true,"v3 media scope absent");results.push("offline v3 outputs only included complete media and keeps original protocol scope");
+  return results;
 };
 (window as any).showBackupArchive = async () => { delayHistory = false; viewer(); await sleep(); await sleep(); await click("群 · 恢复群组"); };
+(window as any).showBackupDirect = async () => {delayHistory=false;viewer();await sleep();await sleep();await click("v3 Bob");};

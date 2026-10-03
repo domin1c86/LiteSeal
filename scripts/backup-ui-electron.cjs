@@ -17,6 +17,9 @@ app.whenReady().then(async () => {
     await new Promise(resolve => setTimeout(resolve,300));
     if (await window.webContents.executeJavaScript('document.documentElement.scrollWidth > window.innerWidth')) throw new Error('horizontal overflow');
     await fs.writeFile(path.join(directory,name+'.png'),(await window.webContents.capturePage()).toPNG());
+    await window.webContents.executeJavaScript('window.showBackupDirect()');
+    if (await window.webContents.executeJavaScript('document.documentElement.scrollWidth > window.innerWidth')) throw new Error('v3 archive horizontal overflow');
+    await fs.writeFile(path.join(directory,name+'-direct-v3.png'),(await window.webContents.capturePage()).toPNG());
   }
   if (report.errors.length) throw new Error('renderer errors'); report.status='passed';
 }).catch(error=>report.errors.push(String(error))).finally(async()=>{await fs.writeFile(path.join(directory,'result.json'),JSON.stringify(report,null,2));window?.destroy();app.exit(report.status==='passed'?0:1);});
