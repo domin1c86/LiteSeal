@@ -19,9 +19,18 @@ pub enum Command {
     #[serde(rename = "get_audio_targets")]
     GetAudioTargets { scope: String, peer: String },
     #[serde(rename = "begin_audio_call")]
-    BeginAudioCall { scope: String, peer: String, device: String },
+    BeginAudioCall {
+        scope: String,
+        peer: String,
+        device: String,
+    },
     #[serde(rename = "prepare_audio_signal")]
-    PrepareAudioSignal { scope: String, id: String, kind: liteseal_shared::voice_call::Kind, sdp: Option<String> },
+    PrepareAudioSignal {
+        scope: String,
+        id: String,
+        kind: liteseal_shared::voice_call::Kind,
+        sdp: Option<String>,
+    },
     #[serde(rename = "publish_audio_signal")]
     PublishAudioSignal { scope: String, handle: String },
     #[serde(rename = "open_audio_signal")]
@@ -1369,13 +1378,36 @@ pub async fn dispatch(command: Command, state: &AppState) -> Result<Value, Strin
         None
     };
     let result = match command {
-        Command::GetAudioTargets { scope, peer } => serde_json::to_value(commands::direct::audio::targets(state, scope, peer).await?),
-        Command::BeginAudioCall { scope, peer, device } => serde_json::to_value(commands::direct::audio::begin(state, scope, peer, device).await?),
-        Command::PrepareAudioSignal { scope, id, kind, sdp } => serde_json::to_value(commands::direct::audio::prepare(state, scope, id, kind, sdp)?),
-        Command::PublishAudioSignal { scope, handle } => serde_json::to_value(commands::direct::audio::publish(state, scope, handle).await?),
-        Command::OpenAudioSignal { scope, handle } => serde_json::to_value(commands::direct::audio::open(state, scope, handle)?),
-        Command::RetireAudioCall { scope, id } => serde_json::to_value(commands::direct::audio::retire(state, scope, id)?),
-        Command::ProcessAudioCalls {} => serde_json::to_value(commands::direct::audio::process(state).await?),
+        Command::GetAudioTargets { scope, peer } => {
+            serde_json::to_value(commands::direct::audio::targets(state, scope, peer).await?)
+        }
+        Command::BeginAudioCall {
+            scope,
+            peer,
+            device,
+        } => {
+            serde_json::to_value(commands::direct::audio::begin(state, scope, peer, device).await?)
+        }
+        Command::PrepareAudioSignal {
+            scope,
+            id,
+            kind,
+            sdp,
+        } => serde_json::to_value(commands::direct::audio::prepare(
+            state, scope, id, kind, sdp,
+        )?),
+        Command::PublishAudioSignal { scope, handle } => {
+            serde_json::to_value(commands::direct::audio::publish(state, scope, handle).await?)
+        }
+        Command::OpenAudioSignal { scope, handle } => {
+            serde_json::to_value(commands::direct::audio::open(state, scope, handle)?)
+        }
+        Command::RetireAudioCall { scope, id } => {
+            serde_json::to_value(commands::direct::audio::retire(state, scope, id)?)
+        }
+        Command::ProcessAudioCalls {} => {
+            serde_json::to_value(commands::direct::audio::process(state).await?)
+        }
         Command::ProcessDirectHistory { receive } => {
             serde_json::to_value(commands::direct::history_transfer::process(state, receive).await?)
         }

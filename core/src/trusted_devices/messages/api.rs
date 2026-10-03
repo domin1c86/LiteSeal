@@ -130,49 +130,123 @@ pub struct MediaObject<'a> {
     pub reference: &'a Reference,
 }
 impl DirectApi {
-    pub(super) async fn audio_reserve(&self, token: &str, admission: &liteseal_shared::voice_call::Admission)
-        -> Result<liteseal_shared::voice_call::Reservation, ApiError> {
-        let result: liteseal_shared::voice_call::Reservation = self.json(self.request(Method::POST,
-            "/audio/v1/admit", token)?.timeout(std::time::Duration::from_secs(5)).json(admission), 4096).await?;
-        if result.id != admission.header.id || result.ticket.len() != 64
-            || !result.ticket.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) { return Err(invalid()); }
+    pub(super) async fn audio_reserve(
+        &self,
+        token: &str,
+        admission: &liteseal_shared::voice_call::Admission,
+    ) -> Result<liteseal_shared::voice_call::Reservation, ApiError> {
+        let result: liteseal_shared::voice_call::Reservation = self
+            .json(
+                self.request(Method::POST, "/audio/v1/admit", token)?
+                    .timeout(std::time::Duration::from_secs(5))
+                    .json(admission),
+                4096,
+            )
+            .await?;
+        if result.id != admission.header.id
+            || result.ticket.len() != 64
+            || !result
+                .ticket
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            return Err(invalid());
+        }
         Ok(result)
     }
-    pub(super) async fn audio_signal(&self, token: &str, input: &liteseal_shared::voice_call::Submission)
-        -> Result<(), ApiError> {
-        let result: liteseal_shared::voice_call::Receipt = self.json(self.request(Method::POST,
-            "/audio/v1/signal", token)?.timeout(std::time::Duration::from_secs(5)).json(input), 4096).await?;
-        if result.id != input.envelope.header.id || result.sequence != input.envelope.header.sequence
-            || result.digest != input.envelope.digest().map_err(|_| invalid())? { return Err(invalid()); }
+    pub(super) async fn audio_signal(
+        &self,
+        token: &str,
+        input: &liteseal_shared::voice_call::Submission,
+    ) -> Result<(), ApiError> {
+        let result: liteseal_shared::voice_call::Receipt = self
+            .json(
+                self.request(Method::POST, "/audio/v1/signal", token)?
+                    .timeout(std::time::Duration::from_secs(5))
+                    .json(input),
+                4096,
+            )
+            .await?;
+        if result.id != input.envelope.header.id
+            || result.sequence != input.envelope.header.sequence
+            || result.digest != input.envelope.digest().map_err(|_| invalid())?
+        {
+            return Err(invalid());
+        }
         Ok(())
     }
-    pub(super) async fn audio_pending(&self, token: &str, device: &str, active: Option<&str>)
-        -> Result<liteseal_shared::voice_call::Pending, ApiError> {
-        let mut request = self.request(Method::GET, "/audio/v1/pending", token)?
-            .timeout(std::time::Duration::from_secs(5)).query(&[("device", device)]);
-        if let Some(active) = active { request = request.query(&[("active", active)]); }
+    pub(super) async fn audio_pending(
+        &self,
+        token: &str,
+        device: &str,
+        active: Option<&str>,
+    ) -> Result<liteseal_shared::voice_call::Pending, ApiError> {
+        let mut request = self
+            .request(Method::GET, "/audio/v1/pending", token)?
+            .timeout(std::time::Duration::from_secs(5))
+            .query(&[("device", device)]);
+        if let Some(active) = active {
+            request = request.query(&[("active", active)]);
+        }
         let result: liteseal_shared::voice_call::Pending = self.json(request, 1024 * 1024).await?;
-        if result.closed.as_deref().is_some_and(|id| Some(id) != active) { return Err(invalid()); }
+        if result
+            .closed
+            .as_deref()
+            .is_some_and(|id| Some(id) != active)
+        {
+            return Err(invalid());
+        }
         if let Some(delivery) = &result.delivery {
-            if delivery.envelope.header.target.device.device_id != device || delivery.admission.header.origin != self.origin
-                || delivery.ticket.len() != 64 || !delivery.ticket.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+            if delivery.envelope.header.target.device.device_id != device
+                || delivery.admission.header.origin != self.origin
+                || delivery.ticket.len() != 64
+                || !delivery
+                    .ticket
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            {
                 return Err(invalid());
             }
         }
         Ok(result)
     }
-    pub(super) async fn audio_ack(&self, token: &str, input: &liteseal_shared::voice_call::Acknowledge)
-        -> Result<(), ApiError> {
-        let result: liteseal_shared::voice_call::Receipt = self.json(self.request(Method::POST,
-            "/audio/v1/ack", token)?.timeout(std::time::Duration::from_secs(5)).json(input), 4096).await?;
-        if result.id != input.receipt.id || result.sequence != input.receipt.sequence || result.digest != input.receipt.digest { return Err(invalid()); }
+    pub(super) async fn audio_ack(
+        &self,
+        token: &str,
+        input: &liteseal_shared::voice_call::Acknowledge,
+    ) -> Result<(), ApiError> {
+        let result: liteseal_shared::voice_call::Receipt = self
+            .json(
+                self.request(Method::POST, "/audio/v1/ack", token)?
+                    .timeout(std::time::Duration::from_secs(5))
+                    .json(input),
+                4096,
+            )
+            .await?;
+        if result.id != input.receipt.id
+            || result.sequence != input.receipt.sequence
+            || result.digest != input.receipt.digest
+        {
+            return Err(invalid());
+        }
         Ok(())
     }
-    pub(super) async fn audio_stop(&self, token: &str, input: &liteseal_shared::voice_call::Stop)
-        -> Result<(), ApiError> {
-        let id: String = self.json(self.request(Method::POST, "/audio/v1/stop", token)?
-            .timeout(std::time::Duration::from_secs(5)).json(input), 4096).await?;
-        if id != input.admission.header.id { return Err(invalid()); }
+    pub(super) async fn audio_stop(
+        &self,
+        token: &str,
+        input: &liteseal_shared::voice_call::Stop,
+    ) -> Result<(), ApiError> {
+        let id: String = self
+            .json(
+                self.request(Method::POST, "/audio/v1/stop", token)?
+                    .timeout(std::time::Duration::from_secs(5))
+                    .json(input),
+                4096,
+            )
+            .await?;
+        if id != input.admission.header.id {
+            return Err(invalid());
+        }
         Ok(())
     }
     fn bind_operation(

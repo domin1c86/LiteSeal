@@ -36,7 +36,9 @@ pub struct AppState {
 impl AppState {
     pub fn new(db: Db) -> Self {
         Self {
-            audio: Arc::new(tokio::sync::Mutex::new(crate::direct_messages::audio::Hub::default())),
+            audio: Arc::new(tokio::sync::Mutex::new(
+                crate::direct_messages::audio::Hub::default(),
+            )),
             connections: Arc::new(DashMap::new()),
             next_generation: Arc::new(AtomicU64::new(1)),
             db,

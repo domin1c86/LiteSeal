@@ -32,7 +32,7 @@ local.properties
 *.hprof
 .cxx/
 *.keystore
-!debug.keystore
+# Debug signing keys remain local and never enter a source handoff.
 .kotlin/
 
 # node.js

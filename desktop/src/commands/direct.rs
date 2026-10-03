@@ -21,14 +21,14 @@ use liteseal_shared::{
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{collections::HashMap, sync::Arc, time::Duration};
+#[path = "direct_audio.rs"]
+pub mod audio;
 #[path = "direct_history_transfer.rs"]
 pub mod history_transfer;
 #[path = "direct_media.rs"]
 pub mod media;
 #[path = "direct_operations.rs"]
 pub mod operations;
-#[path = "direct_audio.rs"]
-pub mod audio;
 #[derive(Default)]
 pub(crate) struct Runtime {
     cache: Option<Cached>,

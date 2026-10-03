@@ -44,6 +44,11 @@ export function AudioCallPanel({scope, peer, online, paused}: {scope:string;peer
       if(!current()||!value)return;
       if(value.unavailable){call.pause();setError('音频信令暂不可用，请重新发起呼叫');return;}
       if(value.scope!==scope)return;
+      if(document.visibilityState==='hidden') {
+        call.pause();
+        if(value.call)void api.retire_audio_call({scope,id:value.call.id}).catch(()=>{});
+        return;
+      }
       if(value.closed){call.pause();return;}
       if(value.call)setView(value.call);
       if(!value.handle||seen.has(value.handle)||receiving)return;

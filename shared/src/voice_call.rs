@@ -162,25 +162,40 @@ impl Admission {
     }
     pub fn make(header: Header, keys: &KeyPair) -> Result<Self> {
         header.shape()?;
-        if header.kind != Kind::Offer || header.sequence != 1
+        if header.kind != Kind::Offer
+            || header.sequence != 1
             || keys.public_key != header.source.device.encryption_key
-            || keys.ed25519_pk != header.source.device.signing_key {
+            || keys.ed25519_pk != header.source.device.signing_key
+        {
             return Err(CallError::Scope);
         }
-        let mut value = Self { header, signature: vec![] };
-        value.signature = crypto::sign(&value.signing()?, &keys.ed25519_sk)
-            .map_err(|_| CallError::Proof)?;
+        let mut value = Self {
+            header,
+            signature: vec![],
+        };
+        value.signature =
+            crypto::sign(&value.signing()?, &keys.ed25519_sk).map_err(|_| CallError::Proof)?;
         Ok(value)
     }
     pub fn verify(&self, sender: &DeviceState, peer: &DeviceState) -> Result<()> {
         self.header.current(sender, peer)?;
-        if self.header.kind != Kind::Offer || self.header.sequence != 1
+        if self.header.kind != Kind::Offer
+            || self.header.sequence != 1
             || self.signature.len() != 64
-            || serde_json::to_vec(self).map_err(|_| CallError::Shape)?.len() > MAX_WIRE {
+            || serde_json::to_vec(self)
+                .map_err(|_| CallError::Shape)?
+                .len()
+                > MAX_WIRE
+        {
             return Err(CallError::Shape);
         }
-        if !crypto::verify_with_public_key(&self.signing()?, &self.signature,
-            &self.header.source.device.signing_key).map_err(|_| CallError::Proof)? {
+        if !crypto::verify_with_public_key(
+            &self.signing()?,
+            &self.signature,
+            &self.header.source.device.signing_key,
+        )
+        .map_err(|_| CallError::Proof)?
+        {
             return Err(CallError::Proof);
         }
         Ok(())
@@ -215,21 +230,32 @@ impl Stop {
     pub fn make(admission: Admission, actor: Member, keys: &KeyPair) -> Result<Self> {
         if actor != admission.header.source && actor != admission.header.target
             || actor.device.encryption_key != keys.public_key
-            || actor.device.signing_key != keys.ed25519_pk {
+            || actor.device.signing_key != keys.ed25519_pk
+        {
             return Err(CallError::Scope);
         }
-        let mut value = Self { admission, actor, signature: vec![] };
-        value.signature = crypto::sign(&value.signing()?, &keys.ed25519_sk)
-            .map_err(|_| CallError::Proof)?;
+        let mut value = Self {
+            admission,
+            actor,
+            signature: vec![],
+        };
+        value.signature =
+            crypto::sign(&value.signing()?, &keys.ed25519_sk).map_err(|_| CallError::Proof)?;
         Ok(value)
     }
     pub fn verify(&self, sender: &DeviceState, peer: &DeviceState) -> Result<()> {
         self.admission.verify(sender, peer)?;
-        if self.actor != self.admission.header.source && self.actor != self.admission.header.target {
+        if self.actor != self.admission.header.source && self.actor != self.admission.header.target
+        {
             return Err(CallError::Scope);
         }
-        if !crypto::verify_with_public_key(&self.signing()?, &self.signature,
-            &self.actor.device.signing_key).map_err(|_| CallError::Proof)? {
+        if !crypto::verify_with_public_key(
+            &self.signing()?,
+            &self.signature,
+            &self.actor.device.signing_key,
+        )
+        .map_err(|_| CallError::Proof)?
+        {
             return Err(CallError::Proof);
         }
         Ok(())
@@ -238,22 +264,43 @@ impl Stop {
 // These capabilities remain in native memory. They are not renderer contracts.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Reservation { pub id: String, pub ticket: String }
+pub struct Reservation {
+    pub id: String,
+    pub ticket: String,
+}
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Submission { pub ticket: String, pub envelope: Envelope }
+pub struct Submission {
+    pub ticket: String,
+    pub envelope: Envelope,
+}
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Receipt { pub id: String, pub sequence: u64, pub digest: [u8; 32] }
+pub struct Receipt {
+    pub id: String,
+    pub sequence: u64,
+    pub digest: [u8; 32],
+}
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Acknowledge { pub device: String, pub ticket: String, pub receipt: Receipt }
+pub struct Acknowledge {
+    pub device: String,
+    pub ticket: String,
+    pub receipt: Receipt,
+}
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Delivery { pub admission: Admission, pub ticket: String, pub envelope: Envelope }
+pub struct Delivery {
+    pub admission: Admission,
+    pub ticket: String,
+    pub envelope: Envelope,
+}
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Pending { pub delivery: Option<Delivery>, pub closed: Option<String> }
+pub struct Pending {
+    pub delivery: Option<Delivery>,
+    pub closed: Option<String>,
+}
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Signal {

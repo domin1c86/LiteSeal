@@ -4,6 +4,10 @@
 
 ## 工作区与写入所有权
 
+首个远端快照已于 02:19 UTC 推送：[专用分支](https://github.com/domin1c86/LiteSeal/tree/codex/feature-continuation-20261003)，SHA `e77828a6675670f20b1bd5c67d616d9f4d21e0a5`，远端核对一致，Actions 运行数 0。保存 148 个任务文件变更，根目录用户预览/Tauri 工作保留；这是 public 仓库的源码快照，不包含真实用户数据、凭据、日志或构建产物。云端使用该分支的精确后续 SHA 接续，无需 Library。
+
+最新音频业务入口：Rust 增量 check 7.03 秒通过；`npx tsc --noEmit -p electron/tsconfig.json` 和 `npx tsc --noEmit -p ui/tsconfig.json` 均退出 0，证据 `audio-business-entry-check.log`、`audio-electron-types.log`、`audio-ui-types.log`。未运行最新正式 HTTP/GUI/系统验收。后续轻量源码检查与耗时验收必须分别登记，不能沿用旧试验通过数字。
+
 - 本地仓库 `D:\Coding\LiteSeal`，接续起点分支 `dev`，HEAD `a1de0814bbee71adbb0e3ba003b6c8d0e1e72645`。专用分支 `codex/feature-continuation-20261003` 基于此点，接续的是现有未提交工作，不能 reset/checkout 覆盖。
 - 当前只有本接续任务写入。云端接续前必须由父任务确认本地写入已停止；文件包是指定时间快照，不能当作实时共享目录。回传时比较清单 SHA256，只应用对应任务实际修改，禁止整包覆盖后来变化。
 - 2026-10-03 02:11 UTC：命令可执行；对阶段起点 138 个改动文件核对，除本轮已知编辑外无变化；没有本任务遗留 Cargo/Rust 编译进程。现有 Node 进程来源未确定，均不操作。

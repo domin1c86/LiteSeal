@@ -15,8 +15,8 @@ use serde::Deserialize;
 use sqlx::{Postgres, Row, Transaction};
 type Failure = (StatusCode, String);
 type Tx<'a> = Transaction<'a, Postgres>;
-pub(crate) mod history;
 pub(crate) mod audio;
+pub(crate) mod history;
 pub(crate) mod media;
 pub(crate) mod operations;
 pub const MIGRATION: &str = "
